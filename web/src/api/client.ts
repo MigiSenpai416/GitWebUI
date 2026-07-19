@@ -50,6 +50,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ branch }),
     }),
+  createBranch: (name: string, hash: string) =>
+    req<{ repo: RepoInfo }>("/api/branch/create", {
+      method: "POST",
+      body: JSON.stringify({ name, hash }),
+    }),
+  reset: (hash: string, mode: "hard" | "soft" | "mixed") =>
+    req<{ repo: RepoInfo }>("/api/reset", {
+      method: "POST",
+      body: JSON.stringify({ hash, mode }),
+    }),
+  revert: (hash: string) =>
+    req<{ repo: RepoInfo }>("/api/revert", {
+      method: "POST",
+      body: JSON.stringify({ hash }),
+    }),
   discardAll: () =>
     req<StatusResult>("/api/discard", { method: "POST", body: JSON.stringify({}) }),
 

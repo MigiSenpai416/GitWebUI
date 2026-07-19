@@ -4,8 +4,17 @@ import { getLog } from "./git/log.js";
 import { getStatus } from "./git/status.js";
 import { getCommitFiles } from "./git/commitFiles.js";
 import { getDiff, type DiffSource } from "./git/diff.js";
-import { stagePaths, stageAll, unstagePaths, commit, discardAll } from "./git/mutate.js";
-import { getBranches, checkoutBranch } from "./git/branches.js";
+import {
+  stagePaths,
+  stageAll,
+  unstagePaths,
+  commit,
+  discardAll,
+  resetTo,
+  revertCommit,
+  type ResetMode,
+} from "./git/mutate.js";
+import { getBranches, checkoutBranch, createBranchAt } from "./git/branches.js";
 import { currentBranch, headHash } from "./git/repo.js";
 import { getActiveRepo, setActiveRepo, requireRepoRoot } from "./session.js";
 import { getRecent, addRecent } from "./config.js";
@@ -77,13 +86,53 @@ api.post("/checkout", h(async (req, res) => {
     return;
   }
   await checkoutBranch(root, name);
-  // Reflect the new active branch/head in the session.
-  const active = getActiveRepo();
-  if (active) {
-    active.branch = await currentBranch(root);
-    active.head = await headHash(root);
-    setActiveRepo(active);
+  await refreshSession(root);
+  res.json({ repo: getActiveRepo() });
+}));
+
+api.post("/branch/create", h(async (req, res) => {
+  const root = requireRepoRoot();
+  const name = String(req.body?.name ?? "").trim();
+  const hash = String(req.body?.hash ?? "").trim();
+  if (!name) {
+    res.status(400).json({ error: "A branch name is required" });
+    return;
   }
+  if (!hash) {
+    res.status(400).json({ error: "A commit is required" });
+    return;
+  }
+  await createBranchAt(root, name, hash);
+  await refreshSession(root);
+  res.json({ repo: getActiveRepo() });
+}));
+
+api.post("/reset", h(async (req, res) => {
+  const root = requireRepoRoot();
+  const hash = String(req.body?.hash ?? "").trim();
+  const mode = String(req.body?.mode ?? "") as ResetMode;
+  if (!hash) {
+    res.status(400).json({ error: "A commit is required" });
+    return;
+  }
+  if (!["hard", "soft", "mixed"].includes(mode)) {
+    res.status(400).json({ error: "mode must be hard, soft, or mixed" });
+    return;
+  }
+  await resetTo(root, hash, mode);
+  await refreshSession(root);
+  res.json({ repo: getActiveRepo() });
+}));
+
+api.post("/revert", h(async (req, res) => {
+  const root = requireRepoRoot();
+  const hash = String(req.body?.hash ?? "").trim();
+  if (!hash) {
+    res.status(400).json({ error: "A commit is required" });
+    return;
+  }
+  await revertCommit(root, hash);
+  await refreshSession(root);
   res.json({ repo: getActiveRepo() });
 }));
 
@@ -132,6 +181,16 @@ api.post("/commit", h(async (req, res) => {
   const status = await getStatus(root);
   res.json({ hash, status });
 }));
+
+/** Re-read the active branch and HEAD into the session after a ref-moving op. */
+async function refreshSession(root: string): Promise<void> {
+  const active = getActiveRepo();
+  if (active) {
+    active.branch = await currentBranch(root);
+    active.head = await headHash(root);
+    setActiveRepo(active);
+  }
+}
 
 function clampInt(v: unknown, dflt: number, min: number, max: number): number {
   const n = parseInt(String(v ?? ""), 10);

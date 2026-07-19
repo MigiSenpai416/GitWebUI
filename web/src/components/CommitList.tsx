@@ -14,6 +14,7 @@ export function CommitList() {
   const selectedCommitHash = useStore((s) => s.selectedCommitHash);
   const selectCommit = useStore((s) => s.selectCommit);
   const loadCommits = useStore((s) => s.loadCommits);
+  const openCommitMenu = useStore((s) => s.openCommitMenu);
   const status = useStore((s) => s.status);
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -78,6 +79,11 @@ export function CommitList() {
                 last={vi.index === rowCount - 1 && !hasMore}
                 selected={commit.hash === selectedCommitHash}
                 onSelect={() => selectCommit(commit.hash)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  selectCommit(commit.hash);
+                  openCommitMenu({ hash: commit.hash, x: e.clientX, y: e.clientY });
+                }}
                 style={{ transform: `translateY(${vi.start}px)` }}
               />
             );
@@ -95,12 +101,18 @@ interface RowProps {
   last: boolean;
   selected: boolean;
   onSelect: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
   style: React.CSSProperties;
 }
 
-function CommitRow({ commit, first, last, selected, onSelect, style }: RowProps) {
+function CommitRow({ commit, first, last, selected, onSelect, onContextMenu, style }: RowProps) {
   return (
-    <div className={"clrow commit-row" + (selected ? " selected" : "")} style={style} onClick={onSelect}>
+    <div
+      className={"clrow commit-row" + (selected ? " selected" : "")}
+      style={style}
+      onClick={onSelect}
+      onContextMenu={onContextMenu}
+    >
       <span className="col-refs">
         {commit.refs.map((r) => (
           <RefBadge key={r.kind + r.name} refInfo={r} />

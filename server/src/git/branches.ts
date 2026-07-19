@@ -43,3 +43,8 @@ export async function getBranches(root: string): Promise<Branch[]> {
 export async function checkoutBranch(root: string, name: string): Promise<void> {
   await runGit(root, ["checkout", name]);
 }
+
+/** Create a new branch at `hash` and check it out. */
+export async function createBranchAt(root: string, name: string, hash: string): Promise<void> {
+  await runGit(root, ["checkout", "-b", name, hash]);
+}

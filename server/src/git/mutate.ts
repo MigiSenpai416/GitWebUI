@@ -40,6 +40,23 @@ export async function discardAll(root: string): Promise<void> {
   await runGit(root, ["clean", "-fd"]);
 }
 
+export type ResetMode = "hard" | "soft" | "mixed";
+
+/**
+ * Move the current branch to `hash`.
+ * - hard:  discard all working-tree and index changes
+ * - soft:  keep working tree and index (changes become staged)
+ * - mixed: keep working tree, reset the index (changes become unstaged)
+ */
+export async function resetTo(root: string, hash: string, mode: ResetMode): Promise<void> {
+  await runGit(root, ["reset", `--${mode}`, hash]);
+}
+
+/** Create a new commit that undoes `hash`. */
+export async function revertCommit(root: string, hash: string): Promise<void> {
+  await runGit(root, ["revert", "--no-edit", hash]);
+}
+
 export interface CommitOptions {
   title: string;
   description?: string;

@@ -7,6 +7,8 @@ import { ChangesPanel } from "./components/ChangesPanel";
 import { CommitBox } from "./components/CommitBox";
 import { CommitDetails } from "./components/CommitDetails";
 import { DiffViewer } from "./components/DiffViewer/DiffViewer";
+import { CommitContextMenu } from "./components/CommitContextMenu";
+import { CreateBranchDialog } from "./components/CreateBranchDialog";
 
 export function App() {
   const repo = useStore((s) => s.repo);
@@ -64,6 +66,8 @@ export function App() {
           )}
         </div>
       </div>
+      <CommitContextMenu />
+      <CreateBranchDialog />
       {toasts}
     </div>
   );

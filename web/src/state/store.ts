@@ -14,6 +14,14 @@ const PAGE = 150;
 type ViewMode = "diff" | "file";
 /** How the changes sidebar groups files. */
 export type FileLayout = "path" | "tree";
+export type ResetMode = "hard" | "soft" | "mixed";
+
+/** Right-click context menu anchored to a commit. */
+export interface CommitMenu {
+  hash: string;
+  x: number;
+  y: number;
+}
 
 interface AppState {
   repo: RepoInfo | null;
@@ -41,6 +49,10 @@ interface AppState {
   viewMode: ViewMode;
   fileLayout: FileLayout;
 
+  commitMenu: CommitMenu | null;
+  /** Commit hash the "Create branch here" dialog targets, if open. */
+  branchDialogHash: string | null;
+
   init: () => Promise<void>;
   loadRecent: () => Promise<void>;
   openRepo: (path: string) => Promise<void>;
@@ -51,6 +63,14 @@ interface AppState {
 
   loadBranches: () => Promise<void>;
   checkout: (branch: string) => Promise<void>;
+
+  openCommitMenu: (menu: CommitMenu) => void;
+  closeCommitMenu: () => void;
+  openBranchDialog: (hash: string) => void;
+  closeBranchDialog: () => void;
+  createBranchAt: (name: string, hash: string) => Promise<void>;
+  resetToCommit: (hash: string, mode: ResetMode) => Promise<void>;
+  revertCommit: (hash: string) => Promise<void>;
 
   refreshStatus: () => Promise<void>;
   stage: (paths: string[]) => Promise<void>;
@@ -93,6 +113,9 @@ export const useStore = create<AppState>((set, get) => ({
   selectedFile: null,
   viewMode: "diff",
   fileLayout: "tree",
+
+  commitMenu: null,
+  branchDialogHash: null,
 
   async init() {
     await get().loadRecent();
@@ -203,6 +226,52 @@ export const useStore = create<AppState>((set, get) => ({
         commitFiles: [],
         selectedFile: null,
       });
+      await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
+    } catch (e) {
+      set({ error: errMsg(e) });
+    }
+  },
+
+  openCommitMenu(menu: CommitMenu) {
+    set({ commitMenu: menu });
+  },
+  closeCommitMenu() {
+    set({ commitMenu: null });
+  },
+  openBranchDialog(hash: string) {
+    set({ branchDialogHash: hash, commitMenu: null });
+  },
+  closeBranchDialog() {
+    set({ branchDialogHash: null });
+  },
+
+  async createBranchAt(name: string, hash: string) {
+    set({ error: null, branchDialogHash: null, commitMenu: null });
+    try {
+      const { repo } = await api.createBranch(name, hash);
+      set({ repo });
+      await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
+    } catch (e) {
+      set({ error: errMsg(e) });
+    }
+  },
+
+  async resetToCommit(hash: string, mode: ResetMode) {
+    set({ error: null, commitMenu: null });
+    try {
+      const { repo } = await api.reset(hash, mode);
+      set({ repo, selectedCommitHash: null, commitFiles: [], selectedFile: null });
+      await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
+    } catch (e) {
+      set({ error: errMsg(e) });
+    }
+  },
+
+  async revertCommit(hash: string) {
+    set({ error: null, commitMenu: null });
+    try {
+      const { repo } = await api.revert(hash);
+      set({ repo, selectedCommitHash: null, commitFiles: [], selectedFile: null });
       await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
     } catch (e) {
       set({ error: errMsg(e) });

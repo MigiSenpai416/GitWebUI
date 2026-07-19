@@ -1,0 +1,127 @@
+.diff-viewer {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app);
+}
+.dv-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 10px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.dv-path {
+  font-size: var(--fs-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 42%;
+}
+.dv-path-dir {
+  color: var(--text-faint);
+}
+.dv-path-name {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.dv-header .spacer {
+  flex: 1;
+}
+.dv-source-badge {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 9px;
+}
+.src-unstaged {
+  background: rgba(210, 153, 34, 0.18);
+  color: var(--amber);
+}
+.src-staged {
+  background: rgba(63, 185, 80, 0.2);
+  color: #7ee08c;
+}
+
+.dv-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.dv-toggle button {
+  background: var(--bg-panel-2);
+  border: none;
+  padding: 4px 12px;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.dv-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+}
+.dv-toggle button:not(.active):hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.dv-nav {
+  display: inline-flex;
+  gap: 2px;
+}
+.dv-nav button {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  padding: 3px 8px;
+  font-size: 10px;
+}
+.dv-nav button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent-quiet);
+}
+.dv-nav button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.dv-stage {
+  padding: 4px 12px;
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.dv-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 15px;
+  padding: 2px 6px;
+}
+.dv-close:hover {
+  color: var(--text);
+}
+
+.dv-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+.dv-editor {
+  height: 100%;
+}
+.dv-editor .cm-editor {
+  height: 100%;
+}
+.dv-message {
+  padding: 20px;
+  color: var(--text-faint);
+  font-style: italic;
+}

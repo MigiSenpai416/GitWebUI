@@ -1,0 +1,65 @@
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 24px;
+  padding: 0 10px 0 12px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.file-row:hover {
+  background: var(--bg-row-hover);
+}
+.file-row.active {
+  background: var(--bg-row-selected);
+  border-left-color: var(--accent);
+}
+.file-glyph {
+  width: 14px;
+  text-align: center;
+  font-size: 12px;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+.fg-mod { color: var(--amber); }
+.fg-add { color: var(--green); }
+.fg-del { color: var(--red); }
+.fg-ren { color: var(--purple); }
+
+.file-name {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 60%;
+}
+.file-dir {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.file-row .spacer {
+  flex: 1;
+}
+.file-action {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 1px 8px;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  opacity: 0;
+  flex-shrink: 0;
+}
+.file-row:hover .file-action {
+  opacity: 1;
+}
+.file-action:hover {
+  color: var(--text);
+  border-color: var(--accent-quiet);
+}

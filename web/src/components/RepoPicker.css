@@ -1,0 +1,96 @@
+.picker {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(1200px 600px at 50% -10%, #17222e 0%, var(--bg-app) 60%);
+}
+.picker-card {
+  width: 520px;
+  max-width: 90vw;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px 30px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+.picker-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.picker-logo {
+  font-size: 30px;
+  color: var(--accent);
+  line-height: 1;
+}
+.picker-brand h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-strong);
+  letter-spacing: 0.2px;
+}
+.picker-sub {
+  margin: 12px 0 20px;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+.picker-form {
+  display: flex;
+  gap: 8px;
+}
+.picker-form input {
+  flex: 1;
+  padding: 9px 11px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.picker-form .btn {
+  padding: 9px 18px;
+}
+.picker-recent {
+  margin-top: 26px;
+}
+.picker-recent-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-faint);
+  margin-bottom: 8px;
+}
+.picker-recent ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.recent-item {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.recent-item:hover:not(:disabled) {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
+.recent-name {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 500;
+}
+.recent-path {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

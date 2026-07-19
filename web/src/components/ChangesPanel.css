@@ -1,0 +1,226 @@
+.changes-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Top bar: trash · title · AI */
+.changes-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.trash-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: rgba(248, 81, 73, 0.12);
+  border: 1px solid rgba(248, 81, 73, 0.5);
+  color: var(--red);
+  flex-shrink: 0;
+}
+.trash-btn:hover:not(:disabled) {
+  background: rgba(248, 81, 73, 0.24);
+}
+.trash-btn.armed {
+  background: var(--red);
+  color: #fff;
+}
+.trash-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.changes-title {
+  flex: 1;
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.discard-warn {
+  color: #ffb3ae;
+  font-weight: 600;
+}
+.changes-branch {
+  background: rgba(34, 178, 166, 0.2);
+  color: #6fe6da;
+  border-radius: var(--radius-sm);
+  padding: 1px 8px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.ai-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: rgba(163, 113, 247, 0.14);
+  border: 1px solid rgba(163, 113, 247, 0.5);
+  color: var(--purple);
+  flex-shrink: 0;
+}
+.ai-btn:hover {
+  background: rgba(163, 113, 247, 0.26);
+}
+
+/* Controls: sort · Path/Tree */
+.changes-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.sort-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.sort-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+.layout-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.layout-toggle button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-panel-2);
+  border: none;
+  padding: 4px 12px;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.layout-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+}
+.layout-toggle button:not(.active):hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.changes-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding-bottom: 8px;
+}
+.changes-section {
+  padding-bottom: 4px;
+}
+.section-head {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px 0 8px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+  z-index: 1;
+}
+.section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 2px 2px;
+}
+.section-toggle svg {
+  color: var(--text-dim);
+}
+.section-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.section-num {
+  color: var(--text-faint);
+  font-weight: 400;
+  font-size: var(--fs-sm);
+}
+.stage-all-btn {
+  margin-left: auto;
+  background: rgba(63, 185, 80, 0.14);
+  border: 1px solid rgba(63, 185, 80, 0.45);
+  color: #7ee08c;
+  border-radius: var(--radius-sm);
+  padding: 2px 10px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.stage-all-btn:hover {
+  background: rgba(63, 185, 80, 0.26);
+}
+.collapse-all {
+  display: block;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  padding: 3px 12px;
+  text-align: left;
+}
+.collapse-all:hover {
+  color: var(--accent-hover);
+}
+.section-empty {
+  padding: 6px 14px;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+.tree-dir {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 24px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  color: var(--text);
+}
+.tree-dir:hover {
+  background: var(--bg-row-hover);
+}
+.tree-dir > svg:first-child {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.tree-folder-icon {
+  color: #7c93a8;
+  flex-shrink: 0;
+}
+.tree-dir-name {
+  font-size: var(--fs-sm);
+  color: var(--text);
+}

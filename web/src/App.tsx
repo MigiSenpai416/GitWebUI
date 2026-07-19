@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useStore } from "./state/store";
 import { RepoPicker } from "./components/RepoPicker";
 import { Toolbar } from "./components/Toolbar";
@@ -19,10 +19,30 @@ export function App() {
   const selectedCommitHash = useStore((s) => s.selectedCommitHash);
   const selectedFile = useStore((s) => s.selectedFile);
   const init = useStore((s) => s.init);
+  const refreshAll = useStore((s) => s.refreshAll);
+  const lastRefresh = useRef(0);
 
   useEffect(() => {
     init();
   }, [init]);
+
+  // Re-sync when the user returns to the tab/window. Both `focus` and
+  // `visibilitychange` can fire together on a tab switch, so coalesce them.
+  useEffect(() => {
+    const maybeRefresh = () => {
+      if (document.visibilityState === "hidden") return;
+      const now = Date.now();
+      if (now - lastRefresh.current < 800) return;
+      lastRefresh.current = now;
+      refreshAll();
+    };
+    window.addEventListener("focus", maybeRefresh);
+    document.addEventListener("visibilitychange", maybeRefresh);
+    return () => {
+      window.removeEventListener("focus", maybeRefresh);
+      document.removeEventListener("visibilitychange", maybeRefresh);
+    };
+  }, [refreshAll]);
 
   // Auto-dismiss the neutral notice toast.
   useEffect(() => {

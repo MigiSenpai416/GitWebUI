@@ -22,19 +22,33 @@ export function DiffViewer() {
   const unstage = useStore((s) => s.unstage);
   const setError = useStore((s) => s.setError);
 
+  const refreshTick = useStore((s) => s.refreshTick);
+
   const [diff, setDiff] = useState<DiffResult | null>(null);
   const [loading, setLoading] = useState(false);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const hunkIndex = useRef<number>(-1);
+  const prevSelKey = useRef<string>("");
 
-  // Fetch the diff whenever the selected file changes.
+  // Only working-tree diffs change over time; commit diffs are immutable, so
+  // they never refetch (and keep their scroll position) on refresh.
+  const refreshKey = selected && selected.source !== "commit" ? refreshTick : 0;
+
+  // Fetch the diff on selection change (with a loading state) or, quietly, on
+  // a working-tree refresh.
   useEffect(() => {
     if (!selected) return;
+    const selKey = `${selected.source}:${selected.path}:${selected.hash ?? ""}`;
+    const selectionChanged = prevSelKey.current !== selKey;
+    prevSelKey.current = selKey;
+
     let cancelled = false;
-    setLoading(true);
-    setDiff(null);
+    if (selectionChanged) {
+      setLoading(true);
+      setDiff(null);
+    }
     api
       .diff(selected.source, selected.path, selected.hash)
       .then((d) => {
@@ -49,7 +63,7 @@ export function DiffViewer() {
     return () => {
       cancelled = true;
     };
-  }, [selected, setError]);
+  }, [selected, refreshKey, setError]);
 
   const hunks = useMemo(() => (diff ? computeHunks(diff.rows) : []), [diff]);
 

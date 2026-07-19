@@ -52,6 +52,8 @@ interface AppState {
   commitMenu: CommitMenu | null;
   /** Commit hash the "Create branch here" dialog targets, if open. */
   branchDialogHash: string | null;
+  /** Bumped on each refreshAll so open views (e.g. the diff) can refetch. */
+  refreshTick: number;
 
   init: () => Promise<void>;
   loadRecent: () => Promise<void>;
@@ -73,6 +75,8 @@ interface AppState {
   revertCommit: (hash: string) => Promise<void>;
 
   refreshStatus: () => Promise<void>;
+  /** Re-sync commits, status, and branches (e.g. on tab focus). */
+  refreshAll: () => Promise<void>;
   stage: (paths: string[]) => Promise<void>;
   stageAll: () => Promise<void>;
   unstage: (paths: string[]) => Promise<void>;
@@ -116,6 +120,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   commitMenu: null,
   branchDialogHash: null,
+  refreshTick: 0,
 
   async init() {
     await get().loadRecent();
@@ -288,6 +293,22 @@ export const useStore = create<AppState>((set, get) => ({
     } finally {
       set({ loadingStatus: false });
     }
+  },
+
+  async refreshAll() {
+    const s = get();
+    if (!s.repo || s.opening) return;
+    // Bump the tick first so an open diff refetches alongside the lists.
+    set({ refreshTick: s.refreshTick + 1 });
+    // Reload as many commits as are currently paged in, so a deep scroll
+    // position survives the refresh (server caps the page at 1000).
+    const count = Math.min(1000, Math.max(PAGE, s.commits.length));
+    const commitsPromise = api
+      .commits(0, count)
+      .then(({ commits, hasMore }) => set({ commits, hasMore }))
+      .catch((e) => set({ error: errMsg(e) }));
+    // A selected commit's file list is immutable, so it needs no reload.
+    await Promise.all([commitsPromise, s.refreshStatus(), s.loadBranches()]);
   },
 
   async stage(paths: string[]) {

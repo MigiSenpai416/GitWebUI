@@ -9,6 +9,7 @@ import type {
   RepoInfo,
   Remote,
   SelectedFile,
+  StashEntry,
   StatusResult,
 } from "../types";
 
@@ -37,6 +38,13 @@ export type AuthState = "loading" | "setup" | "login" | "ok";
 /** Right-click context menu anchored to a commit. */
 export interface CommitMenu {
   hash: string;
+  x: number;
+  y: number;
+}
+
+/** Context menu anchored to a stash row in the commit list. */
+export interface StashMenu {
+  index: number;
   x: number;
   y: number;
 }
@@ -71,6 +79,7 @@ interface AppState {
 
   branches: Branch[];
   remotes: Remote[];
+  stashes: StashEntry[];
   githubStatus: GitHubStatus | null;
   /** A push/pull/create-remote network op is in flight. */
   remoteBusy: boolean;
@@ -85,6 +94,7 @@ interface AppState {
   fileLayout: FileLayout;
 
   commitMenu: CommitMenu | null;
+  stashMenu: StashMenu | null;
   /** Commit hash the "Create branch here" dialog targets, if open. */
   branchDialogHash: string | null;
   /** Bumped on each refreshAll so open views (e.g. the diff) can refetch. */
@@ -122,6 +132,14 @@ interface AppState {
   }) => Promise<string>;
   push: () => Promise<void>;
   pull: () => Promise<void>;
+
+  loadStashes: () => Promise<void>;
+  stash: () => Promise<void>;
+  stashPop: (index?: number) => Promise<void>;
+  stashApply: (index: number) => Promise<void>;
+  stashDrop: (index: number) => Promise<void>;
+  openStashMenu: (menu: StashMenu) => void;
+  closeStashMenu: () => void;
 
   loadGitHubStatus: () => Promise<void>;
   setGitHubToken: (token: string) => Promise<GitHubUser>;
@@ -190,6 +208,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   branches: [],
   remotes: [],
+  stashes: [],
   githubStatus: null,
   remoteBusy: false,
   addRemoteOpen: false,
@@ -202,6 +221,7 @@ export const useStore = create<AppState>((set, get) => ({
   fileLayout: "tree",
 
   commitMenu: null,
+  stashMenu: null,
   branchDialogHash: null,
   refreshTick: 0,
   confirm: null,
@@ -269,6 +289,7 @@ export const useStore = create<AppState>((set, get) => ({
           get().refreshStatus(),
           get().loadBranches(),
           get().loadRemotes(),
+          get().loadStashes(),
         ]);
       }
     } catch (e) {
@@ -303,6 +324,7 @@ export const useStore = create<AppState>((set, get) => ({
         get().refreshStatus(),
         get().loadBranches(),
         get().loadRemotes(),
+        get().loadStashes(),
       ]);
     } catch (e) {
       reportError(set, e);
@@ -462,6 +484,75 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  async loadStashes() {
+    try {
+      const { stashes } = await api.stashes();
+      set({ stashes });
+    } catch {
+      /* non-fatal */
+    }
+  },
+
+  async stash() {
+    if (get().remoteBusy) return;
+    set({ remoteBusy: true, error: null });
+    try {
+      const { stashed, status, stashes } = await api.stashPush();
+      set({ status, stashes, selectedFile: null });
+      set({ notice: stashed ? "Stashed your changes." : "Nothing to stash — working tree is clean." });
+    } catch (e) {
+      reportError(set, e);
+    } finally {
+      set({ remoteBusy: false });
+    }
+  },
+
+  async stashPop(index = 0) {
+    if (get().remoteBusy) return;
+    set({ remoteBusy: true, error: null, stashMenu: null });
+    try {
+      const { status, stashes } = await api.stashPop(index);
+      set({ status, stashes });
+      set({ notice: "Popped the stash." });
+    } catch (e) {
+      reportError(set, e);
+    } finally {
+      set({ remoteBusy: false });
+    }
+  },
+
+  async stashApply(index: number) {
+    if (get().remoteBusy) return;
+    set({ remoteBusy: true, error: null, stashMenu: null });
+    try {
+      const { status, stashes } = await api.stashApply(index);
+      set({ status, stashes });
+      set({ notice: "Applied the stash (kept it in the list)." });
+    } catch (e) {
+      reportError(set, e);
+    } finally {
+      set({ remoteBusy: false });
+    }
+  },
+
+  async stashDrop(index: number) {
+    set({ error: null, stashMenu: null });
+    try {
+      const { stashes } = await api.stashDrop(index);
+      set({ stashes });
+      set({ notice: "Dropped the stash." });
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  openStashMenu(menu: StashMenu) {
+    set({ stashMenu: menu, commitMenu: null });
+  },
+  closeStashMenu() {
+    set({ stashMenu: null });
+  },
+
   async loadGitHubStatus() {
     try {
       const githubStatus = await api.githubStatus();
@@ -594,7 +685,13 @@ export const useStore = create<AppState>((set, get) => ({
       .then(({ commits, hasMore }) => set({ commits, hasMore }))
       .catch((e) => reportError(set, e));
     // A selected commit's file list is immutable, so it needs no reload.
-    await Promise.all([commitsPromise, s.refreshStatus(), s.loadBranches(), s.loadRemotes()]);
+    await Promise.all([
+      commitsPromise,
+      s.refreshStatus(),
+      s.loadBranches(),
+      s.loadRemotes(),
+      s.loadStashes(),
+    ]);
   },
 
   async stage(paths: string[]) {

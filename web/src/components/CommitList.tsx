@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useStore } from "../state/store";
-import type { Commit } from "../types";
+import type { Commit, StashEntry } from "../types";
 import { RefBadges } from "./RefBadges";
 import "./CommitList.css";
 
@@ -16,6 +16,9 @@ export function CommitList() {
   const loadCommits = useStore((s) => s.loadCommits);
   const openCommitMenu = useStore((s) => s.openCommitMenu);
   const status = useStore((s) => s.status);
+  const stashes = useStore((s) => s.stashes);
+  const openStashMenu = useStore((s) => s.openStashMenu);
+  const branch = useStore((s) => s.repo?.branch ?? "");
 
   const parentRef = useRef<HTMLDivElement>(null);
   const wipCount = status.staged.length + status.unstaged.length;
@@ -66,6 +69,15 @@ export function CommitList() {
           </span>
         </button>
       )}
+
+      {stashes.map((st) => (
+        <StashRow
+          key={st.ref}
+          stash={st}
+          branch={branch}
+          onMenu={(x, y) => openStashMenu({ index: st.index, x, y })}
+        />
+      ))}
 
       <div className="commit-scroll" ref={parentRef}>
         <div className="commit-vlist" style={{ height: virtualizer.getTotalSize() }}>
@@ -137,4 +149,45 @@ function CommitRow({ commit, first, last, selected, onSelect, onContextMenu, sty
 function firstLine(body: string): string {
   const line = body.split("\n").find((l) => l.trim().length > 0) ?? "";
   return line.replace(/\s+/g, " ").trim();
+}
+
+function StashRow({
+  stash,
+  branch,
+  onMenu,
+}: {
+  stash: StashEntry;
+  branch: string;
+  onMenu: (x: number, y: number) => void;
+}) {
+  const open = (e: React.MouseEvent) => {
+    e.preventDefault();
+    onMenu(e.clientX, e.clientY);
+  };
+  return (
+    <div
+      className="clrow stash-row"
+      onClick={open}
+      onContextMenu={open}
+      title="Stash — click for pop / apply / drop"
+    >
+      <span className="col-refs" />
+      <span className="col-graph">
+        <svg width="34" height={ROW} className="graph-svg">
+          <line x1="17" y1="0" x2="17" y2={ROW} className="graph-line stash-line" />
+          <rect x="11" y={ROW / 2 - 6} width="12" height="12" rx="2.5" className="graph-node-stash" />
+        </svg>
+      </span>
+      <span className="col-msg">
+        <span className="stash-title">{stashTitle(stash, branch)}</span>
+      </span>
+    </div>
+  );
+}
+
+/** GitKraken-style stash label: "WIP #<n> in <branch>". */
+function stashTitle(stash: StashEntry, fallbackBranch: string): string {
+  const m = stash.message.match(/^(?:WIP on|On) ([^:]+):/);
+  const branch = m ? m[1] : fallbackBranch;
+  return `WIP #${stash.index} in ${branch}`;
 }

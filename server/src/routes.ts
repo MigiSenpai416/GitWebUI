@@ -26,6 +26,7 @@ import {
   createGitHubRemote,
 } from "./git/remote.js";
 import * as github from "./github.js";
+import { getStashes, stashPush, stashPop, stashApply, stashDrop } from "./git/stash.js";
 import { getActiveRepo, setActiveRepo, requireRepoRoot } from "./session.js";
 import { getRecent, addRecent } from "./config.js";
 import { GitError } from "./git/gitRunner.js";
@@ -276,6 +277,41 @@ api.post("/github/create-repo", h(async (req, res) => {
   });
   await refreshSession(root);
   res.json(result);
+}));
+
+// ---- Stash ----
+
+api.get("/stashes", h(async (_req, res) => {
+  const root = requireRepoRoot();
+  res.json({ stashes: await getStashes(root) });
+}));
+
+api.post("/stash/push", h(async (req, res) => {
+  const root = requireRepoRoot();
+  const message = String(req.body?.message ?? "");
+  const result = await stashPush(root, { message });
+  res.json({ ...result, status: await getStatus(root), stashes: await getStashes(root) });
+}));
+
+api.post("/stash/pop", h(async (req, res) => {
+  const root = requireRepoRoot();
+  const index = clampInt(req.body?.index, 0, 0, Number.MAX_SAFE_INTEGER);
+  const result = await stashPop(root, index);
+  res.json({ ...result, status: await getStatus(root), stashes: await getStashes(root) });
+}));
+
+api.post("/stash/apply", h(async (req, res) => {
+  const root = requireRepoRoot();
+  const index = clampInt(req.body?.index, 0, 0, Number.MAX_SAFE_INTEGER);
+  const result = await stashApply(root, index);
+  res.json({ ...result, status: await getStatus(root), stashes: await getStashes(root) });
+}));
+
+api.post("/stash/drop", h(async (req, res) => {
+  const root = requireRepoRoot();
+  const index = clampInt(req.body?.index, 0, 0, Number.MAX_SAFE_INTEGER);
+  await stashDrop(root, index);
+  res.json({ stashes: await getStashes(root) });
 }));
 
 // ---- Push / Pull ----

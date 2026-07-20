@@ -24,10 +24,16 @@ export function Toolbar() {
   const push = useStore((s) => s.push);
   const pull = useStore((s) => s.pull);
   const remoteBusy = useStore((s) => s.remoteBusy);
+  const stash = useStore((s) => s.stash);
+  const stashPop = useStore((s) => s.stashPop);
+  const stashes = useStore((s) => s.stashes);
+  const status = useStore((s) => s.status);
   const [branchOpen, setBranchOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
 
   if (!repo) return null;
+
+  const hasChanges = status.staged.length + status.unstaged.length > 0;
 
   const soon = (label: string) => () => setNotice(`${label} isn't available yet — remote & history actions are coming later.`);
 
@@ -70,10 +76,21 @@ export function Toolbar() {
           <ToolButton label="Branch" onClick={() => setBranchOpen((v) => !v)}>
             <IconBranch />
           </ToolButton>
-          <ToolButton label="Stash" onClick={soon("Stash")}>
+          <ToolButton
+            label="Stash"
+            onClick={() => stash()}
+            disabled={remoteBusy || !hasChanges}
+            title={hasChanges ? "Stash all changes" : "No changes to stash"}
+          >
             <IconStash />
           </ToolButton>
-          <ToolButton label="Pop" onClick={soon("Pop")}>
+          <ToolButton
+            label="Pop"
+            onClick={() => stashPop(0)}
+            disabled={remoteBusy || stashes.length === 0}
+            badge={stashes.length || undefined}
+            title={stashes.length ? "Apply the latest stash" : "No stashes"}
+          >
             <IconPop />
           </ToolButton>
         </div>
@@ -119,17 +136,23 @@ interface ToolButtonProps {
   caret?: boolean;
   onClick?: () => void;
   disabled?: boolean;
+  title?: string;
+  /** Small count bubble shown on the icon (e.g. stash count on Pop). */
+  badge?: number;
   children: React.ReactNode;
 }
 
-function ToolButton({ label, caret, onClick, disabled, children }: ToolButtonProps) {
+function ToolButton({ label, caret, onClick, disabled, title, badge, children }: ToolButtonProps) {
   return (
-    <button className="tb-btn" onClick={onClick} title={label} disabled={disabled}>
+    <button className="tb-btn" onClick={onClick} title={title ?? label} disabled={disabled}>
       <span className="tb-btn-label">
         {label}
         {caret && <IconCaretDown className="tb-btn-label-caret" />}
       </span>
-      <span className="tb-btn-icon">{children}</span>
+      <span className="tb-btn-icon">
+        {children}
+        {badge != null && <span className="tb-btn-badge">{badge}</span>}
+      </span>
     </button>
   );
 }

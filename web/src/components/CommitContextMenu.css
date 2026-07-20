@@ -39,6 +39,15 @@
   font-size: 15px;
   line-height: 1;
 }
+.ctx-hint {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+.ctx-item:hover .ctx-hint {
+  color: #cfe0f2;
+}
 
 .ctx-has-sub {
   cursor: default;

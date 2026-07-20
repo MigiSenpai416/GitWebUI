@@ -143,6 +143,26 @@
   text-align: right;
 }
 
+/* Stash rows sit at the top of the list (above the scrolling commits). */
+.stash-row {
+  position: relative;
+  flex-shrink: 0;
+}
+.graph-line.stash-line {
+  stroke: var(--amber);
+  stroke-dasharray: 2 2;
+  opacity: 0.55;
+}
+.graph-node-stash {
+  fill: rgba(210, 153, 34, 0.22);
+  stroke: var(--amber);
+  stroke-width: 2;
+}
+.stash-title {
+  color: var(--amber);
+  font-weight: 500;
+}
+
 .wip-title {
   font-style: italic;
   color: var(--text);

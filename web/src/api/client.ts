@@ -8,6 +8,7 @@ import type {
   GitHubUser,
   RepoInfo,
   Remote,
+  StashEntry,
   StatusResult,
 } from "../types";
 
@@ -161,4 +162,27 @@ export const api = {
   // Push / Pull
   push: () => req<{ branch: string; output: string; branches: Branch[] }>("/api/push", { method: "POST", body: "{}" }),
   pull: () => req<{ output: string }>("/api/pull", { method: "POST", body: "{}" }),
+
+  // Stash
+  stashes: () => req<{ stashes: StashEntry[] }>("/api/stashes"),
+  stashPush: () =>
+    req<{ stashed: boolean; output: string; status: StatusResult; stashes: StashEntry[] }>(
+      "/api/stash/push",
+      { method: "POST", body: "{}" },
+    ),
+  stashPop: (index: number) =>
+    req<{ output: string; status: StatusResult; stashes: StashEntry[] }>("/api/stash/pop", {
+      method: "POST",
+      body: JSON.stringify({ index }),
+    }),
+  stashApply: (index: number) =>
+    req<{ output: string; status: StatusResult; stashes: StashEntry[] }>("/api/stash/apply", {
+      method: "POST",
+      body: JSON.stringify({ index }),
+    }),
+  stashDrop: (index: number) =>
+    req<{ stashes: StashEntry[] }>("/api/stash/drop", {
+      method: "POST",
+      body: JSON.stringify({ index }),
+    }),
 };

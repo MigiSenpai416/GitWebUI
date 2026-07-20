@@ -86,9 +86,13 @@
   color: var(--text-dim);
   min-width: 56px;
 }
-.tb-btn:hover {
+.tb-btn:hover:not(:disabled) {
   background: var(--bg-elevated);
   color: var(--text-strong);
+}
+.tb-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 .tb-btn-label {
   display: inline-flex;
@@ -102,6 +106,22 @@
 }
 .tb-btn-icon {
   display: inline-flex;
+  position: relative;
+}
+.tb-btn-badge {
+  position: absolute;
+  top: -6px;
+  right: -9px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
 }
 
 .tb-menu-anchor {

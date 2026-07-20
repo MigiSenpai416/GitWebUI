@@ -78,6 +78,12 @@ export interface Remote {
   url: string;
 }
 
+export interface StashEntry {
+  index: number;
+  ref: string;
+  message: string;
+}
+
 export interface GitHubUser {
   login: string;
   name: string | null;

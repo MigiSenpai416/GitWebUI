@@ -48,3 +48,8 @@ export async function checkoutBranch(root: string, name: string): Promise<void> 
 export async function createBranchAt(root: string, name: string, hash: string): Promise<void> {
   await runGit(root, ["checkout", "-b", name, hash]);
 }
+
+/** Force-delete a local branch (git branch -D). Cannot delete the current one. */
+export async function deleteBranch(root: string, name: string): Promise<void> {
+  await runGit(root, ["branch", "-D", name]);
+}

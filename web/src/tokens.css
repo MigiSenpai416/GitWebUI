@@ -12,6 +12,10 @@
   /* Commit graph */
   --graph-color: #22b2a6;
 
+  /* Confirmation banner (destructive actions) */
+  --confirm-bar-bg: #3a4a60;
+  --confirm-bar-border: #4a5d76;
+
   /* Column widths (commit list) */
   --refs-w: 132px;
   --graph-w: 96px;

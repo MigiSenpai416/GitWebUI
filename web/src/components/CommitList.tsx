@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useStore } from "../state/store";
 import type { Commit } from "../types";
-import { RefBadge } from "./RefBadge";
+import { RefBadges } from "./RefBadges";
 import "./CommitList.css";
 
 const ROW = 28;
@@ -114,9 +114,7 @@ function CommitRow({ commit, first, last, selected, onSelect, onContextMenu, sty
       onContextMenu={onContextMenu}
     >
       <span className="col-refs">
-        {commit.refs.map((r) => (
-          <RefBadge key={r.kind + r.name} refInfo={r} />
-        ))}
+        <RefBadges refs={commit.refs} />
       </span>
       <span className="col-graph">
         <svg width="34" height={ROW} className="graph-svg">

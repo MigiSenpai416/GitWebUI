@@ -23,6 +23,12 @@ export interface CommitMenu {
   y: number;
 }
 
+/** A pending destructive-action confirmation shown in the top banner. */
+export interface ConfirmRequest {
+  message: string;
+  confirmLabel: string;
+}
+
 interface AppState {
   repo: RepoInfo | null;
   recent: string[];
@@ -55,6 +61,9 @@ interface AppState {
   /** Bumped on each refreshAll so open views (e.g. the diff) can refetch. */
   refreshTick: number;
 
+  /** Active destructive-action confirmation, if any. */
+  confirm: ConfirmRequest | null;
+
   init: () => Promise<void>;
   loadRecent: () => Promise<void>;
   openRepo: (path: string) => Promise<void>;
@@ -65,6 +74,11 @@ interface AppState {
 
   loadBranches: () => Promise<void>;
   checkout: (branch: string) => Promise<void>;
+  deleteBranch: (name: string) => Promise<void>;
+
+  /** Show the confirmation banner; resolves true if confirmed, false if cancelled. */
+  requestConfirm: (message: string, confirmLabel?: string) => Promise<boolean>;
+  resolveConfirm: (ok: boolean) => void;
 
   openCommitMenu: (menu: CommitMenu) => void;
   closeCommitMenu: () => void;
@@ -92,6 +106,9 @@ interface AppState {
 }
 
 const EMPTY_STATUS: StatusResult = { staged: [], unstaged: [] };
+
+// Holds the resolver for the currently-open confirmation banner, if any.
+let confirmResolver: ((ok: boolean) => void) | null = null;
 
 export const useStore = create<AppState>((set, get) => ({
   repo: null,
@@ -121,6 +138,7 @@ export const useStore = create<AppState>((set, get) => ({
   commitMenu: null,
   branchDialogHash: null,
   refreshTick: 0,
+  confirm: null,
 
   async init() {
     await get().loadRecent();
@@ -235,6 +253,31 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       set({ error: errMsg(e) });
     }
+  },
+
+  async deleteBranch(name: string) {
+    set({ error: null });
+    try {
+      const { branches } = await api.deleteBranch(name);
+      set({ branches });
+      // A deleted branch's ref badge should disappear from the graph.
+      await get().loadCommits(true);
+    } catch (e) {
+      set({ error: errMsg(e) });
+    }
+  },
+
+  requestConfirm(message: string, confirmLabel = "Confirm") {
+    return new Promise<boolean>((resolve) => {
+      confirmResolver = resolve;
+      set({ confirm: { message, confirmLabel } });
+    });
+  },
+  resolveConfirm(ok: boolean) {
+    const resolve = confirmResolver;
+    confirmResolver = null;
+    set({ confirm: null });
+    resolve?.(ok);
   },
 
   openCommitMenu(menu: CommitMenu) {

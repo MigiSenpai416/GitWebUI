@@ -9,6 +9,7 @@ import { CommitDetails } from "./components/CommitDetails";
 import { DiffViewer } from "./components/DiffViewer/DiffViewer";
 import { CommitContextMenu } from "./components/CommitContextMenu";
 import { CreateBranchDialog } from "./components/CreateBranchDialog";
+import { ConfirmBar } from "./components/ConfirmBar";
 
 export function App() {
   const repo = useStore((s) => s.repo);
@@ -53,6 +54,7 @@ export function App() {
 
   const toasts = (
     <>
+      <ConfirmBar />
       {error && <Toast kind="error" message={error} onClose={() => setError(null)} />}
       {notice && <Toast kind="notice" message={notice} onClose={() => setNotice(null)} />}
     </>

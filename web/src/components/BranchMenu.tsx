@@ -1,12 +1,14 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "../state/store";
-import { IconBranch, IconCheck } from "./icons";
+import { IconBranch, IconCheck, IconTrash } from "./icons";
 import "./BranchMenu.css";
 
 export function BranchMenu({ onClose }: { onClose: () => void }) {
   const branches = useStore((s) => s.branches);
   const repo = useStore((s) => s.repo);
   const checkout = useStore((s) => s.checkout);
+  const deleteBranch = useStore((s) => s.deleteBranch);
+  const requestConfirm = useStore((s) => s.requestConfirm);
   const ref = useRef<HTMLDivElement>(null);
 
   // Close on outside click or Escape.
@@ -30,18 +32,41 @@ export function BranchMenu({ onClose }: { onClose: () => void }) {
     onClose();
   };
 
+  const remove = async (name: string) => {
+    onClose();
+    const ok = await requestConfirm(
+      `This is a destructive operation, are you sure you want to delete "${name}"?`,
+      "Delete",
+    );
+    if (ok) deleteBranch(name);
+  };
+
   return (
     <div className="branch-menu" ref={ref}>
       <div className="branch-menu-head">Local branches</div>
       <div className="branch-menu-list">
         {branches.length === 0 && <div className="branch-menu-empty">No local branches</div>}
         {branches.map((b) => (
-          <button key={b.name} className="branch-menu-item" onClick={() => pick(b.name)}>
-            <span className="bmi-check">{b.current ? <IconCheck /> : null}</span>
-            <IconBranch className="bmi-icon" width={14} height={14} />
-            <span className="bmi-name">{b.name}</span>
-            <span className="bmi-hash">{b.shortHash}</span>
-          </button>
+          <div key={b.name} className="branch-row">
+            <button className="bmi-main" onClick={() => pick(b.name)}>
+              <span className="bmi-check">{b.current ? <IconCheck /> : null}</span>
+              <IconBranch className="bmi-icon" width={14} height={14} />
+              <span className="bmi-name">{b.name}</span>
+              <span className="bmi-hash">{b.shortHash}</span>
+            </button>
+            {!b.current && (
+              <button
+                className="bmi-delete"
+                title={`Delete branch "${b.name}"`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  remove(b.name);
+                }}
+              >
+                <IconTrash width={14} height={14} />
+              </button>
+            )}
+          </div>
         ))}
       </div>
     </div>

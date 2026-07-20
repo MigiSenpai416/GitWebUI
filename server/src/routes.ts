@@ -14,7 +14,7 @@ import {
   revertCommit,
   type ResetMode,
 } from "./git/mutate.js";
-import { getBranches, checkoutBranch, createBranchAt } from "./git/branches.js";
+import { getBranches, checkoutBranch, createBranchAt, deleteBranch } from "./git/branches.js";
 import { currentBranch, headHash } from "./git/repo.js";
 import { getActiveRepo, setActiveRepo, requireRepoRoot } from "./session.js";
 import { getRecent, addRecent } from "./config.js";
@@ -105,6 +105,17 @@ api.post("/branch/create", h(async (req, res) => {
   await createBranchAt(root, name, hash);
   await refreshSession(root);
   res.json({ repo: getActiveRepo() });
+}));
+
+api.post("/branch/delete", h(async (req, res) => {
+  const root = requireRepoRoot();
+  const name = String(req.body?.name ?? "").trim();
+  if (!name) {
+    res.status(400).json({ error: "A branch name is required" });
+    return;
+  }
+  await deleteBranch(root, name);
+  res.json({ branches: await getBranches(root) });
 }));
 
 api.post("/reset", h(async (req, res) => {

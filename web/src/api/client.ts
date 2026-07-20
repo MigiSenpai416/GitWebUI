@@ -55,6 +55,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, hash }),
     }),
+  deleteBranch: (name: string) =>
+    req<{ branches: Branch[] }>("/api/branch/delete", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
   reset: (hash: string, mode: "hard" | "soft" | "mixed") =>
     req<{ repo: RepoInfo }>("/api/reset", {
       method: "POST",

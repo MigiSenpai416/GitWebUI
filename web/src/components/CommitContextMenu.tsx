@@ -14,6 +14,7 @@ export function CommitContextMenu() {
   const openBranchDialog = useStore((s) => s.openBranchDialog);
   const resetToCommit = useStore((s) => s.resetToCommit);
   const revertCommit = useStore((s) => s.revertCommit);
+  const requestConfirm = useStore((s) => s.requestConfirm);
 
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number }>({ left: -9999, top: -9999 });
@@ -47,7 +48,18 @@ export function CommitContextMenu() {
   const shortHash = commit?.shortHash ?? menu.hash.slice(0, 7);
   const branch = repo?.branch ?? "HEAD";
 
-  const doReset = (mode: ResetMode) => resetToCommit(menu.hash, mode);
+  const doReset = async (mode: ResetMode) => {
+    // A hard reset discards all uncommitted work — confirm it.
+    if (mode === "hard") {
+      close();
+      const ok = await requestConfirm(
+        `This is a destructive operation, are you sure you want to hard reset "${branch}" to ${shortHash}? All uncommitted changes will be discarded.`,
+        "Reset",
+      );
+      if (!ok) return;
+    }
+    resetToCommit(menu.hash, mode);
+  };
 
   return (
     <div

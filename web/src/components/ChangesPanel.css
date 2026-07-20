@@ -30,10 +30,6 @@
 .trash-btn:hover:not(:disabled) {
   background: rgba(248, 81, 73, 0.24);
 }
-.trash-btn.armed {
-  background: var(--red);
-  color: #fff;
-}
 .trash-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -46,10 +42,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.discard-warn {
-  color: #ffb3ae;
-  font-weight: 600;
 }
 .changes-branch {
   background: rgba(34, 178, 166, 0.2);

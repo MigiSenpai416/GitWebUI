@@ -18,11 +18,11 @@ export function ChangesPanel() {
   const fileLayout = useStore((s) => s.fileLayout);
   const setFileLayout = useStore((s) => s.setFileLayout);
   const setNotice = useStore((s) => s.setNotice);
+  const requestConfirm = useStore((s) => s.requestConfirm);
 
   const [unstagedOpen, setUnstagedOpen] = useState(true);
   const [stagedOpen, setStagedOpen] = useState(true);
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const total = status.staged.length + status.unstaged.length;
 
@@ -55,31 +55,28 @@ export function ChangesPanel() {
       return next;
     });
 
-  const doDiscard = () => {
-    discardAll();
-    setConfirmDiscard(false);
+  const doDiscard = async () => {
+    if (total === 0) return;
+    const ok = await requestConfirm(
+      `This is a destructive operation, are you sure you want to discard all ${total} change${total === 1 ? "" : "s"}?`,
+      "Discard",
+    );
+    if (ok) discardAll();
   };
 
   return (
     <div className="changes-panel">
       <div className="changes-topbar">
         <button
-          className={"trash-btn" + (confirmDiscard ? " armed" : "")}
-          title={confirmDiscard ? "Click again to discard ALL changes" : "Discard all changes"}
-          onClick={() => (confirmDiscard ? doDiscard() : setConfirmDiscard(true))}
-          onMouseLeave={() => setConfirmDiscard(false)}
+          className="trash-btn"
+          title="Discard all changes"
+          onClick={doDiscard}
           disabled={total === 0}
         >
           <IconTrash width={16} height={16} />
         </button>
         <div className="changes-title">
-          {confirmDiscard ? (
-            <span className="discard-warn">Discard all {total} change{total === 1 ? "" : "s"}?</span>
-          ) : (
-            <>
-              {total} file change{total === 1 ? "" : "s"} on <span className="changes-branch">{repo?.branch}</span>
-            </>
-          )}
+          {total} file change{total === 1 ? "" : "s"} on <span className="changes-branch">{repo?.branch}</span>
         </div>
         <button className="ai-btn" title="AI features (coming soon)" onClick={() => setNotice("AI features aren't available yet.")}>
           <IconSparkle width={16} height={16} />

@@ -1,13 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
+import { IconCloud, IconFolder, IconPlus } from "./icons";
 import "./RepoPicker.css";
 
+/** The "New Tab" scene: open, clone, or create a repository, with a Recent list. */
 export function RepoPicker() {
   const recent = useStore((s) => s.recent);
   const opening = useStore((s) => s.opening);
   const openRepo = useStore((s) => s.openRepo);
   const loadRecent = useStore((s) => s.loadRecent);
+  const openCloneDialog = useStore((s) => s.openCloneDialog);
+  const setNotice = useStore((s) => s.setNotice);
+
+  const [showPath, setShowPath] = useState(false);
   const [path, setPath] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadRecent();
@@ -18,34 +25,55 @@ export function RepoPicker() {
     if (p && !opening) openRepo(p);
   };
 
+  const toggleOpen = () => {
+    setShowPath((v) => !v);
+    // Focus the field once it's revealed.
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
   return (
     <div className="picker">
-      <div className="picker-card">
-        <div className="picker-brand">
-          <span className="picker-logo">◑</span>
-          <h1>GitWebUI</h1>
-        </div>
-        <p className="picker-sub">
-          Open a local repository by its absolute path on this machine.
-        </p>
-        <form
-          className="picker-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            submit(path);
-          }}
-        >
-          <input
-            autoFocus
-            spellCheck={false}
-            placeholder={placeholderForOS()}
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-          />
-          <button className="btn btn-primary" type="submit" disabled={opening || !path.trim()}>
-            {opening ? "Opening…" : "Open"}
+      <div className="picker-inner">
+        <h2 className="picker-heading">Repositories</h2>
+
+        <div className="picker-actions">
+          <button className="picker-action" onClick={toggleOpen}>
+            <IconFolder width={18} height={18} />
+            Open
           </button>
-        </form>
+          <button className="picker-action" onClick={openCloneDialog}>
+            <IconCloud width={18} height={18} />
+            Clone
+          </button>
+          <button
+            className="picker-action"
+            onClick={() => setNotice("Creating a brand-new repository isn't available yet — clone or open an existing one for now.")}
+          >
+            <IconPlus width={18} height={18} />
+            Create
+          </button>
+        </div>
+
+        {showPath && (
+          <form
+            className="picker-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submit(path);
+            }}
+          >
+            <input
+              ref={inputRef}
+              spellCheck={false}
+              placeholder={placeholderForOS()}
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+            />
+            <button className="btn btn-primary" type="submit" disabled={opening || !path.trim()}>
+              {opening ? "Opening…" : "Open"}
+            </button>
+          </form>
+        )}
 
         {recent.length > 0 && (
           <div className="picker-recent">

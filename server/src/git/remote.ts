@@ -1,5 +1,6 @@
+import path from "node:path";
 import { runGit } from "./gitRunner.js";
-import { currentBranch } from "./repo.js";
+import { currentBranch, openRepo, type RepoInfo } from "./repo.js";
 import { getToken, createRepo, type CreatedRepo } from "../github.js";
 
 export interface Remote {
@@ -124,6 +125,29 @@ export async function pull(root: string): Promise<PullResult> {
   } catch (e) {
     rethrowRemoteError(e, token);
   }
+}
+
+/** Derive the target folder name from a clone URL (last path segment, sans `.git`). */
+export function repoNameFromUrl(url: string): string {
+  const clean = url.trim().replace(/[/\\]+$/, "").replace(/\.git$/i, "");
+  const seg = clean.split(/[/\\]/).filter(Boolean).pop() ?? "";
+  return seg || "repository";
+}
+
+/**
+ * Clone `url` into a new subfolder of `parentDir` and open the result. HTTPS
+ * GitHub remotes authenticate with the stored token (private repos included)
+ * without prompting an interactive credential helper.
+ */
+export async function cloneRepo(parentDir: string, url: string): Promise<RepoInfo> {
+  const token = await getToken();
+  const target = path.join(parentDir, repoNameFromUrl(url));
+  try {
+    await runGit(parentDir, [...authArgs(token), "clone", url, target], { env: AUTH_ENV });
+  } catch (e) {
+    rethrowRemoteError(e, token);
+  }
+  return openRepo(target);
 }
 
 export interface CreateRepoResult {

@@ -96,6 +96,16 @@ export interface GitHubStatus {
   error?: string;
 }
 
+export interface GitHubRepo {
+  fullName: string;
+  name: string;
+  owner: string;
+  private: boolean;
+  cloneUrl: string;
+  description: string | null;
+  updatedAt: string | null;
+}
+
 /** Identifies which file's diff is open in the viewer. */
 export interface SelectedFile {
   path: string;

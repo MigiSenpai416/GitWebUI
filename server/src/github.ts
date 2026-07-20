@@ -103,6 +103,56 @@ export async function status(): Promise<{ configured: boolean; user: GitHubUser 
   }
 }
 
+export interface GitHubRepo {
+  fullName: string;
+  name: string;
+  owner: string;
+  private: boolean;
+  cloneUrl: string;
+  description: string | null;
+  updatedAt: string | null;
+}
+
+/**
+ * List repositories the authenticated account can access (owned, collaborator,
+ * and org member), public and private, most-recently-updated first. Paginates
+ * up to a sane cap so the clone picker stays snappy.
+ */
+export async function listRepos(token: string): Promise<GitHubRepo[]> {
+  const perPage = 100;
+  const maxPages = 5;
+  const repos: GitHubRepo[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const url =
+      `${API}/user/repos?per_page=${perPage}&page=${page}` +
+      `&sort=updated&affiliation=owner,collaborator,organization_member`;
+    const res = await fetch(url, { headers: ghHeaders(token) });
+    if (!res.ok) throw ghError(res.status, await res.text());
+    const batch = (await res.json()) as Array<{
+      full_name: string;
+      name: string;
+      owner: { login: string };
+      private: boolean;
+      clone_url: string;
+      description: string | null;
+      updated_at: string | null;
+    }>;
+    for (const r of batch) {
+      repos.push({
+        fullName: r.full_name,
+        name: r.name,
+        owner: r.owner?.login ?? "",
+        private: r.private,
+        cloneUrl: r.clone_url,
+        description: r.description ?? null,
+        updatedAt: r.updated_at ?? null,
+      });
+    }
+    if (batch.length < perPage) break;
+  }
+  return repos;
+}
+
 export interface CreatedRepo {
   fullName: string;
   cloneUrl: string;

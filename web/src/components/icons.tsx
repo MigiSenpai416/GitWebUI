@@ -168,3 +168,27 @@ export const IconRefresh = (p: P) => (
     <path d="M20 4v4h-4" />
   </svg>
 );
+export const IconPlus = (p: P) => (
+  <svg {...base({ strokeWidth: 2, ...p })}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+export const IconClose = (p: P) => (
+  <svg {...base({ width: 15, height: 15, strokeWidth: 2.4, ...p })}>
+    <path d="M4.5 4.5 19.5 19.5M19.5 4.5 4.5 19.5" />
+  </svg>
+);
+export const IconCloud = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M7 18a4 4 0 0 1-.6-7.95 5 5 0 0 1 9.7-1.2A3.5 3.5 0 0 1 18 18Z" />
+    <path d="M12 12v6" />
+    <path d="m9.5 15.5 2.5 2.5 2.5-2.5" />
+  </svg>
+);
+export const IconRepo = (p: P) => (
+  <svg {...base({ strokeWidth: 1.7, ...p })}>
+    <path d="M6 4h11a1 1 0 0 1 1 1v13H7a1 1 0 0 1-1-1Z" />
+    <path d="M6 15h12" />
+    <path d="M9 4v9l2-1.5L13 13V4" />
+  </svg>
+);

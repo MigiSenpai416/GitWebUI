@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { api, AuthError } from "../api/client";
+import { api, AuthError, setRequestRepoRoot } from "../api/client";
 import type {
   Branch,
   Commit,
@@ -15,6 +15,7 @@ import type {
 
 const PAGE = 150;
 const SIDEBAR_KEY = "gwui.sidebarCollapsed";
+const TABS_KEY = "gwui.tabs";
 
 function readSidebarCollapsed(): boolean {
   try {
@@ -22,6 +23,55 @@ function readSidebarCollapsed(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * One workspace tab. A tab with `root === null` is an empty "New Tab" showing
+ * the repository picker; otherwise it holds an open repo. The active tab's repo
+ * data (commits, status, branches, …) lives in the top-level store fields.
+ */
+export interface RepoTab {
+  id: string;
+  root: string | null;
+  name: string;
+  branch: string;
+}
+
+function uid(): string {
+  return Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
+}
+
+function pickerTab(): RepoTab {
+  return { id: uid(), root: null, name: "New Tab", branch: "" };
+}
+
+function readTabs(): { tabs: RepoTab[]; activeTabId: string | null } {
+  try {
+    const raw = localStorage.getItem(TABS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { tabs?: RepoTab[]; activeTabId?: string | null };
+      if (Array.isArray(parsed.tabs) && parsed.tabs.length > 0) {
+        return { tabs: parsed.tabs, activeTabId: parsed.activeTabId ?? parsed.tabs[0].id };
+      }
+    }
+  } catch {
+    /* ignore malformed storage */
+  }
+  const t = pickerTab();
+  return { tabs: [t], activeTabId: t.id };
+}
+
+function persistTabs(tabs: RepoTab[], activeTabId: string | null): void {
+  try {
+    localStorage.setItem(TABS_KEY, JSON.stringify({ tabs, activeTabId }));
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
+function basename(p: string): string {
+  const parts = p.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? p;
 }
 
 type ViewMode = "diff" | "file";
@@ -57,6 +107,11 @@ export interface ConfirmRequest {
 
 interface AppState {
   authState: AuthState;
+
+  /** Open workspace tabs and which one is active. */
+  tabs: RepoTab[];
+  activeTabId: string | null;
+  cloneDialogOpen: boolean;
 
   repo: RepoInfo | null;
   recent: string[];
@@ -112,7 +167,15 @@ interface AppState {
   loadWorkspace: () => Promise<void>;
   loadRecent: () => Promise<void>;
   openRepo: (path: string) => Promise<void>;
+  cloneRepo: (dir: string, url: string) => Promise<void>;
   closeRepo: () => void;
+
+  /** Tabs. */
+  newTab: () => void;
+  selectTab: (id: string) => Promise<void>;
+  closeTab: (id: string) => void;
+  openCloneDialog: () => void;
+  closeCloneDialog: () => void;
 
   loadCommits: (reset: boolean) => Promise<void>;
   selectCommit: (hash: string | null) => Promise<void>;
@@ -185,8 +248,14 @@ const EMPTY_STATUS: StatusResult = { staged: [], unstaged: [] };
 // Holds the resolver for the currently-open confirmation banner, if any.
 let confirmResolver: ((ok: boolean) => void) | null = null;
 
+const initialTabs = readTabs();
+
 export const useStore = create<AppState>((set, get) => ({
   authState: "loading",
+
+  tabs: initialTabs.tabs,
+  activeTabId: initialTabs.activeTabId,
+  cloneDialogOpen: false,
 
   repo: null,
   recent: [],
@@ -263,6 +332,7 @@ export const useStore = create<AppState>((set, get) => ({
     } catch {
       /* clear locally regardless */
     }
+    setRequestRepoRoot(null);
     set({
       authState: "login",
       repo: null,
@@ -280,20 +350,13 @@ export const useStore = create<AppState>((set, get) => ({
     await get().loadRecent();
     // GitHub connection is repo-independent; load it regardless.
     get().loadGitHubStatus();
-    try {
-      const { repo } = await api.currentRepo();
-      if (repo) {
-        set({ repo });
-        await Promise.all([
-          get().loadCommits(true),
-          get().refreshStatus(),
-          get().loadBranches(),
-          get().loadRemotes(),
-          get().loadStashes(),
-        ]);
-      }
-    } catch (e) {
-      reportError(set, e);
+    const { tabs, activeTabId } = get();
+    const active = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
+    if (active) set({ activeTabId: active.id });
+    if (active?.root) {
+      await get().selectTab(active.id);
+    } else {
+      showPicker(set);
     }
   },
 
@@ -310,22 +373,8 @@ export const useStore = create<AppState>((set, get) => ({
     set({ opening: true, error: null });
     try {
       const { repo } = await api.openRepo(path);
-      set({
-        repo,
-        commits: [],
-        selectedCommitHash: null,
-        commitFiles: [],
-        selectedFile: null,
-        status: EMPTY_STATUS,
-      });
+      await adoptRepo(get, set, repo);
       await get().loadRecent();
-      await Promise.all([
-        get().loadCommits(true),
-        get().refreshStatus(),
-        get().loadBranches(),
-        get().loadRemotes(),
-        get().loadStashes(),
-      ]);
     } catch (e) {
       reportError(set, e);
     } finally {
@@ -333,16 +382,85 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  async cloneRepo(dir: string, url: string) {
+    // Errors propagate so the Clone dialog can show them inline.
+    const { repo } = await api.cloneRepo(dir, url);
+    await adoptRepo(get, set, repo);
+    await get().loadRecent();
+  },
+
+  newTab() {
+    const t = pickerTab();
+    const tabs = [...get().tabs, t];
+    set({ tabs, activeTabId: t.id });
+    persistTabs(tabs, t.id);
+    showPicker(set);
+  },
+
+  async selectTab(id: string) {
+    const tab = get().tabs.find((t) => t.id === id);
+    if (!tab) return;
+    set({ activeTabId: id, error: null });
+    if (!tab.root) {
+      persistTabs(get().tabs, id);
+      showPicker(set);
+      return;
+    }
+    set({ opening: true });
+    try {
+      // Re-open on the backend: idempotent, and re-registers the repo after a
+      // server restart so data requests for this tab keep working.
+      const { repo } = await api.openRepo(tab.root);
+      const tabs = get().tabs.map((t) =>
+        t.id === id ? { ...t, branch: repo.branch, name: basename(repo.root) } : t,
+      );
+      set({ tabs });
+      persistTabs(tabs, id);
+      await hydrateRepo(get, set, repo);
+    } catch (e) {
+      reportError(set, e);
+    } finally {
+      set({ opening: false });
+    }
+  },
+
+  closeTab(id: string) {
+    const state = get();
+    const idx = state.tabs.findIndex((t) => t.id === id);
+    if (idx === -1) return;
+    const closing = state.tabs[idx];
+    if (closing.root) api.closeRepo(closing.root).catch(() => undefined);
+    let tabs = state.tabs.filter((t) => t.id !== id);
+    if (tabs.length === 0) tabs = [pickerTab()];
+    if (state.activeTabId === id) {
+      const next = tabs[Math.min(idx, tabs.length - 1)];
+      set({ tabs });
+      persistTabs(tabs, next.id);
+      void get().selectTab(next.id);
+    } else {
+      set({ tabs });
+      persistTabs(tabs, state.activeTabId);
+    }
+  },
+
+  openCloneDialog() {
+    set({ cloneDialogOpen: true });
+  },
+  closeCloneDialog() {
+    set({ cloneDialogOpen: false });
+  },
+
+  // Turn the active tab back into an empty picker ("Open a different repository").
   closeRepo() {
-    set({
-      repo: null,
-      commits: [],
-      hasMore: false,
-      selectedCommitHash: null,
-      commitFiles: [],
-      status: EMPTY_STATUS,
-      selectedFile: null,
-    });
+    const state = get();
+    const active = state.tabs.find((t) => t.id === state.activeTabId);
+    if (active?.root) api.closeRepo(active.root).catch(() => undefined);
+    const tabs = state.tabs.map((t) =>
+      t.id === state.activeTabId ? { ...t, root: null, name: "New Tab", branch: "" } : t,
+    );
+    set({ tabs });
+    persistTabs(tabs, state.activeTabId);
+    showPicker(set);
   },
 
   async loadCommits(reset: boolean) {
@@ -399,6 +517,7 @@ export const useStore = create<AppState>((set, get) => ({
         commitFiles: [],
         selectedFile: null,
       });
+      syncActiveTab(get, set, repo);
       await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
     } catch (e) {
       reportError(set, e);
@@ -632,6 +751,7 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const { repo } = await api.createBranch(name, hash);
       set({ repo });
+      syncActiveTab(get, set, repo);
       await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
     } catch (e) {
       reportError(set, e);
@@ -770,6 +890,97 @@ export const useStore = create<AppState>((set, get) => ({
     set({ notice: msg });
   },
 }));
+
+type StoreGet = () => AppState;
+type StoreSet = (partial: Partial<AppState>) => void;
+
+/** Reset the active-repo view to the empty picker (no repo targeted). */
+function showPicker(set: StoreSet): void {
+  setRequestRepoRoot(null);
+  set({
+    repo: null,
+    commits: [],
+    hasMore: false,
+    selectedCommitHash: null,
+    commitFiles: [],
+    selectedFile: null,
+    status: EMPTY_STATUS,
+    branches: [],
+    remotes: [],
+    stashes: [],
+    commitMenu: null,
+    stashMenu: null,
+  });
+}
+
+/** Point the API at `info` and load its commits, status, branches, remotes, stashes. */
+async function hydrateRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promise<void> {
+  setRequestRepoRoot(info.root);
+  set({
+    repo: info,
+    commits: [],
+    hasMore: false,
+    selectedCommitHash: null,
+    commitFiles: [],
+    selectedFile: null,
+    status: EMPTY_STATUS,
+    branches: [],
+    remotes: [],
+    stashes: [],
+    commitMenu: null,
+    stashMenu: null,
+  });
+  await Promise.all([
+    get().loadCommits(true),
+    get().refreshStatus(),
+    get().loadBranches(),
+    get().loadRemotes(),
+    get().loadStashes(),
+  ]);
+}
+
+/**
+ * Bring a freshly opened/cloned repo into the workspace: switch to its existing
+ * tab if one is open, else fill the active empty tab or append a new one, then
+ * load its data.
+ */
+async function adoptRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promise<void> {
+  const state = get();
+  const name = basename(info.root);
+  const existing = state.tabs.find((t) => t.root === info.root);
+  let tabs = state.tabs.map((t) => ({ ...t }));
+  let activeTabId: string;
+  if (existing) {
+    const e = tabs.find((t) => t.id === existing.id)!;
+    e.branch = info.branch;
+    e.name = name;
+    activeTabId = e.id;
+  } else {
+    const active = tabs.find((t) => t.id === state.activeTabId);
+    if (active && active.root === null) {
+      active.root = info.root;
+      active.name = name;
+      active.branch = info.branch;
+      activeTabId = active.id;
+    } else {
+      const nt: RepoTab = { id: uid(), root: info.root, name, branch: info.branch };
+      tabs = [...tabs, nt];
+      activeTabId = nt.id;
+    }
+  }
+  set({ tabs, activeTabId });
+  persistTabs(tabs, activeTabId);
+  await hydrateRepo(get, set, info);
+}
+
+/** Keep the active tab's branch/name label in sync with a server repo response. */
+function syncActiveTab(get: StoreGet, set: StoreSet, info: RepoInfo): void {
+  const tabs = get().tabs.map((t) =>
+    t.root === info.root ? { ...t, branch: info.branch, name: basename(info.root) } : t,
+  );
+  set({ tabs });
+  persistTabs(tabs, get().activeTabId);
+}
 
 /** When a viewed working-file is staged/unstaged, flip its source so the viewer follows it. */
 function syncSelectedAfterStage(

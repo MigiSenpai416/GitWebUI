@@ -4,6 +4,7 @@ import type {
   CommitFile,
   DiffResult,
   DiffSource,
+  GitHubRepo,
   GitHubStatus,
   GitHubUser,
   RepoInfo,
@@ -15,11 +16,23 @@ import type {
 /** Thrown on a 401 so the store can drop back to the login screen. */
 export class AuthError extends Error {}
 
+/**
+ * Root of the repo the current tab targets. Sent as `X-Repo-Root` on every
+ * request so the server knows which of the open repos to act on. The store
+ * updates this whenever the active tab changes.
+ */
+let activeRepoRoot: string | null = null;
+export function setRequestRepoRoot(root: string | null): void {
+  activeRepoRoot = root;
+}
+
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string>) ?? {}),
+  };
+  if (activeRepoRoot) headers["X-Repo-Root"] = activeRepoRoot;
+  const res = await fetch(url, { ...init, headers });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -59,6 +72,16 @@ export const api = {
     req<{ repo: RepoInfo }>("/api/repo/open", {
       method: "POST",
       body: JSON.stringify({ path }),
+    }),
+  cloneRepo: (dir: string, url: string) =>
+    req<{ repo: RepoInfo }>("/api/repo/clone", {
+      method: "POST",
+      body: JSON.stringify({ dir, url }),
+    }),
+  closeRepo: (root: string) =>
+    req<{ ok: true }>("/api/repo/close", {
+      method: "POST",
+      body: JSON.stringify({ root }),
     }),
 
   commits: (skip: number, limit: number) =>
@@ -135,6 +158,7 @@ export const api = {
     }),
   githubRevoke: () =>
     req<{ configured: false; user: null }>("/api/github/token", { method: "DELETE", body: "{}" }),
+  githubRepos: () => req<{ repos: GitHubRepo[] }>("/api/github/repos"),
 
   // Remotes
   remotes: () => req<{ remotes: Remote[] }>("/api/remotes"),

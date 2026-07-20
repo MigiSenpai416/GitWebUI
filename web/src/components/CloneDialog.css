@@ -1,0 +1,140 @@
+.clone-dialog {
+  width: 640px;
+  max-width: 94vw;
+  padding: 18px 20px 20px;
+}
+.clone-body {
+  display: flex;
+  gap: 18px;
+  min-height: 240px;
+}
+.clone-rail {
+  width: 190px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--border);
+  padding-right: 6px;
+}
+.clone-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+.clone-rail-item:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+.clone-rail-item.active {
+  background: var(--bg-row-selected);
+  color: #fff;
+}
+.clone-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.clone-panel .acct-field input {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.clone-actions {
+  justify-content: flex-end;
+  margin-top: auto;
+}
+
+/* Searchable repository combobox (GitHub source) */
+.clone-combo-field {
+  position: relative;
+}
+.clone-combo {
+  position: relative;
+}
+.clone-combo > input {
+  width: 100%;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.clone-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+}
+.clone-list-empty {
+  padding: 10px 11px;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+}
+.clone-list-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  color: var(--text);
+}
+.clone-list-item.active {
+  background: var(--bg-row-selected);
+}
+.clone-list-item.active .clone-list-desc {
+  color: #cfe0f2;
+}
+.clone-list-name {
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.clone-vis {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  justify-self: end;
+}
+.clone-vis.public {
+  background: rgba(63, 185, 80, 0.16);
+  color: #7ee08c;
+}
+.clone-vis.private {
+  background: rgba(210, 153, 34, 0.18);
+  color: var(--amber);
+}
+.clone-list-desc {
+  grid-column: 1 / -1;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

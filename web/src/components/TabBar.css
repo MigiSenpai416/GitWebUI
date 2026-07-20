@@ -1,0 +1,105 @@
+.tabbar {
+  display: flex;
+  align-items: stretch;
+  height: 34px;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  user-select: none;
+}
+.tabbar-brand {
+  display: flex;
+  align-items: center;
+  padding: 0 12px 0 14px;
+  color: var(--accent);
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.tabbar-tabs {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabbar-tabs::-webkit-scrollbar {
+  height: 0;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 200px;
+  min-width: 118px;
+  padding: 0 8px 0 13px;
+  border-right: 1px solid var(--border);
+  border-top: 2px solid transparent;
+  color: var(--text-dim);
+  background: transparent;
+  position: relative;
+  flex-shrink: 0;
+}
+.tab:hover {
+  background: var(--bg-panel);
+  color: var(--text);
+}
+.tab.active {
+  background: var(--bg-app);
+  border-top-color: var(--graph-color);
+  color: var(--text-strong);
+}
+.tab-icon {
+  flex-shrink: 0;
+  color: var(--graph-color);
+  opacity: 0.85;
+}
+.tab.active .tab-icon {
+  opacity: 1;
+}
+.tab-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+}
+.tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  opacity: 0;
+}
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  opacity: 1;
+}
+.tab-close:hover {
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+}
+
+.tab-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.tab-add:hover {
+  background: var(--bg-panel);
+  color: var(--text-strong);
+}

@@ -13,7 +13,9 @@ import { CreateBranchDialog } from "./components/CreateBranchDialog";
 import { ConfirmBar } from "./components/ConfirmBar";
 import { AuthGate } from "./components/AuthGate";
 import { Sidebar } from "./components/Sidebar";
+import { TabBar } from "./components/TabBar";
 import { AddRemoteDialog } from "./components/AddRemoteDialog";
+import { CloneDialog } from "./components/CloneDialog";
 import { GitHubDialog } from "./components/GitHubDialog";
 
 export function App() {
@@ -79,39 +81,38 @@ export function App() {
     );
   }
 
-  if (!repo) {
-    return (
-      <>
-        <RepoPicker />
-        {toasts}
-      </>
-    );
-  }
-
   return (
     <div className="app">
-      <Toolbar />
-      <div className="app-body">
-        <Sidebar />
-        <div className="commit-pane">
-          <CommitList />
-          {selectedFile && <DiffViewer />}
-        </div>
-        <div className="side-pane">
-          {selectedCommitHash ? (
-            <CommitDetails />
-          ) : (
-            <>
-              <ChangesPanel />
-              <CommitBox />
-            </>
-          )}
-        </div>
-      </div>
+      <TabBar />
+      {repo ? (
+        <>
+          <Toolbar />
+          <div className="app-body">
+            <Sidebar />
+            <div className="commit-pane">
+              <CommitList />
+              {selectedFile && <DiffViewer />}
+            </div>
+            <div className="side-pane">
+              {selectedCommitHash ? (
+                <CommitDetails />
+              ) : (
+                <>
+                  <ChangesPanel />
+                  <CommitBox />
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      ) : (
+        <RepoPicker />
+      )}
       <CommitContextMenu />
       <StashContextMenu />
       <CreateBranchDialog />
       <AddRemoteDialog />
+      <CloneDialog />
       <GitHubDialog />
       {toasts}
     </div>

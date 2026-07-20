@@ -1,5 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { parseRemotes, authArgs } from "./remote.js";
+import { parseRemotes, authArgs, repoNameFromUrl } from "./remote.js";
+
+describe("repoNameFromUrl", () => {
+  it("derives the folder name from common clone URLs", () => {
+    expect(repoNameFromUrl("https://github.com/owner/my-repo.git")).toBe("my-repo");
+    expect(repoNameFromUrl("https://github.com/owner/my-repo")).toBe("my-repo");
+    expect(repoNameFromUrl("git@github.com:owner/My.Repo.git")).toBe("My.Repo");
+    expect(repoNameFromUrl("https://example.com/a/b/deep/name.git/")).toBe("name");
+  });
+
+  it("falls back to a default when no segment is present", () => {
+    expect(repoNameFromUrl("")).toBe("repository");
+  });
+});
 
 describe("parseRemotes", () => {
   it("de-duplicates fetch/push lines into one entry per remote", () => {

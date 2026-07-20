@@ -10,10 +10,13 @@ import {
   unstagePaths,
   commit,
   discardAll,
+  discardPaths,
+  deleteFile,
   resetTo,
   revertCommit,
   type ResetMode,
 } from "./git/mutate.js";
+import { revealFolder } from "./system.js";
 import { getBranches, checkoutBranch, createBranchAt, deleteBranch } from "./git/branches.js";
 import {
   getRemotes,
@@ -196,8 +199,31 @@ api.post("/revert", h(async (req, res) => {
 
 api.post("/discard", h(async (req, res) => {
   const root = requireRepoRoot(req);
-  await discardAll(root);
+  const paths = asStringArray(req.body?.paths);
+  if (paths.length > 0) {
+    await discardPaths(root, paths);
+  } else {
+    await discardAll(root);
+  }
   res.json(await getStatus(root));
+}));
+
+api.post("/file/delete", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const path = String(req.body?.path ?? "").trim();
+  if (!path) {
+    res.status(400).json({ error: "A file path is required" });
+    return;
+  }
+  await deleteFile(root, path);
+  res.json(await getStatus(root));
+}));
+
+api.post("/reveal", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const path = String(req.body?.path ?? "").trim();
+  await revealFolder(root, path);
+  res.json({ ok: true });
 }));
 
 api.get("/diff", h(async (req, res) => {

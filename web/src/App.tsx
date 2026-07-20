@@ -9,6 +9,7 @@ import { CommitDetails } from "./components/CommitDetails";
 import { DiffViewer } from "./components/DiffViewer/DiffViewer";
 import { CommitContextMenu } from "./components/CommitContextMenu";
 import { StashContextMenu } from "./components/StashContextMenu";
+import { ChangesContextMenu } from "./components/ChangesContextMenu";
 import { CreateBranchDialog } from "./components/CreateBranchDialog";
 import { ConfirmBar } from "./components/ConfirmBar";
 import { AuthGate } from "./components/AuthGate";
@@ -110,6 +111,7 @@ export function App() {
       )}
       <CommitContextMenu />
       <StashContextMenu />
+      <ChangesContextMenu />
       <CreateBranchDialog />
       <AddRemoteDialog />
       <CloneDialog />

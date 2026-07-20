@@ -99,6 +99,23 @@ export interface StashMenu {
   y: number;
 }
 
+/** Right-click menu on a file or folder in the changes panel. */
+export interface ChangesMenu {
+  kind: "file" | "folder";
+  x: number;
+  y: number;
+  /** Repo-relative paths affected (one file, or every file under a folder). */
+  paths: string[];
+  /** Display name (file or folder) for confirmation copy. */
+  label: string;
+  /** Whether the target sits in the staged section (Stage vs Unstage). */
+  staged: boolean;
+  /** For a file: its single repo-relative path. */
+  filePath?: string;
+  /** For a folder: its repo-relative path (for Open Folder). */
+  folderPath?: string;
+}
+
 /** A pending destructive-action confirmation shown in the top banner. */
 export interface ConfirmRequest {
   message: string;
@@ -150,6 +167,7 @@ interface AppState {
 
   commitMenu: CommitMenu | null;
   stashMenu: StashMenu | null;
+  changesMenu: ChangesMenu | null;
   /** Commit hash the "Create branch here" dialog targets, if open. */
   branchDialogHash: string | null;
   /** Bumped on each refreshAll so open views (e.g. the diff) can refetch. */
@@ -233,6 +251,11 @@ interface AppState {
   stageAll: () => Promise<void>;
   unstage: (paths: string[]) => Promise<void>;
   discardAll: () => Promise<void>;
+  discardPaths: (paths: string[]) => Promise<void>;
+  deleteFile: (path: string) => Promise<void>;
+  revealPath: (path: string) => Promise<void>;
+  openChangesMenu: (menu: ChangesMenu) => void;
+  closeChangesMenu: () => void;
   commit: (title: string, description: string, amend: boolean) => Promise<void>;
 
   openFile: (file: SelectedFile) => void;
@@ -291,6 +314,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   commitMenu: null,
   stashMenu: null,
+  changesMenu: null,
   branchDialogHash: null,
   refreshTick: 0,
   confirm: null,
@@ -850,6 +874,43 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       reportError(set, e);
     }
+  },
+
+  async discardPaths(paths: string[]) {
+    set({ changesMenu: null });
+    try {
+      const status = await api.discardPaths(paths);
+      set({ status, selectedFile: null });
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  async deleteFile(path: string) {
+    set({ changesMenu: null });
+    try {
+      const status = await api.deleteFile(path);
+      set({ status, selectedFile: null });
+      set({ notice: `Deleted ${path}.` });
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  async revealPath(path: string) {
+    set({ changesMenu: null });
+    try {
+      await api.reveal(path);
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  openChangesMenu(menu: ChangesMenu) {
+    set({ changesMenu: menu, commitMenu: null, stashMenu: null });
+  },
+  closeChangesMenu() {
+    set({ changesMenu: null });
   },
 
   async commit(title: string, description: string, amend: boolean) {

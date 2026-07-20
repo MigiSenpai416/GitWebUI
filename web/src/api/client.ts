@@ -121,6 +121,12 @@ export const api = {
     }),
   discardAll: () =>
     req<StatusResult>("/api/discard", { method: "POST", body: JSON.stringify({}) }),
+  discardPaths: (paths: string[]) =>
+    req<StatusResult>("/api/discard", { method: "POST", body: JSON.stringify({ paths }) }),
+  deleteFile: (path: string) =>
+    req<StatusResult>("/api/file/delete", { method: "POST", body: JSON.stringify({ path }) }),
+  reveal: (path: string) =>
+    req<{ ok: true }>("/api/reveal", { method: "POST", body: JSON.stringify({ path }) }),
 
   diff: (source: DiffSource, path: string, hash?: string) => {
     const params = new URLSearchParams({ source, path });

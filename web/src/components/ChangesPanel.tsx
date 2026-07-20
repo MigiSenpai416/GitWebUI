@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 import { useStore } from "../state/store";
 import type { FileChange } from "../types";
 import { FileRow } from "./FileRow";
-import { buildTree, allDirPaths, type TreeNode } from "./fileTree";
+import { buildTree, allDirPaths, filesUnder, type TreeNode } from "./fileTree";
 import { IconChevron, IconChevronDown, IconFolder, IconPath, IconSort, IconSparkle, IconTrash, IconTree } from "./icons";
 import "./ChangesPanel.css";
 
@@ -19,6 +19,7 @@ export function ChangesPanel() {
   const setFileLayout = useStore((s) => s.setFileLayout);
   const setNotice = useStore((s) => s.setNotice);
   const requestConfirm = useStore((s) => s.requestConfirm);
+  const openChangesMenu = useStore((s) => s.openChangesMenu);
 
   const [unstagedOpen, setUnstagedOpen] = useState(true);
   const [stagedOpen, setStagedOpen] = useState(true);
@@ -62,6 +63,33 @@ export function ChangesPanel() {
       "Discard",
     );
     if (ok) discardAll();
+  };
+
+  const onFileMenu = (f: FileChange, e: MouseEvent) => {
+    e.preventDefault();
+    openChangesMenu({
+      kind: "file",
+      x: e.clientX,
+      y: e.clientY,
+      paths: [f.path],
+      label: baseName(f.path),
+      staged: f.staged,
+      filePath: f.path,
+    });
+  };
+
+  const onFolderMenu = (node: TreeNode<FileChange>, staged: boolean, e: MouseEvent) => {
+    e.preventDefault();
+    if (node.type !== "dir") return;
+    openChangesMenu({
+      kind: "folder",
+      x: e.clientX,
+      y: e.clientY,
+      paths: filesUnder(node),
+      label: node.name,
+      staged,
+      folderPath: node.path,
+    });
   };
 
   return (
@@ -115,12 +143,15 @@ export function ChangesPanel() {
           <FileList
             files={status.unstaged}
             layout={fileLayout}
+            staged={false}
             collapsedDirs={collapsedDirs}
             toggleDir={toggleDir}
             isActive={isActive}
             onOpen={open}
             actionLabel="Stage"
             onAction={(f) => stage([f.path])}
+            onFileMenu={onFileMenu}
+            onFolderMenu={onFolderMenu}
             emptyText="No unstaged changes"
           />
         </Section>
@@ -139,12 +170,15 @@ export function ChangesPanel() {
           <FileList
             files={status.staged}
             layout={fileLayout}
+            staged={true}
             collapsedDirs={collapsedDirs}
             toggleDir={toggleDir}
             isActive={isActive}
             onOpen={open}
             actionLabel="Unstage"
             onAction={(f) => unstage([f.path])}
+            onFileMenu={onFileMenu}
+            onFolderMenu={onFolderMenu}
             emptyText="No staged changes"
           />
         </Section>
@@ -191,12 +225,15 @@ function Section({ title, count, open, onToggle, action, children }: SectionProp
 interface FileListProps {
   files: FileChange[];
   layout: "path" | "tree";
+  staged: boolean;
   collapsedDirs: Set<string>;
   toggleDir: (path: string) => void;
   isActive: (f: FileChange) => boolean;
   onOpen: (f: FileChange) => void;
   actionLabel: string;
   onAction: (f: FileChange) => void;
+  onFileMenu: (f: FileChange, e: MouseEvent) => void;
+  onFolderMenu: (node: TreeNode<FileChange>, staged: boolean, e: MouseEvent) => void;
   emptyText: string;
 }
 
@@ -220,6 +257,7 @@ function FileList(props: FileListProps) {
             actionLabel={props.actionLabel}
             onAction={() => props.onAction(f)}
             onOpen={() => props.onOpen(f)}
+            onContextMenu={(e) => props.onFileMenu(f, e)}
           />
         ))}
       </>
@@ -238,12 +276,15 @@ function FileList(props: FileListProps) {
 function TreeRows({
   node,
   depth,
+  staged,
   collapsedDirs,
   toggleDir,
   isActive,
   onOpen,
   actionLabel,
   onAction,
+  onFileMenu,
+  onFolderMenu,
 }: { node: TreeNode<FileChange>; depth: number } & Omit<FileListProps, "files" | "layout" | "emptyText">) {
   if (node.type === "file") {
     return (
@@ -255,13 +296,19 @@ function TreeRows({
         actionLabel={actionLabel}
         onAction={() => onAction(node.file)}
         onOpen={() => onOpen(node.file)}
+        onContextMenu={(e) => onFileMenu(node.file, e)}
       />
     );
   }
   const collapsed = collapsedDirs.has(node.path);
   return (
     <>
-      <button className="tree-dir" style={{ paddingLeft: 12 + depth * 15 }} onClick={() => toggleDir(node.path)}>
+      <button
+        className="tree-dir"
+        style={{ paddingLeft: 12 + depth * 15 }}
+        onClick={() => toggleDir(node.path)}
+        onContextMenu={(e) => onFolderMenu(node, staged, e)}
+      >
         {collapsed ? <IconChevron /> : <IconChevronDown />}
         <IconFolder width={15} height={15} className="tree-folder-icon" />
         <span className="tree-dir-name">{node.name}</span>
@@ -272,14 +319,22 @@ function TreeRows({
             key={child.path}
             node={child}
             depth={depth + 1}
+            staged={staged}
             collapsedDirs={collapsedDirs}
             toggleDir={toggleDir}
             isActive={isActive}
             onOpen={onOpen}
             actionLabel={actionLabel}
             onAction={onAction}
+            onFileMenu={onFileMenu}
+            onFolderMenu={onFolderMenu}
           />
         ))}
     </>
   );
+}
+
+function baseName(p: string): string {
+  const parts = p.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? p;
 }

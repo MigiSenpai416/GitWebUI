@@ -12,6 +12,7 @@ export function CommitDetails() {
   const files = useStore((s) => s.commitFiles);
   const loading = useStore((s) => s.loadingCommitFiles);
   const selectCommit = useStore((s) => s.selectCommit);
+  const status = useStore((s) => s.status);
   const openFile = useStore((s) => s.openFile);
   const selectedFile = useStore((s) => s.selectedFile);
   const fileLayout = useStore((s) => s.fileLayout);
@@ -29,6 +30,8 @@ export function CommitDetails() {
   const commit = commits.find((c) => c.hash === hash);
   if (!commit) return null;
 
+  const wipCount = status.staged.length + status.unstaged.length;
+
   const isActive = (f: CommitFile) =>
     selectedFile?.source === "commit" &&
     selectedFile.hash === commit.hash &&
@@ -45,6 +48,17 @@ export function CommitDetails() {
 
   return (
     <div className="commit-details">
+      {wipCount > 0 && (
+        <div className="cd-wip-banner">
+          <span className="cd-wip-text">
+            {wipCount} file change{wipCount === 1 ? "" : "s"} in working directory
+          </span>
+          <button className="cd-wip-btn" onClick={() => selectCommit(null)}>
+            View Changes
+          </button>
+        </div>
+      )}
+
       <div className="cd-header">
         <span className="cd-title-label">Commit</span>
         <span className="cd-hash">{commit.shortHash}</span>

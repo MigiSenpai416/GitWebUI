@@ -7,6 +7,42 @@
      their own scroll region below. */
   overflow: hidden;
 }
+/* Banner shown when viewing a past commit while the working tree has changes:
+   a one-click way back to the uncommitted (WIP) view. */
+.cd-wip-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 8px 10px 8px 14px;
+  background: var(--bg-row-selected);
+  border-bottom: 1px solid var(--accent-quiet);
+}
+.cd-wip-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: #dbe7f5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cd-wip-btn {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
+  color: #fff;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  padding: 4px 12px;
+}
+.cd-wip-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
 .cd-header {
   display: flex;
   align-items: center;

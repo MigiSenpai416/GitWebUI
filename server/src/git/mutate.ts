@@ -1,3 +1,5 @@
+import path from "node:path";
+import { promises as fs } from "node:fs";
 import { runGit } from "./gitRunner.js";
 import { headHash } from "./repo.js";
 
@@ -38,6 +40,48 @@ export async function discardAll(root: string): Promise<void> {
     await runGit(root, ["rm", "-r", "--cached", "--ignore-unmatch", "."]).catch(() => {});
   }
   await runGit(root, ["clean", "-fd"]);
+}
+
+/**
+ * Discard changes for specific paths only (a single file or every file under a
+ * folder): unstage them, restore tracked files to HEAD, and remove any
+ * untracked files. Destructive and irreversible — the UI confirms first.
+ */
+export async function discardPaths(root: string, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  const head = await headHash(root);
+  if (head) {
+    // Unstage first so a newly-added file becomes untracked, then restore
+    // tracked files to their HEAD content.
+    await runGit(root, ["reset", "-q", "HEAD", "--", ...paths]).catch(() => {});
+    await runGit(root, ["checkout", "HEAD", "--", ...paths]).catch(() => {});
+  } else {
+    // Unborn branch: no HEAD to restore from — just drop index entries.
+    await runGit(root, ["rm", "-q", "--cached", "-r", "--ignore-unmatch", "--", ...paths]).catch(
+      () => {},
+    );
+  }
+  // Remove untracked files/dirs among the given paths (including files that
+  // were just unstaged from an add).
+  await runGit(root, ["clean", "-fd", "--", ...paths]);
+}
+
+/** Resolve a repo-relative path to an absolute one, rejecting escapes outside the repo. */
+function resolveInRepo(root: string, relPath: string): string {
+  const abs = path.resolve(root, relPath);
+  const rootResolved = path.resolve(root);
+  if (abs !== rootResolved && !abs.startsWith(rootResolved + path.sep)) {
+    const err = new Error("Path is outside the repository") as Error & { status?: number };
+    err.status = 400;
+    throw err;
+  }
+  return abs;
+}
+
+/** Delete a file from the working tree (leaves the removal as a pending change). */
+export async function deleteFile(root: string, relPath: string): Promise<void> {
+  const abs = resolveInRepo(root, relPath);
+  await fs.rm(abs, { force: true });
 }
 
 export type ResetMode = "hard" | "soft" | "mixed";

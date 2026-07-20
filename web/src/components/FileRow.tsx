@@ -1,3 +1,4 @@
+import type { MouseEvent } from "react";
 import type { ChangeStatus, FileChange } from "../types";
 import "./FileRow.css";
 
@@ -12,15 +13,18 @@ interface Props {
   /** Optional inline action (Stage / Unstage) shown on hover. */
   actionLabel?: string;
   onAction?: () => void;
+  /** Optional right-click handler (changes panel only). */
+  onContextMenu?: (e: MouseEvent) => void;
 }
 
-export function FileRow({ file, active, onOpen, depth = 0, showDir = true, actionLabel, onAction }: Props) {
+export function FileRow({ file, active, onOpen, depth = 0, showDir = true, actionLabel, onAction, onContextMenu }: Props) {
   const { dir, name } = splitPath(file.path);
   return (
     <div
       className={"file-row" + (active ? " active" : "")}
       style={{ paddingLeft: 12 + depth * 15 }}
       onClick={onOpen}
+      onContextMenu={onContextMenu}
     >
       <StatusGlyph status={file.status} />
       <span className="file-name">{name}</span>

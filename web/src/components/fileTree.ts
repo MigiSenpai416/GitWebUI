@@ -55,6 +55,14 @@ function sortNode<T>(node: DirNode<T>): void {
   }
 }
 
+/** Every file path under a tree node (the node itself if it's a file). */
+export function filesUnder<T extends { path: string }>(node: TreeNode<T>): string[] {
+  if (node.type === "file") return [node.path];
+  const out: string[] = [];
+  for (const child of node.children) out.push(...filesUnder(child));
+  return out;
+}
+
 /** All directory paths in the tree (used by "Collapse All"). */
 export function allDirPaths<T>(nodes: TreeNode<T>[]): string[] {
   const out: string[] = [];

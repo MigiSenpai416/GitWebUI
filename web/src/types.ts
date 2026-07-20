@@ -104,6 +104,20 @@ export interface GitHubStatus {
   error?: string;
 }
 
+export interface CommitIdentity {
+  name: string;
+  email: string;
+}
+
+export interface IdentityInfo {
+  /** Manually-set identity, or null if none saved. */
+  manual: CommitIdentity | null;
+  /** Identity derived from a connected GitHub account, or null. */
+  github: CommitIdentity | null;
+  /** What commits will actually use (github wins, else manual, else git config). */
+  effective: CommitIdentity | null;
+}
+
 export interface GitHubRepo {
   fullName: string;
   name: string;

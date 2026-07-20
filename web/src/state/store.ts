@@ -6,6 +6,7 @@ import type {
   CommitFile,
   GitHubStatus,
   GitHubUser,
+  IdentityInfo,
   RepoInfo,
   Remote,
   RemoteBranch,
@@ -29,16 +30,18 @@ function readVisibleMap(): Record<string, string[]> {
     return {};
   }
 }
-function readVisibleFor(root: string): string[] {
+/** Saved visible set for a repo, or null if it was never set (so a default applies). */
+function readVisibleFor(root: string): string[] | null {
   const v = readVisibleMap()[root];
-  return Array.isArray(v) ? v : [];
+  return Array.isArray(v) ? v : null;
 }
 function writeVisibleFor(root: string, refs: string[]): void {
   if (!root) return;
   try {
     const map = readVisibleMap();
-    if (refs.length > 0) map[root] = refs;
-    else delete map[root];
+    // Always store (even empty) so an explicit "hide everything" is remembered
+    // and distinguishable from a repo opened for the first time.
+    map[root] = refs;
     localStorage.setItem(VISIBLE_KEY, JSON.stringify(map));
   } catch {
     /* ignore storage failures */
@@ -188,6 +191,8 @@ interface AppState {
   remoteBusy: boolean;
   addRemoteOpen: boolean;
   githubDialogOpen: boolean;
+  identityDialogOpen: boolean;
+  identity: IdentityInfo | null;
 
   /** Whether the LOCAL/REMOTE left rail is collapsed (persisted). */
   sidebarCollapsed: boolean;
@@ -258,6 +263,12 @@ interface AppState {
   loadGitHubStatus: () => Promise<void>;
   setGitHubToken: (token: string) => Promise<GitHubUser>;
   revokeGitHubToken: () => Promise<void>;
+
+  loadIdentity: () => Promise<void>;
+  saveIdentity: (name: string, email: string) => Promise<void>;
+  clearIdentity: () => Promise<void>;
+  openIdentityDialog: () => void;
+  closeIdentityDialog: () => void;
 
   openAddRemote: () => void;
   closeAddRemote: () => void;
@@ -340,6 +351,8 @@ export const useStore = create<AppState>((set, get) => ({
   remoteBusy: false,
   addRemoteOpen: false,
   githubDialogOpen: false,
+  identityDialogOpen: false,
+  identity: null,
 
   sidebarCollapsed: readSidebarCollapsed(),
 
@@ -768,6 +781,8 @@ export const useStore = create<AppState>((set, get) => ({
     // Errors propagate to the dialog for inline display.
     const { user } = await api.githubSetToken(token);
     set({ githubStatus: { configured: true, user } });
+    // The connected account now provides the commit identity — refresh it.
+    get().loadIdentity();
     return user;
   },
 
@@ -776,9 +791,44 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const status = await api.githubRevoke();
       set({ githubStatus: status });
+      // GitHub no longer overrides the commit identity — refresh it.
+      get().loadIdentity();
     } catch (e) {
       reportError(set, e);
     }
+  },
+
+  async loadIdentity() {
+    try {
+      const identity = await api.identity();
+      set({ identity });
+    } catch {
+      /* non-fatal */
+    }
+  },
+
+  async saveIdentity(name: string, email: string) {
+    // Errors propagate so the dialog can show them inline.
+    const identity = await api.setIdentity(name, email);
+    set({ identity });
+  },
+
+  async clearIdentity() {
+    set({ error: null });
+    try {
+      const identity = await api.clearIdentity();
+      set({ identity });
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  openIdentityDialog() {
+    set({ identityDialogOpen: true });
+    get().loadIdentity();
+  },
+  closeIdentityDialog() {
+    set({ identityDialogOpen: false });
   },
 
   openAddRemote() {
@@ -1052,22 +1102,38 @@ async function hydrateRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promis
     branches: [],
     remotes: [],
     remoteBranches: [],
-    // Restore this repo's saved visible-branch set; pruned once refs are loaded.
-    visibleRefs: readVisibleFor(info.root),
+    visibleRefs: [],
     stashes: [],
     commitMenu: null,
     stashMenu: null,
   });
-  // Load remote branches first so visibleRefs is pruned to existing refs before
-  // the log is queried with them.
-  await get().loadRemoteBranches();
+  // Load the ref lists first so we can resolve the default visible set and query
+  // the log with valid refs.
+  await Promise.all([get().loadRemoteBranches(), get().loadBranches()]);
+  set({ visibleRefs: resolveVisibleRefs(get(), info.root) });
+  writeVisibleFor(info.root, get().visibleRefs);
   await Promise.all([
     get().loadCommits(true),
     get().refreshStatus(),
-    get().loadBranches(),
     get().loadRemotes(),
     get().loadStashes(),
   ]);
+}
+
+/**
+ * The set of remote refs to show in the log: the repo's saved choice, or — on
+ * first open — the current branch's upstream so its commits read as "shown"
+ * rather than hidden. Always pruned to refs that still exist.
+ */
+function resolveVisibleRefs(state: AppState, root: string): string[] {
+  const exists = (ref: string) => state.remoteBranches.some((b) => b.ref === ref);
+  const stored = readVisibleFor(root);
+  if (stored !== null) return stored.filter(exists);
+  const upstream = state.branches.find((b) => b.current)?.upstream ?? null;
+  const upstreamRef = upstream
+    ? state.remoteBranches.find((b) => b.name === upstream)?.ref ?? null
+    : null;
+  return upstreamRef ? [upstreamRef] : [];
 }
 
 /**

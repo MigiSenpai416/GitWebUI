@@ -4,11 +4,14 @@
 import { createApp } from "./app.js";
 import { serveEmbedded } from "./embeddedServe.js";
 import { resolvePort, resolveHost, wantsHelp, HELP_TEXT } from "./args.js";
+import { installProcessGuards } from "./safety.js";
 
 if (wantsHelp()) {
   console.log(HELP_TEXT);
   process.exit(0);
 }
+
+installProcessGuards();
 
 let port: number;
 let host: string;

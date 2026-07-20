@@ -7,6 +7,7 @@ import type {
   GitHubRepo,
   GitHubStatus,
   GitHubUser,
+  IdentityInfo,
   RepoInfo,
   Remote,
   RemoteBranch,
@@ -157,6 +158,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title, description, amend }),
     }),
+
+  // Commit identity
+  identity: () => req<IdentityInfo>("/api/identity"),
+  setIdentity: (name: string, email: string) =>
+    req<IdentityInfo>("/api/identity", { method: "POST", body: JSON.stringify({ name, email }) }),
+  clearIdentity: () => req<IdentityInfo>("/api/identity", { method: "DELETE", body: "{}" }),
 
   // GitHub account (Personal Access Token)
   githubStatus: () => req<GitHubStatus>("/api/github/status"),

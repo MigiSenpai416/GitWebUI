@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { CONFIG_DIR } from "./config.js";
+import type { CommitIdentity } from "./identity.js";
 
 /**
  * GitHub Personal Access Token storage + minimal GitHub REST calls.
@@ -17,6 +18,8 @@ export interface GitHubUser {
   login: string;
   name: string | null;
   avatarUrl: string | null;
+  id: number;
+  email: string | null;
 }
 
 interface TokenConfig {
@@ -88,8 +91,65 @@ function ghError(status: number, body: string): Error & { status: number } {
 export async function fetchUser(token: string): Promise<GitHubUser> {
   const res = await fetch(`${API}/user`, { headers: ghHeaders(token) });
   if (!res.ok) throw ghError(res.status, await res.text());
-  const j = (await res.json()) as { login: string; name: string | null; avatar_url: string | null };
-  return { login: j.login, name: j.name ?? null, avatarUrl: j.avatar_url ?? null };
+  const j = (await res.json()) as {
+    login: string;
+    name: string | null;
+    avatar_url: string | null;
+    id: number;
+    email: string | null;
+  };
+  return {
+    login: j.login,
+    name: j.name ?? null,
+    avatarUrl: j.avatar_url ?? null,
+    id: j.id,
+    email: j.email ?? null,
+  };
+}
+
+/**
+ * The account's primary verified email via `/user/emails`. Requires the token's
+ * `user:email` (or `read:user`) scope; returns null if the scope is missing or
+ * the call fails, so the caller can fall back gracefully.
+ */
+export async function fetchPrimaryEmail(token: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${API}/user/emails`, { headers: ghHeaders(token) });
+    if (!res.ok) return null;
+    const emails = (await res.json()) as Array<{
+      email: string;
+      primary: boolean;
+      verified: boolean;
+    }>;
+    if (!Array.isArray(emails)) return null;
+    const chosen =
+      emails.find((e) => e.primary && e.verified) ??
+      emails.find((e) => e.verified) ??
+      emails[0];
+    return chosen?.email ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Commit identity derived from the connected GitHub account, or null if no
+ * token is stored / it's invalid. Prefers the primary verified email; falls
+ * back to the public-profile email, then GitHub's noreply address, so commits
+ * always attribute to the account even when no email scope is granted.
+ */
+export async function githubIdentity(): Promise<CommitIdentity | null> {
+  const token = await getToken();
+  if (!token) return null;
+  try {
+    const u = await fetchUser(token);
+    const name = u.name || u.login;
+    const primary = await fetchPrimaryEmail(token);
+    const email = primary || u.email || `${u.id}+${u.login}@users.noreply.github.com`;
+    return { name, email };
+  } catch {
+    return null;
+  }
 }
 
 /** Current connection status: whether a token is stored and, if valid, the user. */

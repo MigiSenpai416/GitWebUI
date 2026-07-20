@@ -18,6 +18,7 @@ import { TabBar } from "./components/TabBar";
 import { AddRemoteDialog } from "./components/AddRemoteDialog";
 import { CloneDialog } from "./components/CloneDialog";
 import { GitHubDialog } from "./components/GitHubDialog";
+import { IdentityDialog } from "./components/IdentityDialog";
 
 export function App() {
   const authState = useStore((s) => s.authState);
@@ -116,6 +117,7 @@ export function App() {
       <AddRemoteDialog />
       <CloneDialog />
       <GitHubDialog />
+      <IdentityDialog />
       {toasts}
     </div>
   );

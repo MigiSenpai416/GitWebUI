@@ -35,6 +35,7 @@ import {
   createGitHubRemote,
 } from "./git/remote.js";
 import * as github from "./github.js";
+import { getIdentity, setIdentity, clearIdentity, type CommitIdentity } from "./identity.js";
 import { getStashes, stashPush, stashPop, stashApply, stashDrop } from "./git/stash.js";
 import {
   registerRepo,
@@ -277,9 +278,36 @@ api.post("/commit", h(async (req, res) => {
   const title = String(req.body?.title ?? "");
   const description = String(req.body?.description ?? "");
   const amend = Boolean(req.body?.amend);
-  const hash = await commit(root, { title, description, amend });
+  const identity = await resolveCommitIdentity();
+  const hash = await commit(root, { title, description, amend, identity });
   const status = await getStatus(root);
   res.json({ hash, status });
+}));
+
+// ---- Commit identity ----
+
+/** Effective commit identity: the connected GitHub account, else the manual one. */
+async function resolveCommitIdentity(): Promise<CommitIdentity | null> {
+  return (await github.githubIdentity()) ?? (await getIdentity());
+}
+
+api.get("/identity", h(async (_req, res) => {
+  const [manual, gh] = await Promise.all([getIdentity(), github.githubIdentity()]);
+  res.json({ manual, github: gh, effective: gh ?? manual ?? null });
+}));
+
+api.post("/identity", h(async (req, res) => {
+  const name = String(req.body?.name ?? "");
+  const email = String(req.body?.email ?? "");
+  const manual = await setIdentity(name, email);
+  const gh = await github.githubIdentity();
+  res.json({ manual, github: gh, effective: gh ?? manual });
+}));
+
+api.delete("/identity", h(async (_req, res) => {
+  await clearIdentity();
+  const gh = await github.githubIdentity();
+  res.json({ manual: null, github: gh, effective: gh ?? null });
 }));
 
 // ---- GitHub account (Personal Access Token) ----

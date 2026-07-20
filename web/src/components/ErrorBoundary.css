@@ -1,0 +1,68 @@
+.eb {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-app);
+  padding: 24px;
+}
+.eb-card {
+  width: 460px;
+  max-width: 92vw;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 22px 24px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+.eb-title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.eb-msg {
+  margin: 10px 0 12px;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+.eb-detail {
+  margin: 0 0 16px;
+  padding: 9px 11px;
+  max-height: 160px;
+  overflow: auto;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: #ff9b95;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.eb-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.eb-btn {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 7px 16px;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+.eb-btn:hover {
+  background: #253340;
+}
+.eb-btn-primary {
+  background: var(--green-dim);
+  border-color: var(--green-dim);
+  color: #fff;
+  font-weight: 600;
+}
+.eb-btn-primary:hover {
+  background: var(--green);
+  border-color: var(--green);
+}

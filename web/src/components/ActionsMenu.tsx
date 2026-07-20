@@ -10,6 +10,7 @@ export function ActionsMenu({ onClose }: { onClose: () => void }) {
   const loadCommits = useStore((s) => s.loadCommits);
   const loadBranches = useStore((s) => s.loadBranches);
   const openGitHubDialog = useStore((s) => s.openGitHubDialog);
+  const openIdentityDialog = useStore((s) => s.openIdentityDialog);
   const githubStatus = useStore((s) => s.githubStatus);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -43,6 +44,16 @@ export function ActionsMenu({ onClose }: { onClose: () => void }) {
         <button className="branch-menu-item" onClick={refresh}>
           <IconRefresh width={14} height={14} className="bmi-icon" />
           <span className="bmi-name">Refresh</span>
+        </button>
+        <button
+          className="branch-menu-item"
+          onClick={() => {
+            openIdentityDialog();
+            onClose();
+          }}
+        >
+          <span className="bmi-check" />
+          <span className="bmi-name">Commit identity…</span>
         </button>
         <button
           className="branch-menu-item"

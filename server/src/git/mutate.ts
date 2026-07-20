@@ -105,6 +105,8 @@ export interface CommitOptions {
   title: string;
   description?: string;
   amend?: boolean;
+  /** Author/committer identity, injected without touching git config. */
+  identity?: { name: string; email: string } | null;
 }
 
 /** Create a commit from the current index. Returns the new HEAD hash. */
@@ -115,7 +117,13 @@ export async function commit(root: string, opts: CommitOptions): Promise<string>
     err.status = 400;
     throw err;
   }
-  const args = ["commit", "-m", title];
+  // `-c` overrides must precede the subcommand; passed as argv so values with
+  // spaces/metacharacters are safe.
+  const args: string[] = [];
+  if (opts.identity?.name && opts.identity?.email) {
+    args.push("-c", `user.name=${opts.identity.name}`, "-c", `user.email=${opts.identity.email}`);
+  }
+  args.push("commit", "-m", title);
   const desc = (opts.description ?? "").trim();
   if (desc) args.push("-m", desc);
   if (opts.amend) args.push("--amend");

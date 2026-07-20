@@ -7,6 +7,38 @@
   border-right: 1px solid var(--border);
   overflow-y: auto;
 }
+/* Collapsed: a thin rail with just the expand toggle, to reclaim space. */
+.sidebar.collapsed {
+  width: 30px;
+  align-items: center;
+  padding-top: 5px;
+  overflow: hidden;
+}
+
+.sb-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 30px;
+  padding: 0 5px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.sb-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+}
+.sb-toggle:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
 
 .sb-section {
   border-bottom: 1px solid var(--border);
@@ -54,21 +86,27 @@
   min-width: 18px;
   text-align: center;
 }
-/* Green + revealed on hovering a section that supports adding. */
+/* Green + revealed on hovering a section that supports adding. It collapses to
+   zero width when hidden so the count sits in the SAME spot as other sections'
+   counts, then expands on hover — nudging the count left to make room. */
 .sb-add {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
+  width: 0;
   height: 22px;
+  padding: 0;
+  overflow: hidden;
   border-radius: var(--radius-sm);
   background: transparent;
   border: none;
   color: var(--green);
   opacity: 0;
-  transition: opacity 0.12s ease, background 0.12s ease;
+  flex-shrink: 0;
+  transition: width 0.12s ease, opacity 0.12s ease, background 0.12s ease;
 }
 .sb-section.has-action:hover .sb-add {
+  width: 22px;
   opacity: 1;
 }
 .sb-add:hover {

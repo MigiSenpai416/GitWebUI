@@ -16,6 +16,8 @@ export function Sidebar() {
   const openAddRemote = useStore((s) => s.openAddRemote);
   const removeRemote = useStore((s) => s.removeRemote);
   const requestConfirm = useStore((s) => s.requestConfirm);
+  const collapsed = useStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useStore((s) => s.toggleSidebar);
 
   const [localOpen, setLocalOpen] = useState(true);
   const [remoteOpen, setRemoteOpen] = useState(true);
@@ -28,8 +30,23 @@ export function Sidebar() {
     if (ok) removeRemote(name);
   };
 
+  if (collapsed) {
+    return (
+      <aside className="sidebar collapsed">
+        <button className="sb-toggle" title="Show sidebar" onClick={toggleSidebar}>
+          <IconPanelRight />
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside className="sidebar">
+      <div className="sb-topbar">
+        <button className="sb-toggle" title="Hide sidebar" onClick={toggleSidebar}>
+          <IconPanelLeft />
+        </button>
+      </div>
       <Section
         icon={<IconMonitor width={15} height={15} />}
         label="Local"
@@ -161,6 +178,26 @@ function IconPlus() {
   return (
     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
       <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+/** Panel-collapse glyph (a rail + a chevron), pointing the way it will move. */
+function IconPanelLeft() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M10 4v16" />
+      <path d="m16.5 9-2.5 3 2.5 3" />
+    </svg>
+  );
+}
+function IconPanelRight() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M10 4v16" />
+      <path d="m13.5 9 2.5 3-2.5 3" />
     </svg>
   );
 }

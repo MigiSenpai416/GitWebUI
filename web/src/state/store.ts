@@ -13,6 +13,15 @@ import type {
 } from "../types";
 
 const PAGE = 150;
+const SIDEBAR_KEY = "gwui.sidebarCollapsed";
+
+function readSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 type ViewMode = "diff" | "file";
 /** How the changes sidebar groups files. */
@@ -68,6 +77,9 @@ interface AppState {
   addRemoteOpen: boolean;
   githubDialogOpen: boolean;
 
+  /** Whether the LOCAL/REMOTE left rail is collapsed (persisted). */
+  sidebarCollapsed: boolean;
+
   selectedFile: SelectedFile | null;
   viewMode: ViewMode;
   fileLayout: FileLayout;
@@ -119,6 +131,7 @@ interface AppState {
   closeAddRemote: () => void;
   openGitHubDialog: () => void;
   closeGitHubDialog: () => void;
+  toggleSidebar: () => void;
 
   /** Show the confirmation banner; resolves true if confirmed, false if cancelled. */
   requestConfirm: (message: string, confirmLabel?: string) => Promise<boolean>;
@@ -181,6 +194,8 @@ export const useStore = create<AppState>((set, get) => ({
   remoteBusy: false,
   addRemoteOpen: false,
   githubDialogOpen: false,
+
+  sidebarCollapsed: readSidebarCollapsed(),
 
   selectedFile: null,
   viewMode: "diff",
@@ -484,6 +499,15 @@ export const useStore = create<AppState>((set, get) => ({
   },
   closeGitHubDialog() {
     set({ githubDialogOpen: false });
+  },
+  toggleSidebar() {
+    const next = !get().sidebarCollapsed;
+    try {
+      localStorage.setItem(SIDEBAR_KEY, next ? "1" : "0");
+    } catch {
+      /* ignore storage failures */
+    }
+    set({ sidebarCollapsed: next });
   },
 
   requestConfirm(message: string, confirmLabel = "Confirm") {

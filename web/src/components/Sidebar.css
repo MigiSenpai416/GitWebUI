@@ -164,6 +164,54 @@ button.sb-item:hover {
   max-width: 120px;
 }
 
+/* Remote-branch tree: folders and toggleable branch leaves. */
+.sb-dir {
+  cursor: pointer;
+}
+.sb-dir > svg:first-child {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+.sb-branch {
+  cursor: pointer;
+}
+.sb-branch:hover,
+button.sb-dir:hover {
+  background: var(--bg-row-hover);
+}
+.sb-branch.visible {
+  background: rgba(63, 185, 80, 0.08);
+}
+.sb-branch.visible .sb-item-name {
+  color: var(--text-strong);
+}
+/* Eye toggle: hidden until hover; always shown (green) for a visible branch. */
+.sb-eye {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 20px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  opacity: 0;
+}
+.sb-branch:hover .sb-eye {
+  opacity: 0.9;
+}
+.sb-branch.visible .sb-eye {
+  opacity: 1;
+  color: var(--green);
+}
+.sb-eye:hover {
+  color: var(--green);
+  background: rgba(63, 185, 80, 0.16);
+}
+
 .sb-remote > svg:first-child {
   color: var(--text-dim);
   flex-shrink: 0;

@@ -78,6 +78,14 @@ export interface Remote {
   url: string;
 }
 
+export interface RemoteBranch {
+  name: string;
+  remote: string;
+  shortName: string;
+  ref: string;
+  shortHash: string;
+}
+
 export interface StashEntry {
   index: number;
   ref: string;

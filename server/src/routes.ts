@@ -17,7 +17,13 @@ import {
   type ResetMode,
 } from "./git/mutate.js";
 import { revealFolder } from "./system.js";
-import { getBranches, checkoutBranch, createBranchAt, deleteBranch } from "./git/branches.js";
+import {
+  getBranches,
+  getRemoteBranches,
+  checkoutBranch,
+  createBranchAt,
+  deleteBranch,
+} from "./git/branches.js";
 import {
   getRemotes,
   addRemote,
@@ -111,7 +117,12 @@ api.get("/commits", h(async (req, res) => {
     res.json({ commits: [], hasMore: false });
     return;
   }
-  const commits = await getLog(root, skip, limit + 1);
+  // Extra branch revisions (beyond HEAD) whose commits should also appear.
+  const extraRevs = String(req.query.revs ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const commits = await getLog(root, skip, limit + 1, ["HEAD", ...extraRevs]);
   const hasMore = commits.length > limit;
   res.json({ commits: hasMore ? commits.slice(0, limit) : commits, hasMore });
 }));
@@ -130,6 +141,11 @@ api.get("/status", h(async (req, res) => {
 api.get("/branches", h(async (req, res) => {
   const root = requireRepoRoot(req);
   res.json({ branches: await getBranches(root) });
+}));
+
+api.get("/remote-branches", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  res.json({ branches: await getRemoteBranches(root) });
 }));
 
 api.post("/checkout", h(async (req, res) => {

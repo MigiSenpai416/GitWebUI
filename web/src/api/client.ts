@@ -9,6 +9,7 @@ import type {
   GitHubUser,
   RepoInfo,
   Remote,
+  RemoteBranch,
   StashEntry,
   StatusResult,
 } from "../types";
@@ -84,16 +85,18 @@ export const api = {
       body: JSON.stringify({ root }),
     }),
 
-  commits: (skip: number, limit: number) =>
-    req<{ commits: Commit[]; hasMore: boolean }>(
-      `/api/commits?skip=${skip}&limit=${limit}`,
-    ),
+  commits: (skip: number, limit: number, revs: string[] = []) => {
+    const params = new URLSearchParams({ skip: String(skip), limit: String(limit) });
+    if (revs.length > 0) params.set("revs", revs.join(","));
+    return req<{ commits: Commit[]; hasMore: boolean }>(`/api/commits?${params.toString()}`);
+  },
   commitFiles: (hash: string) =>
     req<{ files: CommitFile[] }>(`/api/commits/${hash}/files`),
 
   status: () => req<StatusResult>("/api/status"),
 
   branches: () => req<{ branches: Branch[] }>("/api/branches"),
+  remoteBranches: () => req<{ branches: RemoteBranch[] }>("/api/remote-branches"),
   checkout: (branch: string) =>
     req<{ repo: RepoInfo }>("/api/checkout", {
       method: "POST",

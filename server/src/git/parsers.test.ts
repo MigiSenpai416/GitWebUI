@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { parseLog, parseRefs } from "./log.js";
+import { parseLog, parseRefs, sanitizeRevs } from "./log.js";
 import { parseStatus } from "./status.js";
 import { parseUnifiedDiff } from "./diff.js";
 import { parseNameStatus } from "./commitFiles.js";
-import { parseBranches } from "./branches.js";
+import { parseBranches, parseRemoteBranches } from "./branches.js";
 
 const US = "\x1f";
 const RS = "\x1e";
@@ -121,6 +121,40 @@ describe("parseBranches", () => {
       { name: "main", current: true, shortHash: "9ef9033", upstream: "origin/main" },
       { name: "feature/enchant-ui", current: false, shortHash: "abc1234", upstream: null },
     ]);
+  });
+});
+
+describe("parseRemoteBranches", () => {
+  it("splits remote/short name, keeps nested paths, and skips origin/HEAD", () => {
+    const data =
+      ["refs/remotes/origin/main", "9ef9033"].join(US) + RS +
+      ["refs/remotes/origin/HEAD", "9ef9033"].join(US) + RS +
+      ["refs/remotes/origin/feature/enchant-ui", "abc1234"].join(US) + RS +
+      ["refs/remotes/upstream/main", "def5678"].join(US) + RS;
+    expect(parseRemoteBranches(data)).toEqual([
+      { name: "origin/main", remote: "origin", shortName: "main", ref: "refs/remotes/origin/main", shortHash: "9ef9033" },
+      {
+        name: "origin/feature/enchant-ui",
+        remote: "origin",
+        shortName: "feature/enchant-ui",
+        ref: "refs/remotes/origin/feature/enchant-ui",
+        shortHash: "abc1234",
+      },
+      { name: "upstream/main", remote: "upstream", shortName: "main", ref: "refs/remotes/upstream/main", shortHash: "def5678" },
+    ]);
+  });
+});
+
+describe("sanitizeRevs", () => {
+  it("keeps HEAD and refs/heads|remotes, drops anything that could be a flag", () => {
+    expect(
+      sanitizeRevs(["HEAD", "refs/heads/main", "refs/remotes/origin/x", "--all", "-n", "; rm -rf", "origin/x"]),
+    ).toEqual(["HEAD", "refs/heads/main", "refs/remotes/origin/x"]);
+  });
+  it("de-duplicates and falls back to HEAD when nothing valid remains", () => {
+    expect(sanitizeRevs(["HEAD", "HEAD"])).toEqual(["HEAD"]);
+    expect(sanitizeRevs(["--evil"])).toEqual(["HEAD"]);
+    expect(sanitizeRevs([])).toEqual(["HEAD"]);
   });
 });
 

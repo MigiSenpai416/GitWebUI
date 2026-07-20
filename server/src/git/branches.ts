@@ -39,6 +39,50 @@ export async function getBranches(root: string): Promise<Branch[]> {
   return parseBranches(stdout);
 }
 
+export interface RemoteBranch {
+  /** Name without the refs/remotes/ prefix, e.g. "origin/feature/x". */
+  name: string;
+  /** Remote name, e.g. "origin". */
+  remote: string;
+  /** Branch path under the remote, e.g. "feature/x". */
+  shortName: string;
+  /** Full ref, e.g. "refs/remotes/origin/feature/x" — used as the log revision. */
+  ref: string;
+  shortHash: string;
+}
+
+/** Parse the raw for-each-ref output of remote-tracking refs (see getRemoteBranches). */
+export function parseRemoteBranches(stdout: string): RemoteBranch[] {
+  const out: RemoteBranch[] = [];
+  for (const record of stdout.split(RS)) {
+    const rec = record.replace(/^\n/, "").trim();
+    if (!rec) continue;
+    const [refname, hash] = rec.split(US);
+    if (!refname || !refname.startsWith("refs/remotes/")) continue;
+    const rest = refname.slice("refs/remotes/".length); // "origin/feature/x"
+    const slash = rest.indexOf("/");
+    if (slash === -1) continue;
+    const remote = rest.slice(0, slash);
+    const shortName = rest.slice(slash + 1);
+    // Skip the symbolic "origin/HEAD -> origin/main" pointer.
+    if (shortName === "HEAD" || !shortName) continue;
+    out.push({ name: rest, remote, shortName, ref: refname, shortHash: hash ?? "" });
+  }
+  return out;
+}
+
+/** List remote-tracking branches (across all remotes). */
+export async function getRemoteBranches(root: string): Promise<RemoteBranch[]> {
+  const format = ["%(refname)", "%(objectname:short)"].join(US) + RS;
+  const { stdout } = await runGit(root, [
+    "for-each-ref",
+    `--format=${format}`,
+    "--sort=refname",
+    "refs/remotes",
+  ]);
+  return parseRemoteBranches(stdout);
+}
+
 /** Switch the working tree to an existing local branch. */
 export async function checkoutBranch(root: string, name: string): Promise<void> {
   await runGit(root, ["checkout", name]);

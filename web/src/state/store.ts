@@ -8,6 +8,7 @@ import type {
   GitHubUser,
   RepoInfo,
   Remote,
+  RemoteBranch,
   SelectedFile,
   StashEntry,
   StatusResult,
@@ -16,6 +17,33 @@ import type {
 const PAGE = 150;
 const SIDEBAR_KEY = "gwui.sidebarCollapsed";
 const TABS_KEY = "gwui.tabs";
+const VISIBLE_KEY = "gwui.visibleRefs";
+
+/** Per-repo set of extra remote branch refs whose commits are shown in the log. */
+function readVisibleMap(): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(VISIBLE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function readVisibleFor(root: string): string[] {
+  const v = readVisibleMap()[root];
+  return Array.isArray(v) ? v : [];
+}
+function writeVisibleFor(root: string, refs: string[]): void {
+  if (!root) return;
+  try {
+    const map = readVisibleMap();
+    if (refs.length > 0) map[root] = refs;
+    else delete map[root];
+    localStorage.setItem(VISIBLE_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore storage failures */
+  }
+}
 
 function readSidebarCollapsed(): boolean {
   try {
@@ -151,6 +179,9 @@ interface AppState {
 
   branches: Branch[];
   remotes: Remote[];
+  remoteBranches: RemoteBranch[];
+  /** Extra remote branch refs (beyond HEAD) whose commits show in the log. */
+  visibleRefs: string[];
   stashes: StashEntry[];
   githubStatus: GitHubStatus | null;
   /** A push/pull/create-remote network op is in flight. */
@@ -199,6 +230,8 @@ interface AppState {
   selectCommit: (hash: string | null) => Promise<void>;
 
   loadBranches: () => Promise<void>;
+  loadRemoteBranches: () => Promise<void>;
+  toggleBranchVisibility: (ref: string) => void;
   checkout: (branch: string) => Promise<void>;
   deleteBranch: (name: string) => Promise<void>;
 
@@ -300,6 +333,8 @@ export const useStore = create<AppState>((set, get) => ({
 
   branches: [],
   remotes: [],
+  remoteBranches: [],
+  visibleRefs: [],
   stashes: [],
   githubStatus: null,
   remoteBusy: false,
@@ -492,7 +527,7 @@ export const useStore = create<AppState>((set, get) => ({
     const skip = reset ? 0 : get().commits.length;
     set({ loadingCommits: true });
     try {
-      const { commits, hasMore } = await api.commits(skip, PAGE);
+      const { commits, hasMore } = await api.commits(skip, PAGE, get().visibleRefs);
       set((s) => ({
         commits: reset ? commits : [...s.commits, ...commits],
         hasMore,
@@ -529,6 +564,30 @@ export const useStore = create<AppState>((set, get) => ({
     } catch {
       /* non-fatal */
     }
+  },
+
+  async loadRemoteBranches() {
+    try {
+      const { branches } = await api.remoteBranches();
+      set({ remoteBranches: branches });
+      // Drop any visible refs whose branch no longer exists on the remote.
+      const cur = get().visibleRefs;
+      const pruned = cur.filter((ref) => branches.some((b) => b.ref === ref));
+      if (pruned.length !== cur.length) {
+        set({ visibleRefs: pruned });
+        writeVisibleFor(get().repo?.root ?? "", pruned);
+      }
+    } catch {
+      /* non-fatal */
+    }
+  },
+
+  toggleBranchVisibility(ref: string) {
+    const cur = get().visibleRefs;
+    const next = cur.includes(ref) ? cur.filter((r) => r !== ref) : [...cur, ref];
+    set({ visibleRefs: next });
+    writeVisibleFor(get().repo?.root ?? "", next);
+    get().loadCommits(true);
   },
 
   async checkout(branch: string) {
@@ -821,11 +880,14 @@ export const useStore = create<AppState>((set, get) => ({
     if (!s.repo || s.opening) return;
     // Bump the tick first so an open diff refetches alongside the lists.
     set({ refreshTick: s.refreshTick + 1 });
+    // Refresh remote branches first so any deleted refs are pruned from the
+    // visible set before we query the log with them.
+    await s.loadRemoteBranches();
     // Reload as many commits as are currently paged in, so a deep scroll
     // position survives the refresh (server caps the page at 1000).
     const count = Math.min(1000, Math.max(PAGE, s.commits.length));
     const commitsPromise = api
-      .commits(0, count)
+      .commits(0, count, get().visibleRefs)
       .then(({ commits, hasMore }) => set({ commits, hasMore }))
       .catch((e) => reportError(set, e));
     // A selected commit's file list is immutable, so it needs no reload.
@@ -968,6 +1030,8 @@ function showPicker(set: StoreSet): void {
     status: EMPTY_STATUS,
     branches: [],
     remotes: [],
+    remoteBranches: [],
+    visibleRefs: [],
     stashes: [],
     commitMenu: null,
     stashMenu: null,
@@ -987,10 +1051,16 @@ async function hydrateRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promis
     status: EMPTY_STATUS,
     branches: [],
     remotes: [],
+    remoteBranches: [],
+    // Restore this repo's saved visible-branch set; pruned once refs are loaded.
+    visibleRefs: readVisibleFor(info.root),
     stashes: [],
     commitMenu: null,
     stashMenu: null,
   });
+  // Load remote branches first so visibleRefs is pruned to existing refs before
+  // the log is queried with them.
+  await get().loadRemoteBranches();
   await Promise.all([
     get().loadCommits(true),
     get().refreshStatus(),

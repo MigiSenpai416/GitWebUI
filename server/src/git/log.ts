@@ -92,14 +92,30 @@ export function parseLog(stdout: string): Commit[] {
   return commits;
 }
 
-export async function getLog(root: string, skip: number, limit: number): Promise<Commit[]> {
+/** Keep only revisions we recognise, so untrusted input can't become a git flag. */
+export function sanitizeRevs(revs: string[]): string[] {
+  const safe = revs.filter((r) => r === "HEAD" || /^refs\/(heads|remotes)\/[^\s]+$/.test(r));
+  return safe.length > 0 ? [...new Set(safe)] : ["HEAD"];
+}
+
+/**
+ * Read the commit log across one or more revisions (branches). With multiple
+ * revs the histories are merged in date order, matching the graph view.
+ */
+export async function getLog(
+  root: string,
+  skip: number,
+  limit: number,
+  revs: string[] = ["HEAD"],
+): Promise<Commit[]> {
   const { stdout } = await runGit(root, [
     "log",
     "--decorate=full",
+    "--date-order",
     `--pretty=format:${FORMAT}`,
     `--skip=${skip}`,
     `--max-count=${limit}`,
-    "HEAD",
+    ...sanitizeRevs(revs),
   ]);
   return parseLog(stdout);
 }

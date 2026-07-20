@@ -120,6 +120,59 @@
 .dv-editor .cm-editor {
   height: 100%;
 }
+
+/* When the overview minimap is shown it replaces the native scrollbar as the
+   drag handle, so hide the scrollbar and keep code clear of the strip. */
+.dv-editor.has-minimap .cm-scroller {
+  scrollbar-width: none;
+}
+.dv-editor.has-minimap .cm-scroller::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+.dv-editor.has-minimap .cm-line {
+  padding-right: 30px;
+}
+
+/* ---- Diff overview minimap ---------------------------------------------- */
+.dv-minimap {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  z-index: 5;
+  cursor: pointer;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+}
+.dv-mm-mark {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  min-height: 2px;
+  border-radius: 1px;
+  pointer-events: none;
+}
+.dv-mm-mark.add {
+  background: #3fb950;
+}
+.dv-mm-mark.del {
+  background: #f85149;
+}
+.dv-mm-thumb {
+  position: absolute;
+  left: 0;
+  right: 0;
+  min-height: 14px;
+  background: rgba(139, 148, 158, 0.26);
+  border: 1px solid rgba(139, 148, 158, 0.4);
+  border-radius: 3px;
+  pointer-events: none;
+}
+.dv-minimap:hover .dv-mm-thumb {
+  background: rgba(139, 148, 158, 0.38);
+}
 .dv-message {
   padding: 20px;
   color: var(--text-faint);

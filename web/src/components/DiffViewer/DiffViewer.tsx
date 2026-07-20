@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { useStore } from "../../state/store";
@@ -11,6 +11,7 @@ import {
   fileViewExtensions,
   loadLanguage,
 } from "./codeMirrorDiff";
+import { DiffMinimap } from "./DiffMinimap";
 import "./DiffViewer.css";
 
 export function DiffViewer() {
@@ -31,6 +32,9 @@ export function DiffViewer() {
   const viewRef = useRef<EditorView | null>(null);
   const hunkIndex = useRef<number>(-1);
   const prevSelKey = useRef<string>("");
+  const buildSig = useRef<string>("");
+  const [buildTick, setBuildTick] = useState(0);
+  const getView = useCallback(() => viewRef.current, []);
 
   // Only working-tree diffs change over time; commit diffs are immutable, so
   // they never refetch (and keep their scroll position) on refresh.
@@ -81,6 +85,14 @@ export function DiffViewer() {
           ? (diff.fileContent ?? rowsToNewText(diff))
           : diff.rows.map((r) => r.text).join("\n");
 
+      // A refresh/refocus refetches the same content: if nothing actually
+      // changed, leave the editor untouched so the reader's scroll position and
+      // selection are preserved (no jump to the top).
+      if (viewRef.current && viewRef.current.state.doc.toString() === doc) {
+        buildSig.current = `${selected?.source}:${selected?.path}:${selected?.hash ?? ""}:${viewMode}`;
+        return;
+      }
+
       const extensions = [
         ...baseExtensions(),
         ...(langExt ? [langExt] : []),
@@ -89,12 +101,42 @@ export function DiffViewer() {
 
       const state = EditorState.create({ doc, extensions });
 
+      const prevScroll = viewRef.current?.scrollDOM.scrollTop ?? 0;
+      const hadView = !!viewRef.current;
       if (viewRef.current) {
         viewRef.current.setState(state);
       } else {
         viewRef.current = new EditorView({ state, parent: hostRef.current });
       }
       hunkIndex.current = -1;
+      setBuildTick((t) => t + 1);
+
+      // Focus the first change when the file/view first opens (but not on a
+      // silent working-tree refresh, which keeps the same selection + mode).
+      const sig = `${selected?.source}:${selected?.path}:${selected?.hash ?? ""}:${viewMode}`;
+      const isNewView = buildSig.current !== sig;
+      buildSig.current = sig;
+      if (!isNewView && hadView) {
+        // Content changed but it's the same file/view: keep the scroll offset
+        // across the rebuild instead of snapping back to the top.
+        requestAnimationFrame(() => {
+          if (viewRef.current) viewRef.current.scrollDOM.scrollTop = prevScroll;
+        });
+      } else if (viewMode === "diff" && isNewView) {
+        const starts = computeHunks(diff.rows);
+        if (starts.length) {
+          const view = viewRef.current;
+          const lineNo = Math.min(starts[0], view.state.doc.lines);
+          const pos = view.state.doc.line(lineNo).from;
+          requestAnimationFrame(() => {
+            viewRef.current?.dispatch({
+              selection: { anchor: pos },
+              effects: EditorView.scrollIntoView(pos, { y: "center" }),
+            });
+          });
+          hunkIndex.current = 0;
+        }
+      }
     };
 
     build();
@@ -156,6 +198,8 @@ export function DiffViewer() {
     else if (selected.source === "staged") unstage([selected.path]);
   };
 
+  const showMinimap = viewMode === "diff" && !!diff && !diff.binary && !diff.empty;
+
   return (
     <div className="diff-viewer">
       <div className="dv-header">
@@ -206,7 +250,14 @@ export function DiffViewer() {
         {!loading && diff && !diff.binary && diff.empty && viewMode === "diff" && (
           <div className="dv-message">No changes to display.</div>
         )}
-        <div className="dv-editor" ref={hostRef} style={{ display: diff && !diff.binary ? "block" : "none" }} />
+        <div
+          className={"dv-editor" + (showMinimap ? " has-minimap" : "")}
+          ref={hostRef}
+          style={{ display: diff && !diff.binary ? "block" : "none" }}
+        />
+        {showMinimap && diff && (
+          <DiffMinimap rows={diff.rows} getView={getView} buildTick={buildTick} />
+        )}
       </div>
     </div>
   );

@@ -9,6 +9,8 @@ export function ActionsMenu({ onClose }: { onClose: () => void }) {
   const refreshStatus = useStore((s) => s.refreshStatus);
   const loadCommits = useStore((s) => s.loadCommits);
   const loadBranches = useStore((s) => s.loadBranches);
+  const openGitHubDialog = useStore((s) => s.openGitHubDialog);
+  const githubStatus = useStore((s) => s.githubStatus);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -41,6 +43,18 @@ export function ActionsMenu({ onClose }: { onClose: () => void }) {
         <button className="branch-menu-item" onClick={refresh}>
           <IconRefresh width={14} height={14} className="bmi-icon" />
           <span className="bmi-name">Refresh</span>
+        </button>
+        <button
+          className="branch-menu-item"
+          onClick={() => {
+            openGitHubDialog();
+            onClose();
+          }}
+        >
+          <span className="bmi-check" />
+          <span className="bmi-name">
+            {githubStatus?.user ? `GitHub: @${githubStatus.user.login}` : "Connect GitHub account…"}
+          </span>
         </button>
         <button
           className="branch-menu-item"

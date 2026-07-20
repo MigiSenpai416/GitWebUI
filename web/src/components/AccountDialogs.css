@@ -1,0 +1,163 @@
+/* Shared styling for the GitHub account + Add Remote dialogs.
+   Builds on the global .dialog / .dialog-btn classes. */
+
+.acct-dialog {
+  width: 460px;
+}
+.acct-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 14px;
+}
+.acct-gh-logo {
+  color: var(--text-strong);
+  flex-shrink: 0;
+}
+.acct-head .dialog-title {
+  flex: 1;
+}
+.acct-x {
+  background: transparent;
+  border: none;
+  color: var(--text-faint);
+  font-size: 14px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+}
+.acct-x:hover {
+  color: var(--text);
+  background: var(--bg-elevated);
+}
+
+.acct-sub {
+  white-space: normal;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+.acct-connected {
+  font-size: var(--fs-md);
+  color: var(--text);
+  background: rgba(63, 185, 80, 0.12);
+  border: 1px solid rgba(63, 185, 80, 0.4);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  margin-bottom: 6px;
+}
+.acct-connected strong {
+  color: #7ee08c;
+}
+.acct-warn {
+  font-size: var(--fs-sm);
+  color: #e6c07a;
+  background: rgba(210, 153, 34, 0.12);
+  border: 1px solid rgba(210, 153, 34, 0.4);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  margin-bottom: 6px;
+  line-height: 1.45;
+}
+
+/* Tabs (Add Remote) */
+.acct-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.acct-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 7px 12px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  margin-bottom: -1px;
+}
+.acct-tab:hover {
+  color: var(--text);
+}
+.acct-tab.active {
+  color: var(--text-strong);
+  border-bottom-color: var(--accent);
+}
+
+.acct-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 13px;
+}
+.acct-field > span {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-faint);
+}
+.acct-optional {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.acct-field input,
+.acct-field select {
+  padding: 8px 10px;
+  font-size: var(--fs-md);
+}
+.acct-field input:disabled {
+  opacity: 0.7;
+}
+
+.acct-hint {
+  margin: 0 0 12px;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+.acct-hint code {
+  font-family: var(--font-mono);
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  color: var(--text-dim);
+}
+
+.acct-error {
+  background: rgba(248, 81, 73, 0.12);
+  border: 1px solid rgba(248, 81, 73, 0.5);
+  color: #ff9b95;
+  border-radius: var(--radius);
+  padding: 8px 11px;
+  font-size: var(--fs-sm);
+  margin-bottom: 12px;
+}
+
+.acct-actions {
+  align-items: center;
+}
+.acct-spacer {
+  flex: 1;
+}
+.acct-revoke {
+  background: transparent;
+  border: 1px solid rgba(248, 81, 73, 0.5);
+  color: var(--red);
+  border-radius: var(--radius);
+  padding: 7px 14px;
+  font-size: var(--fs-sm);
+}
+.acct-revoke:hover:not(:disabled) {
+  background: rgba(248, 81, 73, 0.14);
+}
+
+.acct-connect {
+  text-align: center;
+  padding: 10px 0 4px;
+}
+.acct-connect p {
+  margin: 0 0 16px;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}

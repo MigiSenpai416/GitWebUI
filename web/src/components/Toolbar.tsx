@@ -21,6 +21,9 @@ export function Toolbar() {
   const repo = useStore((s) => s.repo);
   const setNotice = useStore((s) => s.setNotice);
   const logout = useStore((s) => s.logout);
+  const push = useStore((s) => s.push);
+  const pull = useStore((s) => s.pull);
+  const remoteBusy = useStore((s) => s.remoteBusy);
   const [branchOpen, setBranchOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
 
@@ -58,10 +61,10 @@ export function Toolbar() {
         <div className="tb-divider" />
 
         <div className="tb-group">
-          <ToolButton label="Pull" caret onClick={soon("Pull")}>
+          <ToolButton label="Pull" onClick={() => pull()} disabled={remoteBusy}>
             <IconPull />
           </ToolButton>
-          <ToolButton label="Push" onClick={soon("Push")}>
+          <ToolButton label="Push" onClick={() => push()} disabled={remoteBusy}>
             <IconPush />
           </ToolButton>
           <ToolButton label="Branch" onClick={() => setBranchOpen((v) => !v)}>
@@ -115,12 +118,13 @@ interface ToolButtonProps {
   label: string;
   caret?: boolean;
   onClick?: () => void;
+  disabled?: boolean;
   children: React.ReactNode;
 }
 
-function ToolButton({ label, caret, onClick, children }: ToolButtonProps) {
+function ToolButton({ label, caret, onClick, disabled, children }: ToolButtonProps) {
   return (
-    <button className="tb-btn" onClick={onClick} title={label}>
+    <button className="tb-btn" onClick={onClick} title={label} disabled={disabled}>
       <span className="tb-btn-label">
         {label}
         {caret && <IconCaretDown className="tb-btn-label-caret" />}

@@ -1,22 +1,22 @@
-import type { FileChange } from "../types";
-
-export interface DirNode {
+// Generic over the file payload so both working changes (FileChange) and a
+// commit's changed files (CommitFile) can be grouped into the same tree.
+export interface DirNode<T> {
   type: "dir";
   name: string;
   path: string;
-  children: TreeNode[];
+  children: TreeNode<T>[];
 }
-export interface FileNode {
+export interface FileNode<T> {
   type: "file";
   name: string;
   path: string;
-  file: FileChange;
+  file: T;
 }
-export type TreeNode = DirNode | FileNode;
+export type TreeNode<T> = DirNode<T> | FileNode<T>;
 
-/** Build a nested folder/file tree from a flat list of changes (for Tree view). */
-export function buildTree(files: FileChange[]): TreeNode[] {
-  const root: DirNode = { type: "dir", name: "", path: "", children: [] };
+/** Build a nested folder/file tree from a flat list of files (for Tree view). */
+export function buildTree<T extends { path: string }>(files: T[]): TreeNode<T>[] {
+  const root: DirNode<T> = { type: "dir", name: "", path: "", children: [] };
 
   for (const file of files) {
     const parts = file.path.split("/");
@@ -25,7 +25,7 @@ export function buildTree(files: FileChange[]): TreeNode[] {
       const seg = parts[i];
       const dirPath = parts.slice(0, i + 1).join("/");
       let next = dir.children.find(
-        (c): c is DirNode => c.type === "dir" && c.path === dirPath,
+        (c): c is DirNode<T> => c.type === "dir" && c.path === dirPath,
       );
       if (!next) {
         next = { type: "dir", name: seg, path: dirPath, children: [] };
@@ -45,7 +45,7 @@ export function buildTree(files: FileChange[]): TreeNode[] {
   return root.children;
 }
 
-function sortNode(node: DirNode): void {
+function sortNode<T>(node: DirNode<T>): void {
   node.children.sort((a, b) => {
     if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
     return a.name.localeCompare(b.name);
@@ -56,9 +56,9 @@ function sortNode(node: DirNode): void {
 }
 
 /** All directory paths in the tree (used by "Collapse All"). */
-export function allDirPaths(nodes: TreeNode[]): string[] {
+export function allDirPaths<T>(nodes: TreeNode<T>[]): string[] {
   const out: string[] = [];
-  const walk = (list: TreeNode[]) => {
+  const walk = (list: TreeNode<T>[]) => {
     for (const n of list) {
       if (n.type === "dir") {
         out.push(n.path);

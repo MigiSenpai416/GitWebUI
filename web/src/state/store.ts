@@ -4,7 +4,10 @@ import type {
   Branch,
   Commit,
   CommitFile,
+  GitHubStatus,
+  GitHubUser,
   RepoInfo,
+  Remote,
   SelectedFile,
   StatusResult,
 } from "../types";
@@ -58,6 +61,12 @@ interface AppState {
   committing: boolean;
 
   branches: Branch[];
+  remotes: Remote[];
+  githubStatus: GitHubStatus | null;
+  /** A push/pull/create-remote network op is in flight. */
+  remoteBusy: boolean;
+  addRemoteOpen: boolean;
+  githubDialogOpen: boolean;
 
   selectedFile: SelectedFile | null;
   viewMode: ViewMode;
@@ -89,6 +98,27 @@ interface AppState {
   loadBranches: () => Promise<void>;
   checkout: (branch: string) => Promise<void>;
   deleteBranch: (name: string) => Promise<void>;
+
+  loadRemotes: () => Promise<void>;
+  addRemote: (name: string, url: string) => Promise<void>;
+  removeRemote: (name: string) => Promise<void>;
+  createGitHubRepo: (opts: {
+    name: string;
+    description: string;
+    private: boolean;
+    remoteName: string;
+  }) => Promise<string>;
+  push: () => Promise<void>;
+  pull: () => Promise<void>;
+
+  loadGitHubStatus: () => Promise<void>;
+  setGitHubToken: (token: string) => Promise<GitHubUser>;
+  revokeGitHubToken: () => Promise<void>;
+
+  openAddRemote: () => void;
+  closeAddRemote: () => void;
+  openGitHubDialog: () => void;
+  closeGitHubDialog: () => void;
 
   /** Show the confirmation banner; resolves true if confirmed, false if cancelled. */
   requestConfirm: (message: string, confirmLabel?: string) => Promise<boolean>;
@@ -146,6 +176,11 @@ export const useStore = create<AppState>((set, get) => ({
   committing: false,
 
   branches: [],
+  remotes: [],
+  githubStatus: null,
+  remoteBusy: false,
+  addRemoteOpen: false,
+  githubDialogOpen: false,
 
   selectedFile: null,
   viewMode: "diff",
@@ -208,11 +243,18 @@ export const useStore = create<AppState>((set, get) => ({
 
   async loadWorkspace() {
     await get().loadRecent();
+    // GitHub connection is repo-independent; load it regardless.
+    get().loadGitHubStatus();
     try {
       const { repo } = await api.currentRepo();
       if (repo) {
         set({ repo });
-        await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
+        await Promise.all([
+          get().loadCommits(true),
+          get().refreshStatus(),
+          get().loadBranches(),
+          get().loadRemotes(),
+        ]);
       }
     } catch (e) {
       reportError(set, e);
@@ -241,7 +283,12 @@ export const useStore = create<AppState>((set, get) => ({
         status: EMPTY_STATUS,
       });
       await get().loadRecent();
-      await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
+      await Promise.all([
+        get().loadCommits(true),
+        get().refreshStatus(),
+        get().loadBranches(),
+        get().loadRemotes(),
+      ]);
     } catch (e) {
       reportError(set, e);
     } finally {
@@ -333,6 +380,112 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  async loadRemotes() {
+    try {
+      const { remotes } = await api.remotes();
+      set({ remotes });
+    } catch {
+      /* non-fatal */
+    }
+  },
+
+  async addRemote(name: string, url: string) {
+    // Errors propagate so the Add Remote dialog can show them inline.
+    const { remotes } = await api.addRemote(name, url);
+    set({ remotes });
+  },
+
+  async removeRemote(name: string) {
+    set({ error: null });
+    try {
+      const { remotes } = await api.removeRemote(name);
+      set({ remotes });
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  async createGitHubRepo(opts) {
+    set({ remoteBusy: true });
+    try {
+      const { repo, remotes } = await api.createGitHubRepo(opts);
+      set({ remotes });
+      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      set({ notice: `Created ${repo.fullName} and pushed ${get().repo?.branch ?? ""}.` });
+      return repo.htmlUrl;
+    } finally {
+      set({ remoteBusy: false });
+    }
+  },
+
+  async push() {
+    if (get().remoteBusy) return;
+    set({ remoteBusy: true, error: null });
+    try {
+      const { branch, branches } = await api.push();
+      set({ branches });
+      await get().loadCommits(true);
+      set({ notice: `Pushed ${branch}.` });
+    } catch (e) {
+      reportError(set, e);
+    } finally {
+      set({ remoteBusy: false });
+    }
+  },
+
+  async pull() {
+    if (get().remoteBusy) return;
+    set({ remoteBusy: true, error: null });
+    try {
+      await api.pull();
+      await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
+      set({ notice: "Pulled latest changes." });
+    } catch (e) {
+      reportError(set, e);
+    } finally {
+      set({ remoteBusy: false });
+    }
+  },
+
+  async loadGitHubStatus() {
+    try {
+      const githubStatus = await api.githubStatus();
+      set({ githubStatus });
+    } catch {
+      /* non-fatal */
+    }
+  },
+
+  async setGitHubToken(token: string) {
+    // Errors propagate to the dialog for inline display.
+    const { user } = await api.githubSetToken(token);
+    set({ githubStatus: { configured: true, user } });
+    return user;
+  },
+
+  async revokeGitHubToken() {
+    set({ error: null });
+    try {
+      const status = await api.githubRevoke();
+      set({ githubStatus: status });
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  openAddRemote() {
+    set({ addRemoteOpen: true });
+  },
+  closeAddRemote() {
+    set({ addRemoteOpen: false });
+  },
+  openGitHubDialog() {
+    set({ githubDialogOpen: true });
+  },
+  closeGitHubDialog() {
+    set({ githubDialogOpen: false });
+  },
+
   requestConfirm(message: string, confirmLabel = "Confirm") {
     return new Promise<boolean>((resolve) => {
       confirmResolver = resolve;
@@ -417,7 +570,7 @@ export const useStore = create<AppState>((set, get) => ({
       .then(({ commits, hasMore }) => set({ commits, hasMore }))
       .catch((e) => reportError(set, e));
     // A selected commit's file list is immutable, so it needs no reload.
-    await Promise.all([commitsPromise, s.refreshStatus(), s.loadBranches()]);
+    await Promise.all([commitsPromise, s.refreshStatus(), s.loadBranches(), s.loadRemotes()]);
   },
 
   async stage(paths: string[]) {

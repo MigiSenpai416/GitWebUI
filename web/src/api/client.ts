@@ -4,7 +4,10 @@ import type {
   CommitFile,
   DiffResult,
   DiffSource,
+  GitHubStatus,
+  GitHubUser,
   RepoInfo,
+  Remote,
   StatusResult,
 } from "../types";
 
@@ -121,4 +124,41 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title, description, amend }),
     }),
+
+  // GitHub account (Personal Access Token)
+  githubStatus: () => req<GitHubStatus>("/api/github/status"),
+  githubSetToken: (token: string) =>
+    req<{ configured: true; user: GitHubUser }>("/api/github/token", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+  githubRevoke: () =>
+    req<{ configured: false; user: null }>("/api/github/token", { method: "DELETE", body: "{}" }),
+
+  // Remotes
+  remotes: () => req<{ remotes: Remote[] }>("/api/remotes"),
+  addRemote: (name: string, url: string) =>
+    req<{ remotes: Remote[] }>("/api/remote/add", {
+      method: "POST",
+      body: JSON.stringify({ name, url }),
+    }),
+  removeRemote: (name: string) =>
+    req<{ remotes: Remote[] }>("/api/remote/remove", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  createGitHubRepo: (opts: {
+    name: string;
+    description: string;
+    private: boolean;
+    remoteName: string;
+  }) =>
+    req<{ repo: { fullName: string; cloneUrl: string; htmlUrl: string }; remotes: Remote[] }>(
+      "/api/github/create-repo",
+      { method: "POST", body: JSON.stringify(opts) },
+    ),
+
+  // Push / Pull
+  push: () => req<{ branch: string; output: string; branches: Branch[] }>("/api/push", { method: "POST", body: "{}" }),
+  pull: () => req<{ output: string }>("/api/pull", { method: "POST", body: "{}" }),
 };

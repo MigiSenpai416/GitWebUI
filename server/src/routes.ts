@@ -16,6 +16,16 @@ import {
 } from "./git/mutate.js";
 import { getBranches, checkoutBranch, createBranchAt, deleteBranch } from "./git/branches.js";
 import { currentBranch, headHash } from "./git/repo.js";
+import {
+  getRemotes,
+  addRemote,
+  setRemoteUrl,
+  removeRemote,
+  push,
+  pull,
+  createGitHubRemote,
+} from "./git/remote.js";
+import * as github from "./github.js";
 import { getActiveRepo, setActiveRepo, requireRepoRoot } from "./session.js";
 import { getRecent, addRecent } from "./config.js";
 import { GitError } from "./git/gitRunner.js";
@@ -191,6 +201,97 @@ api.post("/commit", h(async (req, res) => {
   const hash = await commit(root, { title, description, amend });
   const status = await getStatus(root);
   res.json({ hash, status });
+}));
+
+// ---- GitHub account (Personal Access Token) ----
+
+api.get("/github/status", h(async (_req, res) => {
+  res.json(await github.status());
+}));
+
+api.post("/github/token", h(async (req, res) => {
+  const token = String(req.body?.token ?? "").trim();
+  if (!token) {
+    res.status(400).json({ error: "A token is required" });
+    return;
+  }
+  // Validate the token against the GitHub API before storing it.
+  const user = await github.fetchUser(token);
+  await github.setToken(token);
+  res.json({ configured: true, user });
+}));
+
+api.delete("/github/token", h(async (_req, res) => {
+  await github.deleteToken();
+  res.json({ configured: false, user: null });
+}));
+
+// ---- Remotes ----
+
+api.get("/remotes", h(async (_req, res) => {
+  const root = requireRepoRoot();
+  res.json({ remotes: await getRemotes(root) });
+}));
+
+api.post("/remote/add", h(async (req, res) => {
+  const root = requireRepoRoot();
+  const name = String(req.body?.name ?? "").trim();
+  const url = String(req.body?.url ?? "").trim();
+  if (!name || !url) {
+    res.status(400).json({ error: "A remote name and URL are required" });
+    return;
+  }
+  const existing = await getRemotes(root);
+  if (existing.some((r) => r.name === name)) {
+    await setRemoteUrl(root, name, url);
+  } else {
+    await addRemote(root, name, url);
+  }
+  res.json({ remotes: await getRemotes(root) });
+}));
+
+api.post("/remote/remove", h(async (req, res) => {
+  const root = requireRepoRoot();
+  const name = String(req.body?.name ?? "").trim();
+  if (!name) {
+    res.status(400).json({ error: "A remote name is required" });
+    return;
+  }
+  await removeRemote(root, name);
+  res.json({ remotes: await getRemotes(root) });
+}));
+
+api.post("/github/create-repo", h(async (req, res) => {
+  const root = requireRepoRoot();
+  const name = String(req.body?.name ?? "").trim();
+  if (!name) {
+    res.status(400).json({ error: "A repository name is required" });
+    return;
+  }
+  const result = await createGitHubRemote(root, {
+    name,
+    description: String(req.body?.description ?? "").trim(),
+    private: Boolean(req.body?.private),
+    remoteName: String(req.body?.remoteName ?? "origin").trim() || "origin",
+  });
+  await refreshSession(root);
+  res.json(result);
+}));
+
+// ---- Push / Pull ----
+
+api.post("/push", h(async (_req, res) => {
+  const root = requireRepoRoot();
+  const result = await push(root);
+  await refreshSession(root);
+  res.json({ ...result, branches: await getBranches(root) });
+}));
+
+api.post("/pull", h(async (_req, res) => {
+  const root = requireRepoRoot();
+  const result = await pull(root);
+  await refreshSession(root);
+  res.json(result);
 }));
 
 /** Re-read the active branch and HEAD into the session after a ref-moving op. */

@@ -19,6 +19,11 @@ export interface GitResult {
   stderr: string;
 }
 
+export interface GitOptions {
+  /** Extra environment variables merged over the parent process env. */
+  env?: NodeJS.ProcessEnv;
+}
+
 /**
  * Run `git` against a working directory. Arguments are passed as an argv array
  * (never a shell string), so repo paths / filenames with spaces or shell
@@ -27,12 +32,18 @@ export interface GitResult {
  * `encoding: "buffer"` is used and decoded as UTF-8 so we never lose bytes on
  * binary-ish output; callers that need raw bytes should use runGitBuffer.
  */
-export function runGit(cwd: string, args: string[]): Promise<GitResult> {
+export function runGit(cwd: string, args: string[], opts: GitOptions = {}): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     execFile(
       "git",
       args,
-      { cwd, maxBuffer: MAX_BUFFER, windowsHide: true, encoding: "buffer" },
+      {
+        cwd,
+        maxBuffer: MAX_BUFFER,
+        windowsHide: true,
+        encoding: "buffer",
+        env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      },
       (err, stdout, stderr) => {
         const out = stdout.toString("utf8");
         const errOut = stderr.toString("utf8");

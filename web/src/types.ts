@@ -73,6 +73,23 @@ export interface Branch {
   upstream: string | null;
 }
 
+export interface Remote {
+  name: string;
+  url: string;
+}
+
+export interface GitHubUser {
+  login: string;
+  name: string | null;
+  avatarUrl: string | null;
+}
+
+export interface GitHubStatus {
+  configured: boolean;
+  user: GitHubUser | null;
+  error?: string;
+}
+
 /** Identifies which file's diff is open in the viewer. */
 export interface SelectedFile {
   path: string;

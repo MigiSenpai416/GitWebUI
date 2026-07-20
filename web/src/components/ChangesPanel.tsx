@@ -244,7 +244,7 @@ function TreeRows({
   onOpen,
   actionLabel,
   onAction,
-}: { node: TreeNode; depth: number } & Omit<FileListProps, "files" | "layout" | "emptyText">) {
+}: { node: TreeNode<FileChange>; depth: number } & Omit<FileListProps, "files" | "layout" | "emptyText">) {
   if (node.type === "file") {
     return (
       <FileRow

@@ -4,9 +4,8 @@ A local, GitKraken-style web UI for browsing and committing to a git repository
 on your own machine. The backend shells out to your installed `git` binary; the
 frontend renders a dark, GitKraken-like interface in the browser.
 
-Remote operations (set origin, push, pull) are intentionally **not** included —
-this tool focuses on viewing history and staging/committing against a **local**
-repo.
+It focuses on a **local** repo, and also supports GitHub remotes: connect a
+Personal Access Token to push, pull, add remotes, and create repositories.
 
 ## Features
 
@@ -34,6 +33,11 @@ repo.
 - **Password-protected access** — the web UI is gated by a single password
   (set on first run), with an optional **Remember me** (stays signed in for 7
   days). Useful when running on a headless/remote host reachable over the network.
+- **GitHub remotes** — a **LOCAL / REMOTE** left sidebar (checkout branches;
+  hover **REMOTE** for a green + to add a remote). Connect a GitHub Personal
+  Access Token to **push**, **pull**, add a remote by **URL**, or **create a new
+  GitHub repository** and push to it. The token is stored on the host and can be
+  changed or revoked at any time.
 
 ## Requirements
 
@@ -87,6 +91,26 @@ The password hash and session-signing secret are stored under the OS config dir
 (`%APPDATA%\gitwebui` on Windows, `$XDG_CONFIG_HOME/gitwebui` or `~/.config/gitwebui`
 elsewhere; override with `GITWEBUI_CONFIG_DIR`). **Forgot the password?** Delete
 `auth.json` in that directory to reset to first-run setup.
+
+### GitHub & remotes (push / pull)
+
+1. **Connect a token.** Toolbar → **Actions → Connect GitHub account…**, paste a
+   [Personal Access Token](https://github.com/settings/tokens) (classic `repo`
+   scope, or fine-grained with Contents read/write). It's validated against the
+   GitHub API and stored in `github.json` in the config dir. Use the same dialog
+   to **change** it or **Disconnect** (revoke/delete the stored token).
+2. **Add a remote.** In the left sidebar, hover **REMOTE** and click the green **+**:
+   - **URL** tab — paste an existing remote URL (name defaults to `origin`).
+   - **GitHub** tab — pick the connected account, name the repo, choose
+     Public/Private, and **create the repository on GitHub and push local refs**.
+3. **Push / Pull** from the toolbar. HTTPS GitHub remotes authenticate with the
+   stored token; SSH remotes use your SSH keys as usual.
+
+The token is injected per-command via an HTTP auth header, and any system
+credential manager is bypassed so operations never block on a GUI prompt — a
+missing/invalid token fails fast with a clear message. **Forgot to revoke?**
+Delete `github.json` in the config dir (or use **Disconnect**). Storing a token
+is optional; it's only needed for authenticated HTTPS actions.
 
 ### Standalone binaries
 

@@ -11,6 +11,9 @@ import { CommitContextMenu } from "./components/CommitContextMenu";
 import { CreateBranchDialog } from "./components/CreateBranchDialog";
 import { ConfirmBar } from "./components/ConfirmBar";
 import { AuthGate } from "./components/AuthGate";
+import { Sidebar } from "./components/Sidebar";
+import { AddRemoteDialog } from "./components/AddRemoteDialog";
+import { GitHubDialog } from "./components/GitHubDialog";
 
 export function App() {
   const authState = useStore((s) => s.authState);
@@ -88,6 +91,7 @@ export function App() {
     <div className="app">
       <Toolbar />
       <div className="app-body">
+        <Sidebar />
         <div className="commit-pane">
           <CommitList />
           {selectedFile && <DiffViewer />}
@@ -105,6 +109,8 @@ export function App() {
       </div>
       <CommitContextMenu />
       <CreateBranchDialog />
+      <AddRemoteDialog />
+      <GitHubDialog />
       {toasts}
     </div>
   );

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { api } from "../api/client";
+import { api, AuthError } from "../api/client";
 import type {
   Branch,
   Commit,
@@ -16,6 +16,12 @@ type ViewMode = "diff" | "file";
 export type FileLayout = "path" | "tree";
 export type ResetMode = "hard" | "soft" | "mixed";
 
+/**
+ * WebUI auth gate state: `loading` until the first status check resolves, then
+ * `setup` (no password yet), `login` (password required), or `ok` (authed).
+ */
+export type AuthState = "loading" | "setup" | "login" | "ok";
+
 /** Right-click context menu anchored to a commit. */
 export interface CommitMenu {
   hash: string;
@@ -30,6 +36,8 @@ export interface ConfirmRequest {
 }
 
 interface AppState {
+  authState: AuthState;
+
   repo: RepoInfo | null;
   recent: string[];
   opening: boolean;
@@ -65,6 +73,12 @@ interface AppState {
   confirm: ConfirmRequest | null;
 
   init: () => Promise<void>;
+  /** Set the initial password (first run), then enter the app. */
+  setupPassword: (password: string, remember: boolean) => Promise<void>;
+  login: (password: string, remember: boolean) => Promise<void>;
+  logout: () => Promise<void>;
+  /** Load recent list + current repo once authenticated. */
+  loadWorkspace: () => Promise<void>;
   loadRecent: () => Promise<void>;
   openRepo: (path: string) => Promise<void>;
   closeRepo: () => void;
@@ -111,6 +125,8 @@ const EMPTY_STATUS: StatusResult = { staged: [], unstaged: [] };
 let confirmResolver: ((ok: boolean) => void) | null = null;
 
 export const useStore = create<AppState>((set, get) => ({
+  authState: "loading",
+
   repo: null,
   recent: [],
   opening: false,
@@ -141,6 +157,56 @@ export const useStore = create<AppState>((set, get) => ({
   confirm: null,
 
   async init() {
+    try {
+      const st = await api.authStatus();
+      const authState: AuthState = st.configured
+        ? st.authenticated
+          ? "ok"
+          : "login"
+        : "setup";
+      set({ authState });
+      if (authState !== "ok") return;
+    } catch (e) {
+      // Server unreachable or unexpected error — fall back to the login screen.
+      set({ authState: "login", error: errMsg(e) });
+      return;
+    }
+    await get().loadWorkspace();
+  },
+
+  async setupPassword(password: string, remember: boolean) {
+    // Errors propagate to the AuthGate so it can show them inline.
+    await api.authSetup(password, remember);
+    set({ authState: "ok", error: null });
+    await get().loadWorkspace();
+  },
+
+  async login(password: string, remember: boolean) {
+    await api.authLogin(password, remember);
+    set({ authState: "ok", error: null });
+    await get().loadWorkspace();
+  },
+
+  async logout() {
+    try {
+      await api.authLogout();
+    } catch {
+      /* clear locally regardless */
+    }
+    set({
+      authState: "login",
+      repo: null,
+      commits: [],
+      hasMore: false,
+      selectedCommitHash: null,
+      commitFiles: [],
+      status: EMPTY_STATUS,
+      selectedFile: null,
+      branches: [],
+    });
+  },
+
+  async loadWorkspace() {
     await get().loadRecent();
     try {
       const { repo } = await api.currentRepo();
@@ -149,7 +215,7 @@ export const useStore = create<AppState>((set, get) => ({
         await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
       }
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     }
   },
 
@@ -177,7 +243,7 @@ export const useStore = create<AppState>((set, get) => ({
       await get().loadRecent();
       await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     } finally {
       set({ opening: false });
     }
@@ -206,7 +272,7 @@ export const useStore = create<AppState>((set, get) => ({
         hasMore,
       }));
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     } finally {
       set({ loadingCommits: false });
     }
@@ -224,7 +290,7 @@ export const useStore = create<AppState>((set, get) => ({
       // Guard against a race if the user clicked another commit meanwhile.
       if (get().selectedCommitHash === hash) set({ commitFiles: files });
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     } finally {
       set({ loadingCommitFiles: false });
     }
@@ -251,7 +317,7 @@ export const useStore = create<AppState>((set, get) => ({
       });
       await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     }
   },
 
@@ -263,7 +329,7 @@ export const useStore = create<AppState>((set, get) => ({
       // A deleted branch's ref badge should disappear from the graph.
       await get().loadCommits(true);
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     }
   },
 
@@ -300,7 +366,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ repo });
       await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     }
   },
 
@@ -311,7 +377,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ repo, selectedCommitHash: null, commitFiles: [], selectedFile: null });
       await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     }
   },
 
@@ -322,7 +388,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ repo, selectedCommitHash: null, commitFiles: [], selectedFile: null });
       await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     }
   },
 
@@ -332,7 +398,7 @@ export const useStore = create<AppState>((set, get) => ({
       const status = await api.status();
       set({ status });
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     } finally {
       set({ loadingStatus: false });
     }
@@ -349,7 +415,7 @@ export const useStore = create<AppState>((set, get) => ({
     const commitsPromise = api
       .commits(0, count)
       .then(({ commits, hasMore }) => set({ commits, hasMore }))
-      .catch((e) => set({ error: errMsg(e) }));
+      .catch((e) => reportError(set, e));
     // A selected commit's file list is immutable, so it needs no reload.
     await Promise.all([commitsPromise, s.refreshStatus(), s.loadBranches()]);
   },
@@ -360,7 +426,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ status });
       syncSelectedAfterStage(get, set, paths, true);
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     }
   },
 
@@ -369,7 +435,7 @@ export const useStore = create<AppState>((set, get) => ({
       const status = await api.stageAll();
       set({ status });
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     }
   },
 
@@ -379,7 +445,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ status });
       syncSelectedAfterStage(get, set, paths, false);
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     }
   },
 
@@ -388,7 +454,7 @@ export const useStore = create<AppState>((set, get) => ({
       const status = await api.discardAll();
       set({ status, selectedFile: null });
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
     }
   },
 
@@ -399,7 +465,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ status, selectedFile: null });
       await Promise.all([get().loadCommits(true), get().loadBranches()]);
     } catch (e) {
-      set({ error: errMsg(e) });
+      reportError(set, e);
       throw e;
     } finally {
       set({ committing: false });
@@ -452,4 +518,16 @@ function syncSelectedAfterStage(
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * Route an action error: a 401 (session expired/invalid) drops back to the
+ * login screen; anything else surfaces as the error toast.
+ */
+function reportError(set: (partial: Partial<AppState>) => void, e: unknown): void {
+  if (e instanceof AuthError) {
+    set({ authState: "login" });
+    return;
+  }
+  set({ error: errMsg(e) });
 }

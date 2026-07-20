@@ -12,6 +12,11 @@
     "dev:server": "npm run dev --workspace server",
     "dev:web": "npm run dev --workspace web",
     "build": "npm run build --workspace web && npm run build --workspace server",
+    "build:web": "npm run build --workspace web",
+    "embed": "node scripts/embed-web.mjs",
+    "build:exe:win": "bun build server/src/bunEntry.ts --compile --target=bun-windows-x64 --outfile release/gitwebui.exe",
+    "build:exe:linux": "bun build server/src/bunEntry.ts --compile --target=bun-linux-x64 --outfile release/gitwebui",
+    "build:exe": "npm run build:web && npm run embed && npm run build:exe:win && npm run build:exe:linux",
     "start": "npm run start --workspace server",
     "test": "npm run test --workspace server"
   },

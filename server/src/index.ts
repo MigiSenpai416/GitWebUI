@@ -1,29 +1,40 @@
-import express from "express";
-import cors from "cors";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
-import { api, apiErrorHandler } from "./routes.js";
+import express, { type Express } from "express";
+import { createApp } from "./app.js";
+import { resolvePort, resolveHost, wantsHelp, HELP_TEXT } from "./args.js";
+
+if (wantsHelp()) {
+  console.log(HELP_TEXT);
+  process.exit(0);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT ?? 5174);
 
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+let port: number;
+let host: string;
+try {
+  port = resolvePort();
+  host = resolveHost();
+} catch (e) {
+  console.error(`[gitwebui] ${(e as Error).message}`);
+  process.exit(1);
+}
 
-app.use("/api", api);
-app.use("/api", apiErrorHandler);
-
-// In production, serve the built web app (web/dist) and SPA-fallback to index.html.
-const webDist = path.resolve(__dirname, "../../web/dist");
-if (existsSync(webDist)) {
+// In production the built web app (web/dist) is served from disk with an SPA fallback.
+function serveStaticFromDisk(app: Express): void {
+  const webDist = path.resolve(__dirname, "../../web/dist");
+  if (!existsSync(webDist)) return;
   app.use(express.static(webDist));
   app.get("*", (_req, res) => {
     res.sendFile(path.join(webDist, "index.html"));
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`[gitwebui] server listening on http://localhost:${PORT}`);
+const app = createApp({ serveStatic: serveStaticFromDisk });
+
+app.listen(port, host, () => {
+  const shown = host === "0.0.0.0" ? "localhost" : host;
+  console.log(`[gitwebui] server listening on http://${shown}:${port}`);
 });

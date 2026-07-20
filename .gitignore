@@ -5,3 +5,5 @@ dist/
 .env
 web/dist/
 server/dist/
+release/
+server/src/generated/

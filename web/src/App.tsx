@@ -10,8 +10,10 @@ import { DiffViewer } from "./components/DiffViewer/DiffViewer";
 import { CommitContextMenu } from "./components/CommitContextMenu";
 import { CreateBranchDialog } from "./components/CreateBranchDialog";
 import { ConfirmBar } from "./components/ConfirmBar";
+import { AuthGate } from "./components/AuthGate";
 
 export function App() {
+  const authState = useStore((s) => s.authState);
   const repo = useStore((s) => s.repo);
   const error = useStore((s) => s.error);
   const notice = useStore((s) => s.notice);
@@ -59,6 +61,19 @@ export function App() {
       {notice && <Toast kind="notice" message={notice} onClose={() => setNotice(null)} />}
     </>
   );
+
+  // Auth gate: nothing else renders until the session is established.
+  if (authState === "loading") {
+    return <div className="app-loading">{toasts}</div>;
+  }
+  if (authState !== "ok") {
+    return (
+      <>
+        <AuthGate />
+        {toasts}
+      </>
+    );
+  }
 
   if (!repo) {
     return (

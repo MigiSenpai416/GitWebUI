@@ -31,6 +31,9 @@ repo.
     **Stage All** / **Unstage All**.
 - Commit box: **Amend previous commit**, summary (with character budget) +
   description, one-click commit. AI-compose controls are placeholders.
+- **Password-protected access** — the web UI is gated by a single password
+  (set on first run), with an optional **Remember me** (stays signed in for 7
+  days). Useful when running on a headless/remote host reachable over the network.
 
 ## Requirements
 
@@ -58,7 +61,52 @@ npm start            # serves the built UI + API on :5174
 # then open http://localhost:5174
 ```
 
-Set `PORT` to change the server port.
+In production a single server hosts both the web UI and the API on one port.
+
+### Choosing the port / host
+
+The server port and bind address are resolved as **CLI flag > env var > default**:
+
+```bash
+node server/dist/index.js --port 8080          # or -p 8080
+node server/dist/index.js --port 8080 --host 127.0.0.1
+PORT=8080 node server/dist/index.js            # env var
+node server/dist/index.js --help               # usage
+```
+
+Defaults are port `5174` and host `0.0.0.0` (all interfaces, so a remote machine
+can reach it). The same flags work on the standalone binaries below.
+
+### First run & authentication
+
+On the first visit you'll be asked to **set a password**; every later visit asks
+for it. Tick **Remember me** to stay signed in for 7 days (the session survives a
+server restart). The **lock** button in the toolbar signs you out.
+
+The password hash and session-signing secret are stored under the OS config dir
+(`%APPDATA%\gitwebui` on Windows, `$XDG_CONFIG_HOME/gitwebui` or `~/.config/gitwebui`
+elsewhere; override with `GITWEBUI_CONFIG_DIR`). **Forgot the password?** Delete
+`auth.json` in that directory to reset to first-run setup.
+
+### Standalone binaries
+
+Build self-contained executables that run without Node installed on the target
+(the machine still needs `git`). Requires **[Bun](https://bun.sh)** on the build
+machine; it cross-compiles both targets from either OS:
+
+```bash
+npm run build:exe            # builds the web UI, embeds it, emits both binaries
+# or individually:
+npm run build:exe:win        # → release/gitwebui.exe   (Windows x64)
+npm run build:exe:linux      # → release/gitwebui       (Linux x64)
+```
+
+The web UI is embedded inside the binary, so a single file is all you need to
+deploy. Run it and pass `--port`/`--host` as above, e.g. on a Linux server:
+
+```bash
+./gitwebui --port 8080
+```
 
 ## Keyboard shortcuts (diff viewer)
 
@@ -89,3 +137,9 @@ npm test             # Vitest unit tests for the git output parsers
 All git invocations pass arguments as an argv array (`execFile`), never as a
 shell string, so repository paths and filenames containing spaces or shell
 metacharacters are handled safely.
+
+The password and session cookie travel over **plain HTTP**. On a trusted LAN or
+over an SSH tunnel that's fine, but **do not expose the raw port directly to the
+internet** — put it behind a TLS-terminating reverse proxy (Caddy, nginx,
+Traefik) or reach it through an SSH/WireGuard tunnel so credentials aren't sent
+in the clear.

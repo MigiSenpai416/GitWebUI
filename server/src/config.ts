@@ -2,8 +2,11 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-/** Persist a small list of recently opened repo paths in the OS config dir. */
-const CONFIG_DIR =
+/**
+ * Directory where GitWebUI persists its state (recent repos, auth). Resolved
+ * per-OS so it works the same for a `node`/`tsx` run and a compiled binary.
+ */
+export const CONFIG_DIR =
   process.env.GITWEBUI_CONFIG_DIR ||
   path.join(
     process.env.APPDATA ||

@@ -8,6 +8,9 @@ import type {
   StatusResult,
 } from "../types";
 
+/** Thrown on a 401 so the store can drop back to the login screen. */
+export class AuthError extends Error {}
+
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     ...init,
@@ -21,12 +24,31 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
     } catch {
       /* non-JSON error */
     }
+    if (res.status === 401) throw new AuthError(message);
     throw new Error(message);
   }
   return (await res.json()) as T;
 }
 
+export interface AuthStatus {
+  configured: boolean;
+  authenticated: boolean;
+}
+
 export const api = {
+  authStatus: () => req<AuthStatus>("/api/auth/status"),
+  authSetup: (password: string, remember: boolean) =>
+    req<{ ok: true }>("/api/auth/setup", {
+      method: "POST",
+      body: JSON.stringify({ password, remember }),
+    }),
+  authLogin: (password: string, remember: boolean) =>
+    req<{ ok: true }>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ password, remember }),
+    }),
+  authLogout: () => req<{ ok: true }>("/api/auth/logout", { method: "POST", body: "{}" }),
+
   currentRepo: () => req<{ repo: RepoInfo | null }>("/api/repo/current"),
   recent: () => req<{ recent: string[] }>("/api/repo/recent"),
   openRepo: (path: string) =>

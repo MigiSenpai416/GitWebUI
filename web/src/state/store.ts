@@ -273,6 +273,7 @@ interface AppState {
   pull: () => Promise<void>;
 
   loadMergeState: () => Promise<void>;
+  mergeBranch: (name: string) => Promise<void>;
   checkoutCommit: (hash: string) => Promise<void>;
   cherryPick: (hash: string, noCommit: boolean) => Promise<void>;
   abortMerge: () => Promise<void>;
@@ -747,6 +748,27 @@ export const useStore = create<AppState>((set, get) => ({
       applyMerge(get, set, merge);
     } catch {
       /* non-fatal */
+    }
+  },
+
+  async mergeBranch(name: string) {
+    set({ error: null });
+    try {
+      const { repo, merge, status } = await api.merge(name);
+      if (repo) {
+        set({ repo });
+        syncActiveTab(get, set, repo);
+      }
+      applyMerge(get, set, merge, status);
+      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      if (merge.active) {
+        // Conflicts — jump to the WIP/conflict view so the resolver is reachable.
+        set({ selectedCommitHash: null, selectedFile: null });
+      } else {
+        set({ notice: `Merged ${name} into ${get().repo?.branch ?? "the current branch"}.` });
+      }
+    } catch (e) {
+      reportError(set, e);
     }
   },
 

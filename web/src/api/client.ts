@@ -222,6 +222,11 @@ export const api = {
     }),
 
   // Merge / conflict resolution
+  merge: (branch: string) =>
+    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("/api/merge", {
+      method: "POST",
+      body: JSON.stringify({ branch }),
+    }),
   mergeState: () => req<{ merge: MergeState }>("/api/merge/state"),
   conflictFile: (path: string) =>
     req<ConflictFileData>(`/api/conflict?path=${encodeURIComponent(path)}`),

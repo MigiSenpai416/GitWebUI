@@ -44,6 +44,7 @@ import {
   writeResolution,
   markResolved,
   abortMerge,
+  mergeBranch,
   cherryPick,
   conflictedPaths,
   isConflicted,
@@ -510,6 +511,23 @@ api.post("/cherry-pick", h(async (req, res) => {
 }));
 
 // ---- Merge / conflict resolution ----
+
+api.post("/merge", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const branch = String(req.body?.branch ?? "").trim();
+  if (!branch) {
+    res.status(400).json({ error: "A branch to merge is required" });
+    return;
+  }
+  // A conflicting merge is not an error — it's left in progress and surfaced as
+  // merge state for the conflict resolver.
+  await mergeBranch(root, branch);
+  res.json({
+    repo: await refreshSession(root),
+    merge: await getMergeState(root),
+    status: await getStatus(root),
+  });
+}));
 
 api.get("/merge/state", h(async (req, res) => {
   const root = requireRepoRoot(req);

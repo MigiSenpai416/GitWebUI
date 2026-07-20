@@ -199,6 +199,22 @@ export const IconEyeOff = (p: P) => (
     <path d="M9.9 9.9a2.6 2.6 0 0 0 3.7 3.7" />
   </svg>
 );
+export const IconDots = (p: P) => (
+  <svg {...base(p)} fill="currentColor" stroke="none">
+    <circle cx="5" cy="12" r="1.7" />
+    <circle cx="12" cy="12" r="1.7" />
+    <circle cx="19" cy="12" r="1.7" />
+  </svg>
+);
+export const IconMerge = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="6" cy="18" r="2.4" />
+    <circle cx="6" cy="6" r="2.4" />
+    <circle cx="18" cy="6" r="2.4" />
+    <path d="M6 8.4v7.2" />
+    <path d="M18 8.4v1.2c0 3.4-3.4 3.8-6.6 5.4" />
+  </svg>
+);
 export const IconWarning = (p: P) => (
   <svg {...base({ strokeWidth: 1.9, ...p })}>
     <path d="M10.3 3.9 2.5 17.5A2 2 0 0 0 4.2 20.5h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />

@@ -85,26 +85,85 @@
   color: var(--text);
   padding: 6px 8px;
 }
-.bmi-delete {
+/* A single actions ("more") button. Its slot is always reserved — even for the
+   current branch, which shows an empty spacer — so the commit hashes stay at a
+   fixed position and don't shift when the button appears on hover. */
+.bmi-more,
+.bmi-more-slot {
   flex-shrink: 0;
+  width: 28px;
+  height: 24px;
+  margin-right: 5px;
+}
+.bmi-more {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 24px;
-  margin-right: 5px;
   border-radius: var(--radius-sm);
   background: transparent;
   border: 1px solid transparent;
-  color: var(--red);
+  color: var(--text-dim);
   opacity: 0;
 }
-.branch-row:hover .bmi-delete {
+.branch-row:hover .bmi-more,
+.branch-row.menu-open .bmi-more {
   opacity: 1;
 }
-.bmi-delete:hover {
-  background: rgba(248, 81, 73, 0.16);
-  border-color: rgba(248, 81, 73, 0.5);
+.bmi-more:hover,
+.branch-row.menu-open .bmi-more {
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+/* Action popover opened from the more button (fixed so it escapes the menu). */
+.branch-actions {
+  position: fixed;
+  z-index: 320;
+  min-width: 196px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+}
+.branch-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+.branch-action:hover {
+  background: var(--bg-row-selected);
+}
+.branch-action.danger {
+  color: var(--red);
+}
+.branch-action.danger:hover {
+  background: rgba(248, 81, 73, 0.14);
+}
+.ba-icon {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+.branch-action.danger .ba-icon {
+  color: var(--red);
+}
+.ba-branch {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.branch-action-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
 }
 .bmi-check {
   width: 14px;

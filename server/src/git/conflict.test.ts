@@ -58,6 +58,27 @@ describe("merge conflict state", () => {
     expect(await isConflicted(ROOT)).toBe(false);
   });
 
+  it("merges a non-conflicting branch cleanly", async () => {
+    await fs.mkdir(ROOT, { recursive: true });
+    await runGit(ROOT, ["init", "-b", "main"]);
+    await runGit(ROOT, ["config", "user.email", "t@example.com"]);
+    await runGit(ROOT, ["config", "user.name", "Test"]);
+    await write("a.txt", "one\ntwo\nthree\n");
+    await runGit(ROOT, ["add", "-A"]);
+    await runGit(ROOT, ["commit", "-m", "base"]);
+    await runGit(ROOT, ["checkout", "-b", "feature"]);
+    await write("b.txt", "feature file\n");
+    await runGit(ROOT, ["add", "-A"]);
+    await runGit(ROOT, ["commit", "-m", "add b"]);
+    await runGit(ROOT, ["checkout", "main"]);
+
+    await mergeBranch(ROOT, "feature");
+    expect(await isConflicted(ROOT)).toBe(false);
+    expect((await getMergeState(ROOT)).active).toBe(false);
+    // feature's file is now present on main.
+    expect(await fs.readFile(path.join(ROOT, "b.txt"), "utf8")).toContain("feature file");
+  });
+
   it("surfaces a conflict from a merge and its three-way content", async () => {
     await setupConflict();
     await mergeBranch(ROOT, "feature"); // conflicts, but must not throw

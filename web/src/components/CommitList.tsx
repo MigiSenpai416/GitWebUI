@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useStore } from "../state/store";
 import type { Commit, StashEntry } from "../types";
 import { RefBadges } from "./RefBadges";
+import { IconWarning } from "./icons";
 import "./CommitList.css";
 
 const ROW = 28;
@@ -19,6 +20,7 @@ export function CommitList() {
   const stashes = useStore((s) => s.stashes);
   const openStashMenu = useStore((s) => s.openStashMenu);
   const branch = useStore((s) => s.repo?.branch ?? "");
+  const mergeState = useStore((s) => s.mergeState);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const wipCount = status.staged.length + status.unstaged.length;
@@ -47,6 +49,13 @@ export function CommitList() {
         <div className="col-graph-head">Graph</div>
         <div className="col-msg-head">Commit Message</div>
       </div>
+
+      {mergeState?.active && (
+        <div className="merge-banner" role="status">
+          <IconWarning width={15} height={15} />
+          <span>{mergeState.message}</span>
+        </div>
+      )}
 
       {wipCount > 0 && (
         <button

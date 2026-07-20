@@ -4,9 +4,11 @@ import type {
   Branch,
   Commit,
   CommitFile,
+  ConflictFileData,
   GitHubStatus,
   GitHubUser,
   IdentityInfo,
+  MergeState,
   RepoInfo,
   Remote,
   RemoteBranch,
@@ -147,10 +149,19 @@ export interface ChangesMenu {
   folderPath?: string;
 }
 
-/** A pending destructive-action confirmation shown in the top banner. */
+export type ConfirmKind = "primary" | "neutral" | "danger";
+
+/** One button in the confirmation banner; `value` is what the promise resolves to. */
+export interface ConfirmButton {
+  label: string;
+  value: string;
+  kind: ConfirmKind;
+}
+
+/** A pending confirmation/choice shown in the top banner. */
 export interface ConfirmRequest {
   message: string;
-  confirmLabel: string;
+  buttons: ConfirmButton[];
 }
 
 interface AppState {
@@ -179,6 +190,15 @@ interface AppState {
   status: StatusResult;
   loadingStatus: boolean;
   committing: boolean;
+
+  /** In-progress merge/rebase/revert conflict state, or null when clean. */
+  mergeState: MergeState | null;
+  /** Every path seen conflicted during this operation (for the Resolved list). */
+  mergeSeen: string[];
+  /** The conflicted file open in the resolver, or null. */
+  conflictPath: string | null;
+  conflictData: ConflictFileData | null;
+  conflictLoading: boolean;
 
   branches: Branch[];
   remotes: Remote[];
@@ -252,6 +272,15 @@ interface AppState {
   push: () => Promise<void>;
   pull: () => Promise<void>;
 
+  loadMergeState: () => Promise<void>;
+  checkoutCommit: (hash: string) => Promise<void>;
+  cherryPick: (hash: string, noCommit: boolean) => Promise<void>;
+  abortMerge: () => Promise<void>;
+  openConflict: (path: string) => Promise<void>;
+  closeConflict: () => void;
+  saveResolution: (path: string, content: string, resolved: boolean) => Promise<void>;
+  markAllResolved: () => Promise<void>;
+
   loadStashes: () => Promise<void>;
   stash: () => Promise<void>;
   stashPop: (index?: number) => Promise<void>;
@@ -276,9 +305,11 @@ interface AppState {
   closeGitHubDialog: () => void;
   toggleSidebar: () => void;
 
-  /** Show the confirmation banner; resolves true if confirmed, false if cancelled. */
+  /** Show a two-button confirm banner; resolves true if confirmed, false otherwise. */
   requestConfirm: (message: string, confirmLabel?: string) => Promise<boolean>;
-  resolveConfirm: (ok: boolean) => void;
+  /** Show a banner with custom buttons; resolves the chosen value, or null if dismissed. */
+  requestChoice: (message: string, buttons: ConfirmButton[]) => Promise<string | null>;
+  resolveConfirm: (value: string | null) => void;
 
   openCommitMenu: (menu: CommitMenu) => void;
   closeCommitMenu: () => void;
@@ -313,7 +344,7 @@ interface AppState {
 const EMPTY_STATUS: StatusResult = { staged: [], unstaged: [] };
 
 // Holds the resolver for the currently-open confirmation banner, if any.
-let confirmResolver: ((ok: boolean) => void) | null = null;
+let confirmResolver: ((value: string | null) => void) | null = null;
 
 const initialTabs = readTabs();
 
@@ -341,6 +372,12 @@ export const useStore = create<AppState>((set, get) => ({
   status: EMPTY_STATUS,
   loadingStatus: false,
   committing: false,
+
+  mergeState: null,
+  mergeSeen: [],
+  conflictPath: null,
+  conflictData: null,
+  conflictLoading: false,
 
   branches: [],
   remotes: [],
@@ -689,13 +726,119 @@ export const useStore = create<AppState>((set, get) => ({
     if (get().remoteBusy) return;
     set({ remoteBusy: true, error: null });
     try {
-      await api.pull();
-      await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
-      set({ notice: "Pulled latest changes." });
+      const { merge, status } = await api.pull();
+      applyMerge(get, set, merge, status);
+      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      if (merge.active) {
+        set({ selectedCommitHash: null, selectedFile: null });
+      } else {
+        set({ notice: "Pulled latest changes." });
+      }
     } catch (e) {
       reportError(set, e);
     } finally {
       set({ remoteBusy: false });
+    }
+  },
+
+  async loadMergeState() {
+    try {
+      const { merge } = await api.mergeState();
+      applyMerge(get, set, merge);
+    } catch {
+      /* non-fatal */
+    }
+  },
+
+  async checkoutCommit(hash: string) {
+    set({ error: null, commitMenu: null });
+    try {
+      const { repo, merge, status } = await api.checkoutCommit(hash);
+      if (repo) {
+        set({ repo });
+        syncActiveTab(get, set, repo);
+      }
+      set({ selectedCommitHash: null, commitFiles: [], selectedFile: null });
+      applyMerge(get, set, merge, status);
+      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      set({ notice: `Checked out ${hash.slice(0, 7)} (detached HEAD).` });
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  async cherryPick(hash: string, noCommit: boolean) {
+    set({ error: null, commitMenu: null });
+    try {
+      const { repo, merge, status } = await api.cherryPick(hash, noCommit);
+      if (repo) {
+        set({ repo });
+        syncActiveTab(get, set, repo);
+      }
+      applyMerge(get, set, merge, status);
+      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      if (merge.active) {
+        set({ selectedCommitHash: null, selectedFile: null });
+      } else if (noCommit) {
+        set({
+          selectedCommitHash: null,
+          selectedFile: null,
+          notice: `Cherry-picked ${hash.slice(0, 7)} — review the changes and commit.`,
+        });
+      } else {
+        set({ notice: `Cherry-picked ${hash.slice(0, 7)}.` });
+      }
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  async abortMerge() {
+    set({ error: null });
+    try {
+      const { repo, merge, status } = await api.abortMerge();
+      if (repo) {
+        set({ repo });
+        syncActiveTab(get, set, repo);
+      }
+      set({ mergeSeen: [], conflictPath: null, conflictData: null });
+      applyMerge(get, set, merge, status);
+      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      set({ notice: "Aborted — restored the pre-merge state." });
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  async openConflict(path: string) {
+    set({ conflictPath: path, conflictData: null, conflictLoading: true, selectedCommitHash: null });
+    try {
+      const data = await api.conflictFile(path);
+      if (get().conflictPath === path) set({ conflictData: data });
+    } catch (e) {
+      reportError(set, e);
+    } finally {
+      set({ conflictLoading: false });
+    }
+  },
+
+  closeConflict() {
+    set({ conflictPath: null, conflictData: null });
+  },
+
+  async saveResolution(path: string, content: string, resolved: boolean) {
+    // Errors propagate so the resolver can show them inline.
+    const { merge, status } = await api.resolveConflict(path, content, resolved);
+    applyMerge(get, set, merge, status);
+    if (resolved) set({ notice: `Resolved ${path}.` });
+  },
+
+  async markAllResolved() {
+    try {
+      const { merge, status } = await api.resolveAll();
+      applyMerge(get, set, merge, status);
+    } catch (e) {
+      reportError(set, e);
     }
   },
 
@@ -854,16 +997,24 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   requestConfirm(message: string, confirmLabel = "Confirm") {
-    return new Promise<boolean>((resolve) => {
+    return get()
+      .requestChoice(message, [
+        { label: confirmLabel, value: "confirm", kind: "danger" },
+        { label: "Cancel", value: "cancel", kind: "neutral" },
+      ])
+      .then((v) => v === "confirm");
+  },
+  requestChoice(message: string, buttons: ConfirmButton[]) {
+    return new Promise<string | null>((resolve) => {
       confirmResolver = resolve;
-      set({ confirm: { message, confirmLabel } });
+      set({ confirm: { message, buttons } });
     });
   },
-  resolveConfirm(ok: boolean) {
+  resolveConfirm(value: string | null) {
     const resolve = confirmResolver;
     confirmResolver = null;
     set({ confirm: null });
-    resolve?.(ok);
+    resolve?.(value);
   },
 
   openCommitMenu(menu: CommitMenu) {
@@ -905,9 +1056,11 @@ export const useStore = create<AppState>((set, get) => ({
   async revertCommit(hash: string) {
     set({ error: null, commitMenu: null });
     try {
-      const { repo } = await api.revert(hash);
-      set({ repo, selectedCommitHash: null, commitFiles: [], selectedFile: null });
-      await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
+      const { repo, merge, status } = await api.revert(hash);
+      if (repo) set({ repo });
+      set({ selectedCommitHash: null, commitFiles: [], selectedFile: null });
+      applyMerge(get, set, merge, status);
+      await Promise.all([get().loadCommits(true), get().loadBranches()]);
     } catch (e) {
       reportError(set, e);
     }
@@ -947,6 +1100,7 @@ export const useStore = create<AppState>((set, get) => ({
       s.loadBranches(),
       s.loadRemotes(),
       s.loadStashes(),
+      s.loadMergeState(),
     ]);
   },
 
@@ -1030,7 +1184,7 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const { status } = await api.commit(title, description, amend);
       set({ status, selectedFile: null });
-      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      await Promise.all([get().loadCommits(true), get().loadBranches(), get().loadMergeState()]);
     } catch (e) {
       reportError(set, e);
       throw e;
@@ -1085,6 +1239,10 @@ function showPicker(set: StoreSet): void {
     stashes: [],
     commitMenu: null,
     stashMenu: null,
+    mergeState: null,
+    mergeSeen: [],
+    conflictPath: null,
+    conflictData: null,
   });
 }
 
@@ -1106,6 +1264,10 @@ async function hydrateRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promis
     stashes: [],
     commitMenu: null,
     stashMenu: null,
+    mergeState: null,
+    mergeSeen: [],
+    conflictPath: null,
+    conflictData: null,
   });
   // Load the ref lists first so we can resolve the default visible set and query
   // the log with valid refs.
@@ -1117,7 +1279,34 @@ async function hydrateRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promis
     get().refreshStatus(),
     get().loadRemotes(),
     get().loadStashes(),
+    get().loadMergeState(),
   ]);
+}
+
+/**
+ * Fold a server merge-state response into the store: track which paths have been
+ * seen conflicted (so resolved ones can be listed), apply the fresh status, and
+ * close the resolver when its file is no longer conflicted (or the op ended).
+ */
+function applyMerge(
+  get: StoreGet,
+  set: StoreSet,
+  merge: MergeState,
+  status?: StatusResult,
+): void {
+  const state = get();
+  const active = merge.active;
+  const seen = active
+    ? Array.from(new Set([...state.mergeSeen, ...merge.conflicted]))
+    : [];
+  const resolverStale =
+    !active || (state.conflictPath != null && !merge.conflicted.includes(state.conflictPath));
+  set({
+    mergeState: active ? merge : null,
+    mergeSeen: seen,
+    ...(status ? { status } : {}),
+    ...(resolverStale ? { conflictPath: null, conflictData: null } : {}),
+  });
 }
 
 /**

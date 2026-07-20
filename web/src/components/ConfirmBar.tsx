@@ -3,9 +3,10 @@ import { useStore } from "../state/store";
 import "./ConfirmBar.css";
 
 /**
- * The single, shared confirmation UI for destructive actions: a banner across
- * the top of the window with a red confirm button and a cancel button.
- * Driven by store.requestConfirm / resolveConfirm.
+ * The single, shared confirmation UI for destructive actions and multi-way
+ * choices: a banner across the top of the window with one or more buttons.
+ * Driven by store.requestConfirm / requestChoice / resolveConfirm. Enter picks
+ * the first button; Escape dismisses (resolves null).
  */
 export function ConfirmBar() {
   const confirm = useStore((s) => s.confirm);
@@ -14,8 +15,8 @@ export function ConfirmBar() {
   useEffect(() => {
     if (!confirm) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") resolve(false);
-      else if (e.key === "Enter") resolve(true);
+      if (e.key === "Escape") resolve(null);
+      else if (e.key === "Enter") resolve(confirm.buttons[0]?.value ?? null);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -24,14 +25,18 @@ export function ConfirmBar() {
   if (!confirm) return null;
 
   return (
-    <div className="confirm-bar" role="alertdialog" aria-label="Confirm destructive action">
+    <div className="confirm-bar" role="alertdialog" aria-label="Confirm action">
       <span className="confirm-msg">{confirm.message}</span>
-      <button className="confirm-yes" onClick={() => resolve(true)} autoFocus>
-        {confirm.confirmLabel}
-      </button>
-      <button className="confirm-no" onClick={() => resolve(false)}>
-        Cancel
-      </button>
+      {confirm.buttons.map((b, i) => (
+        <button
+          key={b.value}
+          className={"confirm-btn " + b.kind}
+          onClick={() => resolve(b.value)}
+          autoFocus={i === 0}
+        >
+          {b.label}
+        </button>
+      ))}
     </div>
   );
 }

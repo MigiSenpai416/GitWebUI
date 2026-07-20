@@ -21,6 +21,7 @@ import {
   getBranches,
   getRemoteBranches,
   checkoutBranch,
+  checkoutCommit,
   createBranchAt,
   deleteBranch,
 } from "./git/branches.js";
@@ -37,6 +38,16 @@ import {
 import * as github from "./github.js";
 import { getIdentity, setIdentity, clearIdentity, type CommitIdentity } from "./identity.js";
 import { getStashes, stashPush, stashPop, stashApply, stashDrop } from "./git/stash.js";
+import {
+  getMergeState,
+  getConflictFile,
+  writeResolution,
+  markResolved,
+  abortMerge,
+  cherryPick,
+  conflictedPaths,
+  isConflicted,
+} from "./git/conflict.js";
 import {
   registerRepo,
   unregisterRepo,
@@ -210,8 +221,18 @@ api.post("/revert", h(async (req, res) => {
     res.status(400).json({ error: "A commit is required" });
     return;
   }
-  await revertCommit(root, hash);
-  res.json({ repo: await refreshSession(root) });
+  // A revert that conflicts isn't an error — it leaves the revert in progress
+  // for the user to resolve, which we surface as merge state.
+  try {
+    await revertCommit(root, hash);
+  } catch (e) {
+    if (!(await isConflicted(root))) throw e;
+  }
+  res.json({
+    repo: await refreshSession(root),
+    merge: await getMergeState(root),
+    status: await getStatus(root),
+  });
 }));
 
 api.post("/discard", h(async (req, res) => {
@@ -440,9 +461,98 @@ api.post("/push", h(async (req, res) => {
 
 api.post("/pull", h(async (req, res) => {
   const root = requireRepoRoot(req);
-  const result = await pull(root);
+  let output = "";
+  try {
+    output = (await pull(root)).output;
+  } catch (e) {
+    // A merge conflict from the pull isn't fatal — report it as merge state.
+    if (!(await isConflicted(root))) throw e;
+  }
   await refreshSession(root);
-  res.json(result);
+  res.json({
+    output,
+    merge: await getMergeState(root),
+    status: await getStatus(root),
+  });
+}));
+
+// ---- Checkout a commit (detached HEAD) / cherry-pick ----
+
+api.post("/checkout-commit", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const hash = String(req.body?.hash ?? "").trim();
+  if (!hash) {
+    res.status(400).json({ error: "A commit is required" });
+    return;
+  }
+  await checkoutCommit(root, hash);
+  res.json({
+    repo: await refreshSession(root),
+    merge: await getMergeState(root),
+    status: await getStatus(root),
+  });
+}));
+
+api.post("/cherry-pick", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const hash = String(req.body?.hash ?? "").trim();
+  if (!hash) {
+    res.status(400).json({ error: "A commit is required" });
+    return;
+  }
+  const noCommit = Boolean(req.body?.noCommit);
+  await cherryPick(root, hash, noCommit);
+  res.json({
+    repo: await refreshSession(root),
+    merge: await getMergeState(root),
+    status: await getStatus(root),
+  });
+}));
+
+// ---- Merge / conflict resolution ----
+
+api.get("/merge/state", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  res.json({ merge: await getMergeState(root) });
+}));
+
+api.get("/conflict", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const path = String(req.query.path ?? "").trim();
+  if (!path) {
+    res.status(400).json({ error: "A file path is required" });
+    return;
+  }
+  res.json(await getConflictFile(root, path));
+}));
+
+api.post("/conflict/resolve", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const path = String(req.body?.path ?? "").trim();
+  if (!path) {
+    res.status(400).json({ error: "A file path is required" });
+    return;
+  }
+  const content = String(req.body?.content ?? "");
+  const resolved = Boolean(req.body?.resolved);
+  await writeResolution(root, path, content, resolved);
+  res.json({ merge: await getMergeState(root), status: await getStatus(root) });
+}));
+
+api.post("/merge/resolve-all", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  await markResolved(root, await conflictedPaths(root));
+  res.json({ merge: await getMergeState(root), status: await getStatus(root) });
+}));
+
+api.post("/merge/abort", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  await abortMerge(root);
+  res.json({
+    repo: await refreshSession(root),
+    merge: await getMergeState(root),
+    status: await getStatus(root),
+  });
 }));
 
 /** Re-read the branch and HEAD into the registry after a ref-moving op. */

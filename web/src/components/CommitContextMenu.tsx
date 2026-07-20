@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import type { ResetMode } from "../state/store";
-import { IconBranch, IconChevron } from "./icons";
+import { IconBranch, IconChevron, IconCommit, IconMonitor } from "./icons";
 import "./CommitContextMenu.css";
 
 const MENU_W = 260;
@@ -14,7 +14,10 @@ export function CommitContextMenu() {
   const openBranchDialog = useStore((s) => s.openBranchDialog);
   const resetToCommit = useStore((s) => s.resetToCommit);
   const revertCommit = useStore((s) => s.revertCommit);
+  const checkoutCommit = useStore((s) => s.checkoutCommit);
+  const cherryPick = useStore((s) => s.cherryPick);
   const requestConfirm = useStore((s) => s.requestConfirm);
+  const requestChoice = useStore((s) => s.requestChoice);
 
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number }>({ left: -9999, top: -9999 });
@@ -61,6 +64,25 @@ export function CommitContextMenu() {
     resetToCommit(menu.hash, mode);
   };
 
+  const doCheckout = () => {
+    close();
+    checkoutCommit(menu.hash);
+  };
+
+  const doCherryPick = async () => {
+    close();
+    const choice = await requestChoice(
+      "Do you want to immediately commit the cherry picked changes?",
+      [
+        { label: "Yes", value: "yes", kind: "primary" },
+        { label: "No", value: "no", kind: "neutral" },
+        { label: "Cancel", value: "cancel", kind: "danger" },
+      ],
+    );
+    if (choice === "yes") cherryPick(menu.hash, false);
+    else if (choice === "no") cherryPick(menu.hash, true);
+  };
+
   return (
     <div
       className="ctx-menu"
@@ -68,9 +90,19 @@ export function CommitContextMenu() {
       style={{ left: pos.left, top: pos.top, width: MENU_W }}
       onContextMenu={(e) => e.preventDefault()}
     >
+      <button className="ctx-item" onClick={doCheckout}>
+        <IconMonitor width={15} height={15} className="ctx-icon" />
+        Checkout this commit
+      </button>
+
       <button className="ctx-item" onClick={() => openBranchDialog(menu.hash)}>
         <IconBranch width={15} height={15} className="ctx-icon" />
         Create branch here
+      </button>
+
+      <button className="ctx-item" onClick={doCherryPick}>
+        <IconCommit width={15} height={15} className="ctx-icon" />
+        Cherry pick commit
       </button>
 
       <div

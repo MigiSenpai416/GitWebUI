@@ -199,6 +199,20 @@ export const IconEyeOff = (p: P) => (
     <path d="M9.9 9.9a2.6 2.6 0 0 0 3.7 3.7" />
   </svg>
 );
+export const IconWarning = (p: P) => (
+  <svg {...base({ strokeWidth: 1.9, ...p })}>
+    <path d="M10.3 3.9 2.5 17.5A2 2 0 0 0 4.2 20.5h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+    <path d="M12 9v4.5" />
+    <path d="M12 17h.01" />
+  </svg>
+);
+export const IconExternal = (p: P) => (
+  <svg {...base({ width: 14, height: 14, ...p })}>
+    <path d="M14 4h6v6" />
+    <path d="M20 4 11 13" />
+    <path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
+  </svg>
+);
 export const IconRepo = (p: P) => (
   <svg {...base({ strokeWidth: 1.7, ...p })}>
     <path d="M6 4h11a1 1 0 0 1 1 1v13H7a1 1 0 0 1-1-1Z" />

@@ -88,6 +88,15 @@ export async function checkoutBranch(root: string, name: string): Promise<void> 
   await runGit(root, ["checkout", name]);
 }
 
+/**
+ * Check out a specific commit as a detached HEAD — a temporary, branch-less
+ * checkout of that commit's files. Switching back to a real branch discards it.
+ */
+export async function checkoutCommit(root: string, hash: string): Promise<void> {
+  if (hash.startsWith("-")) throw Object.assign(new Error("Invalid commit"), { status: 400 });
+  await runGit(root, ["checkout", "--detach", hash]);
+}
+
 /** Create a new branch at `hash` and check it out. */
 export async function createBranchAt(root: string, name: string, hash: string): Promise<void> {
   await runGit(root, ["checkout", "-b", name, hash]);

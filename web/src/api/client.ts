@@ -2,12 +2,14 @@ import type {
   Branch,
   Commit,
   CommitFile,
+  ConflictFileData,
   DiffResult,
   DiffSource,
   GitHubRepo,
   GitHubStatus,
   GitHubUser,
   IdentityInfo,
+  MergeState,
   RepoInfo,
   Remote,
   RemoteBranch,
@@ -119,7 +121,7 @@ export const api = {
       body: JSON.stringify({ hash, mode }),
     }),
   revert: (hash: string) =>
-    req<{ repo: RepoInfo }>("/api/revert", {
+    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("/api/revert", {
       method: "POST",
       body: JSON.stringify({ hash }),
     }),
@@ -201,7 +203,43 @@ export const api = {
 
   // Push / Pull
   push: () => req<{ branch: string; output: string; branches: Branch[] }>("/api/push", { method: "POST", body: "{}" }),
-  pull: () => req<{ output: string }>("/api/pull", { method: "POST", body: "{}" }),
+  pull: () =>
+    req<{ output: string; merge: MergeState; status: StatusResult }>("/api/pull", {
+      method: "POST",
+      body: "{}",
+    }),
+
+  // Checkout a commit (detached HEAD) / cherry-pick
+  checkoutCommit: (hash: string) =>
+    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("/api/checkout-commit", {
+      method: "POST",
+      body: JSON.stringify({ hash }),
+    }),
+  cherryPick: (hash: string, noCommit: boolean) =>
+    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("/api/cherry-pick", {
+      method: "POST",
+      body: JSON.stringify({ hash, noCommit }),
+    }),
+
+  // Merge / conflict resolution
+  mergeState: () => req<{ merge: MergeState }>("/api/merge/state"),
+  conflictFile: (path: string) =>
+    req<ConflictFileData>(`/api/conflict?path=${encodeURIComponent(path)}`),
+  resolveConflict: (path: string, content: string, resolved: boolean) =>
+    req<{ merge: MergeState; status: StatusResult }>("/api/conflict/resolve", {
+      method: "POST",
+      body: JSON.stringify({ path, content, resolved }),
+    }),
+  resolveAll: () =>
+    req<{ merge: MergeState; status: StatusResult }>("/api/merge/resolve-all", {
+      method: "POST",
+      body: "{}",
+    }),
+  abortMerge: () =>
+    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("/api/merge/abort", {
+      method: "POST",
+      body: "{}",
+    }),
 
   // Stash
   stashes: () => req<{ stashes: StashEntry[] }>("/api/stashes"),

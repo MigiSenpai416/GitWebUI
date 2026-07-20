@@ -4,6 +4,8 @@ import { RepoPicker } from "./components/RepoPicker";
 import { Toolbar } from "./components/Toolbar";
 import { CommitList } from "./components/CommitList";
 import { ChangesPanel } from "./components/ChangesPanel";
+import { ConflictPanel } from "./components/ConflictPanel";
+import { ConflictResolver } from "./components/ConflictResolver";
 import { CommitBox } from "./components/CommitBox";
 import { CommitDetails } from "./components/CommitDetails";
 import { DiffViewer } from "./components/DiffViewer/DiffViewer";
@@ -29,6 +31,8 @@ export function App() {
   const setNotice = useStore((s) => s.setNotice);
   const selectedCommitHash = useStore((s) => s.selectedCommitHash);
   const selectedFile = useStore((s) => s.selectedFile);
+  const mergeActive = useStore((s) => s.mergeState?.active ?? false);
+  const conflictPath = useStore((s) => s.conflictPath);
   const init = useStore((s) => s.init);
   const refreshAll = useStore((s) => s.refreshAll);
   const lastRefresh = useRef(0);
@@ -93,11 +97,16 @@ export function App() {
             <Sidebar />
             <div className="commit-pane">
               <CommitList />
-              {selectedFile && <DiffViewer />}
+              {!conflictPath && selectedFile && <DiffViewer />}
             </div>
             <div className="side-pane">
               {selectedCommitHash ? (
                 <CommitDetails />
+              ) : mergeActive ? (
+                <>
+                  <ConflictPanel />
+                  <CommitBox />
+                </>
               ) : (
                 <>
                   <ChangesPanel />
@@ -105,6 +114,7 @@ export function App() {
                 </>
               )}
             </div>
+            {conflictPath && <ConflictResolver />}
           </div>
         </>
       ) : (

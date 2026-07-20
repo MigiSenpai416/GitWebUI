@@ -128,6 +128,27 @@ export interface GitHubRepo {
   updatedAt: string | null;
 }
 
+export type MergeKind = "merge" | "rebase" | "cherry-pick" | "revert";
+
+/** State of an in-progress merge/rebase/cherry-pick/revert and its conflicts. */
+export interface MergeState {
+  active: boolean;
+  kind: MergeKind | null;
+  intoBranch: string;
+  fromLabel: string | null;
+  conflicted: string[];
+  message: string;
+}
+
+/** Three-way content for a single conflicted file. */
+export interface ConflictFileData {
+  path: string;
+  /** Working-tree file with conflict markers. */
+  merged: string;
+  oursLabel: string;
+  theirsLabel: string;
+}
+
 /** Identifies which file's diff is open in the viewer. */
 export interface SelectedFile {
   path: string;

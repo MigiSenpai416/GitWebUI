@@ -19,8 +19,7 @@
 .confirm-msg {
   text-align: center;
 }
-.confirm-yes,
-.confirm-no {
+.confirm-btn {
   flex-shrink: 0;
   border-radius: var(--radius-sm);
   padding: 4px 14px;
@@ -28,20 +27,28 @@
   font-weight: 600;
   border: 1px solid transparent;
 }
-.confirm-yes {
+.confirm-btn.primary {
+  background: var(--green, #3fb950);
+  color: #fff;
+  border-color: var(--green, #3fb950);
+}
+.confirm-btn.primary:hover {
+  filter: brightness(1.1);
+}
+.confirm-btn.danger {
   background: var(--red);
   color: #fff;
   border-color: var(--red);
 }
-.confirm-yes:hover {
+.confirm-btn.danger:hover {
   background: #ff6259;
   border-color: #ff6259;
 }
-.confirm-no {
+.confirm-btn.neutral {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-strong);
   border-color: rgba(255, 255, 255, 0.22);
 }
-.confirm-no:hover {
+.confirm-btn.neutral:hover {
   background: rgba(255, 255, 255, 0.16);
 }

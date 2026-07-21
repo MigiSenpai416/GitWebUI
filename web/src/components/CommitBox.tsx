@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { IconChevron, IconCommit, IconPush, IconSparkle } from "./icons";
 import "./CommitBox.css";
@@ -10,14 +10,43 @@ export function CommitBox() {
   const committing = useStore((s) => s.committing);
   const commit = useStore((s) => s.commit);
   const setNotice = useStore((s) => s.setNotice);
+  const commits = useStore((s) => s.commits);
+  const repo = useStore((s) => s.repo);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [amend, setAmend] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
 
+  // The draft the user had typed before enabling amend, restored on un-amend.
+  const preAmendDraft = useRef<{ title: string; description: string } | null>(null);
+
+  // The commit amend would rewrite: the one at HEAD.
+  const headCommit =
+    commits.find((c) => c.refs.some((r) => r.isHead)) ??
+    (repo?.head ? commits.find((c) => c.hash === repo.head) : undefined) ??
+    null;
+
   const stagedCount = status.staged.length;
   const canCommit = (stagedCount > 0 || amend) && title.trim().length > 0 && !committing;
+
+  // Checking amend prefills the fields with the previous commit's message (and
+  // stashes any current draft); unchecking restores that draft.
+  const toggleAmend = (checked: boolean) => {
+    setAmend(checked);
+    if (checked) {
+      preAmendDraft.current = { title, description };
+      if (headCommit) {
+        setTitle(headCommit.subject);
+        setDescription(headCommit.body);
+      }
+    } else {
+      const draft = preAmendDraft.current;
+      preAmendDraft.current = null;
+      setTitle(draft?.title ?? "");
+      setDescription(draft?.description ?? "");
+    }
+  };
 
   const doCommit = async () => {
     if (!canCommit) return;
@@ -26,6 +55,7 @@ export function CommitBox() {
       setTitle("");
       setDescription("");
       setAmend(false);
+      preAmendDraft.current = null;
     } catch {
       /* surfaced via store */
     }
@@ -54,7 +84,7 @@ export function CommitBox() {
       </div>
 
       <label className="amend-row">
-        <input type="checkbox" checked={amend} onChange={(e) => setAmend(e.target.checked)} />
+        <input type="checkbox" checked={amend} onChange={(e) => toggleAmend(e.target.checked)} />
         Amend previous commit
       </label>
 

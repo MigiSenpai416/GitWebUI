@@ -88,6 +88,40 @@ export async function checkoutBranch(root: string, name: string): Promise<void> 
   await runGit(root, ["checkout", name]);
 }
 
+/** True if a local branch named `name` already exists. */
+async function localBranchExists(root: string, name: string): Promise<boolean> {
+  try {
+    await runGit(root, ["show-ref", "--verify", "--quiet", `refs/heads/${name}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check out a remote-tracking branch as a local one, matching GitKraken's
+ * double-click: if a local branch of the same name already exists, just switch
+ * to it; otherwise create it tracking the remote (`git checkout -b <local>
+ * --track <remote>`) so the user can work on and push it.
+ *
+ * @param remoteName the remote-tracking name, e.g. "origin/feature/x"
+ * @param localName  the local branch to create/switch to, e.g. "feature/x"
+ */
+export async function checkoutRemoteBranch(
+  root: string,
+  remoteName: string,
+  localName: string,
+): Promise<void> {
+  if (remoteName.startsWith("-") || localName.startsWith("-")) {
+    throw Object.assign(new Error("Invalid branch name"), { status: 400 });
+  }
+  if (await localBranchExists(root, localName)) {
+    await runGit(root, ["checkout", localName]);
+  } else {
+    await runGit(root, ["checkout", "-b", localName, "--track", remoteName]);
+  }
+}
+
 /**
  * Check out a specific commit as a detached HEAD — a temporary, branch-less
  * checkout of that commit's files. Switching back to a real branch discards it.

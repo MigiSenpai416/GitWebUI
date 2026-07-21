@@ -212,6 +212,48 @@ button.sb-dir:hover {
   background: rgba(63, 185, 80, 0.16);
 }
 
+/* Local branch row: an eye/check slot + a checkout button sharing one row. */
+.sb-branch-local {
+  padding-left: 8px;
+  gap: 4px;
+}
+.sb-branch-local:hover {
+  background: var(--bg-row-hover);
+}
+.sb-branch-local.visible {
+  background: rgba(63, 185, 80, 0.08);
+}
+.sb-branch-local.visible .sb-item-name {
+  color: var(--text-strong);
+}
+/* Fixed-width leading slot keeps the branch name aligned whether the row shows a
+   check (current branch) or an eye toggle (all others). */
+.sb-branch-slot {
+  width: 19px;
+  flex-shrink: 0;
+}
+.sb-branch-local:hover .sb-eye {
+  opacity: 0.9;
+}
+.sb-branch-local.visible .sb-eye {
+  opacity: 1;
+  color: var(--green);
+}
+.sb-branch-checkout {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  text-align: left;
+  color: inherit;
+  font-size: var(--fs-sm);
+}
+
 .sb-remote > svg:first-child {
   color: var(--text-dim);
   flex-shrink: 0;

@@ -21,6 +21,7 @@ import {
   getBranches,
   getRemoteBranches,
   checkoutBranch,
+  checkoutRemoteBranch,
   checkoutCommit,
   createBranchAt,
   deleteBranch,
@@ -169,6 +170,18 @@ api.post("/checkout", h(async (req, res) => {
     return;
   }
   await checkoutBranch(root, name);
+  res.json({ repo: await refreshSession(root) });
+}));
+
+api.post("/checkout-remote", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const remote = String(req.body?.remote ?? "").trim();
+  const local = String(req.body?.local ?? "").trim();
+  if (!remote || !local) {
+    res.status(400).json({ error: "A remote branch is required" });
+    return;
+  }
+  await checkoutRemoteBranch(root, remote, local);
   res.json({ repo: await refreshSession(root) });
 }));
 

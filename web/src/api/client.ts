@@ -105,6 +105,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ branch }),
     }),
+  checkoutRemote: (remote: string, local: string) =>
+    req<{ repo: RepoInfo }>("/api/checkout-remote", {
+      method: "POST",
+      body: JSON.stringify({ remote, local }),
+    }),
   createBranch: (name: string, hash: string) =>
     req<{ repo: RepoInfo }>("/api/branch/create", {
       method: "POST",

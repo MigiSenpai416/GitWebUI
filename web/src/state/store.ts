@@ -107,6 +107,11 @@ function basename(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
+/** Full ref for a local branch — the log revision used to show its commits. */
+export function localRef(name: string): string {
+  return `refs/heads/${name}`;
+}
+
 type ViewMode = "diff" | "file";
 /** How the changes sidebar groups files. */
 export type FileLayout = "path" | "tree";
@@ -258,6 +263,7 @@ interface AppState {
   loadRemoteBranches: () => Promise<void>;
   toggleBranchVisibility: (ref: string) => void;
   checkout: (branch: string) => Promise<void>;
+  checkoutRemote: (remote: string, local: string) => Promise<void>;
   deleteBranch: (name: string) => Promise<void>;
 
   loadRemotes: () => Promise<void>;
@@ -612,6 +618,16 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const { branches } = await api.branches();
       set({ branches });
+      // Drop any visible LOCAL refs whose branch no longer exists (e.g. deleted
+      // elsewhere); leave remote refs to loadRemoteBranches.
+      const cur = get().visibleRefs;
+      const pruned = cur.filter(
+        (ref) => !ref.startsWith("refs/heads/") || branches.some((b) => localRef(b.name) === ref),
+      );
+      if (pruned.length !== cur.length) {
+        set({ visibleRefs: pruned });
+        writeVisibleFor(get().repo?.root ?? "", pruned);
+      }
     } catch {
       /* non-fatal */
     }
@@ -621,9 +637,12 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const { branches } = await api.remoteBranches();
       set({ remoteBranches: branches });
-      // Drop any visible refs whose branch no longer exists on the remote.
+      // Drop any visible REMOTE refs whose branch no longer exists on the remote.
+      // Local refs (refs/heads/…) are left untouched — loadBranches prunes those.
       const cur = get().visibleRefs;
-      const pruned = cur.filter((ref) => branches.some((b) => b.ref === ref));
+      const pruned = cur.filter(
+        (ref) => !ref.startsWith("refs/remotes/") || branches.some((b) => b.ref === ref),
+      );
       if (pruned.length !== cur.length) {
         set({ visibleRefs: pruned });
         writeVisibleFor(get().repo?.root ?? "", pruned);
@@ -658,11 +677,32 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  async checkoutRemote(remote: string, local: string) {
+    set({ error: null });
+    try {
+      const { repo } = await api.checkoutRemote(remote, local);
+      set({ repo, selectedCommitHash: null, commitFiles: [], selectedFile: null });
+      syncActiveTab(get, set, repo);
+      await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
+      set({ notice: `Checked out ${local} (tracking ${remote}).` });
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
   async deleteBranch(name: string) {
     set({ error: null });
     try {
       const { branches } = await api.deleteBranch(name);
       set({ branches });
+      // If the branch's commits were shown in the graph, stop requesting its now
+      // non-existent ref (a bad revision would break the log query).
+      const ref = localRef(name);
+      if (get().visibleRefs.includes(ref)) {
+        const next = get().visibleRefs.filter((r) => r !== ref);
+        set({ visibleRefs: next });
+        writeVisibleFor(get().repo?.root ?? "", next);
+      }
       // A deleted branch's ref badge should disappear from the graph.
       await get().loadCommits(true);
     } catch (e) {
@@ -1337,7 +1377,9 @@ function applyMerge(
  * rather than hidden. Always pruned to refs that still exist.
  */
 function resolveVisibleRefs(state: AppState, root: string): string[] {
-  const exists = (ref: string) => state.remoteBranches.some((b) => b.ref === ref);
+  const exists = (ref: string) =>
+    state.remoteBranches.some((b) => b.ref === ref) ||
+    state.branches.some((b) => localRef(b.name) === ref);
   const stored = readVisibleFor(root);
   if (stored !== null) return stored.filter(exists);
   const upstream = state.branches.find((b) => b.current)?.upstream ?? null;

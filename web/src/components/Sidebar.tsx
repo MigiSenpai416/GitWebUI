@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useStore } from "../state/store";
+import { localRef, useStore } from "../state/store";
 import type { Branch, RemoteBranch } from "../types";
 import { buildTree, type TreeNode } from "./fileTree";
 import {
@@ -26,6 +26,7 @@ export function Sidebar() {
   const toggleBranchVisibility = useStore((s) => s.toggleBranchVisibility);
   const repo = useStore((s) => s.repo);
   const checkout = useStore((s) => s.checkout);
+  const checkoutRemote = useStore((s) => s.checkoutRemote);
   const openAddRemote = useStore((s) => s.openAddRemote);
   const removeRemote = useStore((s) => s.removeRemote);
   const requestConfirm = useStore((s) => s.requestConfirm);
@@ -87,7 +88,13 @@ export function Sidebar() {
           <div className="sb-empty">No branches</div>
         ) : (
           branches.map((b) => (
-            <BranchRow key={b.name} branch={b} onCheckout={() => checkout(b.name)} />
+            <BranchRow
+              key={b.name}
+              branch={b}
+              visible={visibleSet.has(localRef(b.name))}
+              onCheckout={() => checkout(b.name)}
+              onToggleVisible={() => toggleBranchVisibility(localRef(b.name))}
+            />
           ))
         )}
       </Section>
@@ -116,6 +123,7 @@ export function Sidebar() {
                 collapsedDirs={collapsedDirs}
                 toggleDir={toggleDir}
                 onToggleVisible={toggleBranchVisibility}
+                onCheckout={(b) => checkoutRemote(b.name, b.shortName)}
                 onRemove={remote ? () => onRemoveRemote(name) : undefined}
               />
             );
@@ -166,20 +174,48 @@ function Section({ icon, label, count, open, onToggle, action, children }: Secti
   );
 }
 
-function BranchRow({ branch, onCheckout }: { branch: Branch; onCheckout: () => void }) {
+interface BranchRowProps {
+  branch: Branch;
+  visible: boolean;
+  onCheckout: () => void;
+  onToggleVisible: () => void;
+}
+
+/**
+ * A local branch: click the name to check it out; toggle the eye to show or hide
+ * the branch's commits in the graph (so you can, e.g., cherry-pick from it). The
+ * current branch's commits are always shown, so it carries a check, not an eye.
+ */
+function BranchRow({ branch, visible, onCheckout, onToggleVisible }: BranchRowProps) {
+  const current = branch.current;
   return (
-    <button
-      className={"sb-item" + (branch.current ? " current" : "")}
-      onClick={onCheckout}
-      title={branch.upstream ? `tracks ${branch.upstream}` : branch.name}
+    <div
+      className={
+        "sb-item sb-branch-local" +
+        (current ? " current" : "") +
+        (visible && !current ? " visible" : "")
+      }
     >
-      {branch.current ? (
-        <span className="sb-check">✓</span>
+      {current ? (
+        <span className="sb-check sb-branch-slot">✓</span>
       ) : (
-        <IconBranch width={14} height={14} className="sb-item-icon" />
+        <button
+          className="sb-eye sb-branch-slot"
+          title={visible ? "Hide this branch's commits" : "Show this branch's commits in the graph"}
+          onClick={onToggleVisible}
+        >
+          {visible ? <IconEye width={15} height={15} /> : <IconEyeOff width={15} height={15} />}
+        </button>
       )}
-      <span className="sb-item-name">{branch.name}</span>
-    </button>
+      <button
+        className="sb-branch-checkout"
+        onClick={onCheckout}
+        title={branch.upstream ? `tracks ${branch.upstream}` : `Check out ${branch.name}`}
+      >
+        <IconBranch width={14} height={14} className="sb-item-icon" />
+        <span className="sb-item-name">{branch.name}</span>
+      </button>
+    </div>
   );
 }
 
@@ -191,6 +227,7 @@ interface RemoteGroupProps {
   collapsedDirs: Set<string>;
   toggleDir: (key: string) => void;
   onToggleVisible: (ref: string) => void;
+  onCheckout: (branch: RemoteBranch) => void;
   onRemove?: () => void;
 }
 
@@ -203,6 +240,7 @@ function RemoteGroup({
   collapsedDirs,
   toggleDir,
   onToggleVisible,
+  onCheckout,
   onRemove,
 }: RemoteGroupProps) {
   const tree = useMemo(
@@ -238,6 +276,7 @@ function RemoteGroup({
           collapsedDirs={collapsedDirs}
           toggleDir={toggleDir}
           onToggleVisible={onToggleVisible}
+          onCheckout={onCheckout}
         />
       ))}
     </>
@@ -245,6 +284,17 @@ function RemoteGroup({
 }
 
 type BranchLeaf = { path: string; branch: RemoteBranch };
+
+interface TreeRowsProps {
+  node: TreeNode<BranchLeaf>;
+  keyPrefix: string;
+  depth: number;
+  visibleSet: Set<string>;
+  collapsedDirs: Set<string>;
+  toggleDir: (key: string) => void;
+  onToggleVisible: (ref: string) => void;
+  onCheckout: (branch: RemoteBranch) => void;
+}
 
 function RemoteTreeRows({
   node,
@@ -254,38 +304,19 @@ function RemoteTreeRows({
   collapsedDirs,
   toggleDir,
   onToggleVisible,
-}: {
-  node: TreeNode<BranchLeaf>;
-  keyPrefix: string;
-  depth: number;
-  visibleSet: Set<string>;
-  collapsedDirs: Set<string>;
-  toggleDir: (key: string) => void;
-  onToggleVisible: (ref: string) => void;
-}) {
+  onCheckout,
+}: TreeRowsProps) {
   if (node.type === "file") {
     const b = node.file.branch;
-    const visible = visibleSet.has(b.ref);
     return (
-      <div
-        className={"sb-item sb-branch" + (visible ? " visible" : "")}
-        style={{ paddingLeft: 8 + depth * 14 }}
-        title={`${b.name} — ${visible ? "hide" : "show"} its commits`}
-        onClick={() => onToggleVisible(b.ref)}
-      >
-        <button
-          className="sb-eye"
-          title={visible ? "Hide branch commits" : "Show branch commits"}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleVisible(b.ref);
-          }}
-        >
-          {visible ? <IconEye width={15} height={15} /> : <IconEyeOff width={15} height={15} />}
-        </button>
-        <IconBranch width={13} height={13} className="sb-item-icon" />
-        <span className="sb-item-name">{node.name}</span>
-      </div>
+      <RemoteBranchLeaf
+        branch={b}
+        label={node.name}
+        depth={depth}
+        visible={visibleSet.has(b.ref)}
+        onToggleVisible={onToggleVisible}
+        onCheckout={onCheckout}
+      />
     );
   }
   const key = keyPrefix + "::" + node.path;
@@ -312,9 +343,55 @@ function RemoteTreeRows({
             collapsedDirs={collapsedDirs}
             toggleDir={toggleDir}
             onToggleVisible={onToggleVisible}
+            onCheckout={onCheckout}
           />
         ))}
     </>
+  );
+}
+
+interface RemoteBranchLeafProps {
+  branch: RemoteBranch;
+  label: string;
+  depth: number;
+  visible: boolean;
+  onToggleVisible: (ref: string) => void;
+  onCheckout: (branch: RemoteBranch) => void;
+}
+
+/**
+ * A remote-tracking branch leaf. A single click does nothing; toggling the eye
+ * shows/hides the branch's commits in the graph, and a double click checks it
+ * out as a local tracking branch (like GitKraken).
+ */
+function RemoteBranchLeaf({
+  branch,
+  label,
+  depth,
+  visible,
+  onToggleVisible,
+  onCheckout,
+}: RemoteBranchLeafProps) {
+  return (
+    <div
+      className={"sb-item sb-branch" + (visible ? " visible" : "")}
+      style={{ paddingLeft: 8 + depth * 14 }}
+      title={`${branch.name} — double-click to check out; toggle the eye to ${visible ? "hide" : "show"} its commits`}
+      onDoubleClick={() => onCheckout(branch)}
+    >
+      <button
+        className="sb-eye"
+        title={visible ? "Hide branch commits" : "Show branch commits"}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleVisible(branch.ref);
+        }}
+      >
+        {visible ? <IconEye width={15} height={15} /> : <IconEyeOff width={15} height={15} />}
+      </button>
+      <IconBranch width={13} height={13} className="sb-item-icon" />
+      <span className="sb-item-name">{label}</span>
+    </div>
   );
 }
 

@@ -92,8 +92,13 @@
 .sb-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  /* No gap while collapsed: it would still occupy width between zero-width
+     buttons and shift a two-action section's count left of the others. */
+  gap: 0;
   flex-shrink: 0;
+}
+.sb-section.has-action:hover .sb-actions {
+  gap: 2px;
 }
 .sb-add {
   display: inline-flex;

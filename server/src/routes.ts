@@ -468,7 +468,8 @@ api.post("/stash/drop", h(async (req, res) => {
 
 api.post("/push", h(async (req, res) => {
   const root = requireRepoRoot(req);
-  const result = await push(root);
+  const force = Boolean(req.body?.force);
+  const result = await push(root, { force });
   await refreshSession(root);
   res.json({ ...result, branches: await getBranches(root) });
 }));

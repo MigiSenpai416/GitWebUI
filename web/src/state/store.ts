@@ -167,6 +167,8 @@ export interface ConfirmButton {
 export interface ConfirmRequest {
   message: string;
   buttons: ConfirmButton[];
+  /** When set, the banner shows a checkbox with this label (e.g. "Don't ask again"). */
+  checkbox?: string;
 }
 
 interface AppState {
@@ -236,6 +238,8 @@ interface AppState {
 
   /** Active destructive-action confirmation, if any. */
   confirm: ConfirmRequest | null;
+  /** Current state of the active confirmation's checkbox (if it has one). */
+  confirmCheckbox: boolean;
 
   init: () => Promise<void>;
   /** Set the initial password (first run), then enter the app. */
@@ -315,8 +319,13 @@ interface AppState {
   /** Show a two-button confirm banner; resolves true if confirmed, false otherwise. */
   requestConfirm: (message: string, confirmLabel?: string) => Promise<boolean>;
   /** Show a banner with custom buttons; resolves the chosen value, or null if dismissed. */
-  requestChoice: (message: string, buttons: ConfirmButton[]) => Promise<string | null>;
+  requestChoice: (
+    message: string,
+    buttons: ConfirmButton[],
+    options?: { checkbox?: string },
+  ) => Promise<string | null>;
   resolveConfirm: (value: string | null) => void;
+  setConfirmCheckbox: (checked: boolean) => void;
 
   openCommitMenu: (menu: CommitMenu) => void;
   closeCommitMenu: () => void;
@@ -410,6 +419,7 @@ export const useStore = create<AppState>((set, get) => ({
   branchDialogHash: null,
   refreshTick: 0,
   confirm: null,
+  confirmCheckbox: false,
 
   async init() {
     try {
@@ -750,17 +760,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   async push() {
     if (get().remoteBusy) return;
-    set({ remoteBusy: true, error: null });
-    try {
-      const { branch, branches } = await api.push();
-      set({ branches });
-      await get().loadCommits(true);
-      set({ notice: `Pushed ${branch}.` });
-    } catch (e) {
-      reportError(set, e);
-    } finally {
-      set({ remoteBusy: false });
-    }
+    await runPush(get, set, false);
   },
 
   async pull() {
@@ -1066,17 +1066,21 @@ export const useStore = create<AppState>((set, get) => ({
       ])
       .then((v) => v === "confirm");
   },
-  requestChoice(message: string, buttons: ConfirmButton[]) {
+  requestChoice(message: string, buttons: ConfirmButton[], options?: { checkbox?: string }) {
     return new Promise<string | null>((resolve) => {
       confirmResolver = resolve;
-      set({ confirm: { message, buttons } });
+      set({ confirm: { message, buttons, checkbox: options?.checkbox }, confirmCheckbox: false });
     });
   },
   resolveConfirm(value: string | null) {
     const resolve = confirmResolver;
     confirmResolver = null;
+    // Leave confirmCheckbox as-is so the caller can read it right after awaiting.
     set({ confirm: null });
     resolve?.(value);
+  },
+  setConfirmCheckbox(checked: boolean) {
+    set({ confirmCheckbox: checked });
   },
 
   openCommitMenu(menu: CommitMenu) {
@@ -1282,6 +1286,84 @@ export const useStore = create<AppState>((set, get) => ({
 
 type StoreGet = () => AppState;
 type StoreSet = (partial: Partial<AppState>) => void;
+
+const FORCE_PUSH_SKIP_KEY = "gwui.skipForcePushConfirm";
+
+/**
+ * Push the current branch, handling a non-fast-forward rejection like GitKraken:
+ * whenever the local and remote tips have diverged (amend, rebase, reset, or a
+ * remote that moved), offer Pull (to integrate the remote's work) or a confirmed
+ * Force Push. The force uses --force-with-lease server-side, so it overwrites in
+ * every divergence case except an unfetched remote advance (which asks to pull).
+ */
+async function runPush(get: StoreGet, set: StoreSet, force: boolean): Promise<void> {
+  set({ remoteBusy: true, error: null });
+  let rejected: { branch: string; upstream: string | null } | null = null;
+  try {
+    const res = await api.push(force);
+    set({ branches: res.branches });
+    if (res.rejected && !force) {
+      rejected = { branch: res.branch, upstream: res.upstream ?? null };
+    } else {
+      await get().loadCommits(true);
+      set({ notice: force ? `Force-pushed ${res.branch}.` : `Pushed ${res.branch}.` });
+    }
+  } catch (e) {
+    reportError(set, e);
+  } finally {
+    set({ remoteBusy: false });
+  }
+  // Prompt only after clearing remoteBusy so the follow-up Pull/Force can run.
+  if (rejected) await promptRejectedPush(get, set, rejected);
+}
+
+/** The Pull / Force Push / Cancel banner shown when a push is rejected. */
+async function promptRejectedPush(
+  get: StoreGet,
+  set: StoreSet,
+  rejected: { branch: string; upstream: string | null },
+): Promise<void> {
+  const target = rejected.upstream ? `'refs/remotes/${rejected.upstream}'` : "the remote";
+  const choice = await get().requestChoice(
+    `'refs/heads/${rejected.branch}' is behind ${target}. Update your branch by doing a Pull.`,
+    [
+      { label: "Pull (fast-forward if possible)", value: "pull", kind: "primary" },
+      { label: "Force Push", value: "force", kind: "danger" },
+      { label: "Cancel", value: "cancel", kind: "neutral" },
+    ],
+  );
+  if (choice === "pull") {
+    await get().pull();
+  } else if (choice === "force") {
+    if (await confirmForcePush(get)) await runPush(get, set, true);
+  }
+}
+
+/** Confirm a destructive force push, honoring a saved "Don't ask again" choice. */
+async function confirmForcePush(get: StoreGet): Promise<boolean> {
+  try {
+    if (localStorage.getItem(FORCE_PUSH_SKIP_KEY) === "1") return true;
+  } catch {
+    /* ignore storage failures */
+  }
+  const value = await get().requestChoice(
+    "Force push is a destructive action and cannot be undone. Are you sure?",
+    [
+      { label: "Force Push", value: "force", kind: "danger" },
+      { label: "Cancel", value: "cancel", kind: "neutral" },
+    ],
+    { checkbox: "Don't ask again" },
+  );
+  if (value !== "force") return false;
+  if (get().confirmCheckbox) {
+    try {
+      localStorage.setItem(FORCE_PUSH_SKIP_KEY, "1");
+    } catch {
+      /* ignore storage failures */
+    }
+  }
+  return true;
+}
 
 /** Reset the active-repo view to the empty picker (no repo targeted). */
 function showPicker(set: StoreSet): void {

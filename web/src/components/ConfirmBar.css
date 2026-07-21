@@ -52,3 +52,18 @@
 .confirm-btn.neutral:hover {
   background: rgba(255, 255, 255, 0.16);
 }
+.confirm-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: 4px;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.confirm-check input {
+  cursor: pointer;
+  accent-color: var(--red);
+}

@@ -207,7 +207,14 @@ export const api = {
     ),
 
   // Push / Pull
-  push: () => req<{ branch: string; output: string; branches: Branch[] }>("/api/push", { method: "POST", body: "{}" }),
+  push: (force = false) =>
+    req<{
+      branch: string;
+      output: string;
+      rejected?: boolean;
+      upstream?: string | null;
+      branches: Branch[];
+    }>("/api/push", { method: "POST", body: JSON.stringify({ force }) }),
   pull: () =>
     req<{ output: string; merge: MergeState; status: StatusResult }>("/api/pull", {
       method: "POST",

@@ -79,34 +79,74 @@ function rethrowRemoteError(e: unknown, token: string | null): never {
   throw e;
 }
 
-async function hasUpstream(root: string, branch: string): Promise<boolean> {
+/** The branch's upstream short name (e.g. "origin/main"), or null if unset. */
+async function upstreamName(root: string, branch: string): Promise<string | null> {
   try {
-    await runGit(root, ["rev-parse", "--abbrev-ref", "--verify", `${branch}@{upstream}`]);
-    return true;
+    const { stdout } = await runGit(root, [
+      "rev-parse",
+      "--abbrev-ref",
+      "--verify",
+      `${branch}@{upstream}`,
+    ]);
+    return stdout.trim() || null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** A push rejected because the remote has work the local branch lacks. */
+function isNonFastForward(msg: string): boolean {
+  return /\[rejected\]|non-fast-forward|fetch first|tip of your (current )?branch is behind|Updates were rejected/i.test(
+    msg,
+  );
 }
 
 export interface PushResult {
   branch: string;
   output: string;
+  /** True when a normal push was rejected as non-fast-forward (needs pull/force). */
+  rejected?: boolean;
+  /** The upstream short name (e.g. "origin/main") when known. */
+  upstream?: string | null;
 }
 
 /**
- * Push the current branch. If it has no upstream, set one on `origin`.
- * Requires an `origin` remote; HTTPS remotes use the stored token.
+ * Push the current branch. If it has no upstream, set one on `origin`. A normal
+ * push rejected as non-fast-forward — for ANY reason the local and remote tips
+ * have diverged (an amended/rebased/reset local branch, or a remote that gained
+ * commits) — resolves to `{ rejected: true }` rather than throwing, so the
+ * caller can offer Pull or Force Push. With `force`, push with
+ * `--force-with-lease`, which overwrites the remote tip in every divergence case
+ * EXCEPT one: it refuses if the remote moved in ways we haven't fetched, so a
+ * teammate's unpulled commits can't be silently clobbered (that case surfaces a
+ * clear "pull first" error). Requires an `origin` remote; HTTPS remotes use the
+ * stored token.
  */
-export async function push(root: string): Promise<PushResult> {
+export async function push(root: string, opts: { force?: boolean } = {}): Promise<PushResult> {
   const token = await getToken();
   const branch = await currentBranch(root);
-  const upstream = await hasUpstream(root, branch);
+  const upstream = await upstreamName(root, branch);
   const args = [...authArgs(token), "push"];
+  if (opts.force) args.push("--force-with-lease");
   if (!upstream) args.push("--set-upstream", "origin", branch);
   try {
     const { stderr } = await runGit(root, args, { env: AUTH_ENV });
     return { branch, output: stderr.trim() };
   } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!opts.force && isNonFastForward(msg)) {
+      return { branch, output: msg, rejected: true, upstream };
+    }
+    // A force-with-lease that fails on "stale info" means the remote gained
+    // commits we never fetched — the protection working as intended.
+    if (opts.force && /stale info/i.test(msg)) {
+      throw Object.assign(
+        new Error(
+          "The remote has new commits you haven't fetched yet. Pull first, then push — force push won't overwrite unpulled work.",
+        ),
+        { status: 409 },
+      );
+    }
     rethrowRemoteError(e, token);
   }
 }

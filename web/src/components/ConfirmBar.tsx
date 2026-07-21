@@ -11,6 +11,8 @@ import "./ConfirmBar.css";
 export function ConfirmBar() {
   const confirm = useStore((s) => s.confirm);
   const resolve = useStore((s) => s.resolveConfirm);
+  const checkbox = useStore((s) => s.confirmCheckbox);
+  const setCheckbox = useStore((s) => s.setConfirmCheckbox);
 
   useEffect(() => {
     if (!confirm) return;
@@ -37,6 +39,16 @@ export function ConfirmBar() {
           {b.label}
         </button>
       ))}
+      {confirm.checkbox && (
+        <label className="confirm-check">
+          <input
+            type="checkbox"
+            checked={checkbox}
+            onChange={(e) => setCheckbox(e.target.checked)}
+          />
+          {confirm.checkbox}
+        </label>
+      )}
     </div>
   );
 }

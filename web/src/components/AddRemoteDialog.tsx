@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { BusyLabel } from "./icons";
 import { useStore } from "../state/store";
 import "./AccountDialogs.css";
 
@@ -112,7 +113,7 @@ export function AddRemoteDialog() {
               <div className="acct-spacer" />
               <button className="dialog-btn" onClick={close} disabled={urlBusy}>Cancel</button>
               <button className="dialog-btn dialog-btn-primary" onClick={submitUrl} disabled={urlBusy}>
-                {urlBusy ? "Adding…" : "Add remote"}
+                {urlBusy ? <BusyLabel>Adding…</BusyLabel> : "Add remote"}
               </button>
             </div>
           </>
@@ -153,7 +154,7 @@ export function AddRemoteDialog() {
               <div className="acct-spacer" />
               <button className="dialog-btn" onClick={close} disabled={remoteBusy}>Cancel</button>
               <button className="dialog-btn dialog-btn-primary" onClick={submitGitHub} disabled={remoteBusy}>
-                {remoteBusy ? "Creating…" : "Create remote and push local refs"}
+                {remoteBusy ? <BusyLabel>Creating…</BusyLabel> : "Create remote and push local refs"}
               </button>
             </div>
           </>

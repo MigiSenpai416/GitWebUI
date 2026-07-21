@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { BusyLabel } from "./icons";
 import { useStore } from "../state/store";
 import "./AccountDialogs.css";
 
@@ -107,7 +108,7 @@ export function GitHubDialog() {
             Close
           </button>
           <button className="dialog-btn dialog-btn-primary" onClick={save} disabled={busy}>
-            {busy ? "Checking…" : connected ? "Update token" : "Connect"}
+            {busy ? <BusyLabel>Checking…</BusyLabel> : connected ? "Update token" : "Connect"}
           </button>
         </div>
       </div>

@@ -1,4 +1,5 @@
-import type { SVGProps } from "react";
+import type { ReactNode, SVGProps } from "react";
+import { MARK_LANES, MARK_NODES, MARK_NODE_R, MARK_STROKE } from "../brand";
 
 /** Compact line-icon set approximating the GitKraken toolbar/sidebar glyphs. */
 type P = SVGProps<SVGSVGElement>;
@@ -14,6 +15,20 @@ const base = (props: P) => ({
   ...props,
 });
 
+/**
+ * The GitWebUI mark: a commit lane with one branch leaving it. Drawn from the
+ * shared geometry in brand.ts, so the favicon can't drift from the app's.
+ */
+export const IconMark = (p: P) => (
+  <svg {...base(p)} strokeWidth={MARK_STROKE}>
+    {MARK_LANES.map((d) => (
+      <path key={d} d={d} />
+    ))}
+    {MARK_NODES.map((n) => (
+      <circle key={`${n.cx}-${n.cy}`} cx={n.cx} cy={n.cy} r={MARK_NODE_R} fill="currentColor" stroke="none" />
+    ))}
+  </svg>
+);
 export const IconUndo = (p: P) => (
   <svg {...base(p)}>
     <path d="M9 7 4 12l5 5" />
@@ -171,6 +186,20 @@ export const IconMonitor = (p: P) => (
     <rect x="3" y="4" width="18" height="12" rx="1.5" />
     <path d="M9 20h6M12 16v4" />
   </svg>
+);
+/** Indeterminate activity ring — shown while the action a control started runs. */
+export const IconSpinner = (p: P) => (
+  <svg {...base(p)} className={"spin" + (p.className ? ` ${p.className}` : "")}>
+    <circle cx="12" cy="12" r="8.5" opacity="0.25" />
+    <path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5" />
+  </svg>
+);
+/** Spinner + text for a button waiting on the network, e.g. "Cloning…". */
+export const BusyLabel = ({ children }: { children: ReactNode }) => (
+  <span className="btn-busy">
+    <IconSpinner width={13} height={13} />
+    {children}
+  </span>
 );
 export const IconRefresh = (p: P) => (
   <svg {...base(p)}>

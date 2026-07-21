@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useStore } from "../state/store";
-import { IconChevron, IconCommit, IconPush, IconSparkle } from "./icons";
+import { BusyLabel, IconChevron, IconCommit, IconPush, IconSparkle } from "./icons";
 import "./CommitBox.css";
 
 const SUMMARY_LIMIT = 72;
@@ -61,8 +61,9 @@ export function CommitBox() {
     }
   };
 
+  // Hooks can make a commit take a moment, so it gets the same wait treatment.
   const buttonLabel = committing
-    ? "Committing…"
+    ? <BusyLabel>Committing…</BusyLabel>
     : stagedCount > 0 || amend
       ? `Commit ${stagedCount} file${stagedCount === 1 ? "" : "s"}${amend ? " (amend)" : ""}`
       : "Stage Changes to Commit";

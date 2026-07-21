@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { BusyLabel } from "./icons";
 import { useStore } from "../state/store";
 import { api } from "../api/client";
 import type { GitHubRepo } from "../types";
@@ -115,7 +116,7 @@ export function CloneDialog() {
                 {error && <div className="acct-error">{error}</div>}
                 <div className="dialog-actions clone-actions">
                   <button className="dialog-btn dialog-btn-primary" onClick={() => cloneUrl(url)} disabled={busy}>
-                    {busy ? "Cloning…" : "Clone the repo!"}
+                    {busy ? <BusyLabel>Cloning…</BusyLabel> : "Clone the repo!"}
                   </button>
                 </div>
               </>
@@ -290,7 +291,7 @@ function GitHubPicker({
       {error && <div className="acct-error">{error}</div>}
       <div className="dialog-actions clone-actions">
         <button className="dialog-btn dialog-btn-primary" onClick={submit} disabled={busy}>
-          {busy ? "Cloning…" : "Clone the repo!"}
+          {busy ? <BusyLabel>Cloning…</BusyLabel> : "Clone the repo!"}
         </button>
       </div>
     </>

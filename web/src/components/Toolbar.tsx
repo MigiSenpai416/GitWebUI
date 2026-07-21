@@ -11,6 +11,7 @@ import {
   IconPush,
   IconRedo,
   IconSearch,
+  IconSpinner,
   IconStash,
   IconTerminal,
   IconUndo,
@@ -24,6 +25,7 @@ export function Toolbar() {
   const push = useStore((s) => s.push);
   const pull = useStore((s) => s.pull);
   const remoteBusy = useStore((s) => s.remoteBusy);
+  const busyAction = useStore((s) => s.busyAction);
   const stash = useStore((s) => s.stash);
   const stashPop = useStore((s) => s.stashPop);
   const stashes = useStore((s) => s.stashes);
@@ -67,10 +69,20 @@ export function Toolbar() {
         <div className="tb-divider" />
 
         <div className="tb-group">
-          <ToolButton label="Pull" onClick={() => pull()} disabled={remoteBusy}>
+          <ToolButton
+            label="Pull"
+            onClick={() => pull()}
+            disabled={remoteBusy}
+            busy={busyAction === "pull"}
+          >
             <IconPull />
           </ToolButton>
-          <ToolButton label="Push" onClick={() => push()} disabled={remoteBusy}>
+          <ToolButton
+            label="Push"
+            onClick={() => push()}
+            disabled={remoteBusy}
+            busy={busyAction === "push"}
+          >
             <IconPush />
           </ToolButton>
           <ToolButton label="Branch" onClick={() => setBranchOpen((v) => !v)}>
@@ -80,6 +92,7 @@ export function Toolbar() {
             label="Stash"
             onClick={() => stash()}
             disabled={remoteBusy || !hasChanges}
+            busy={busyAction === "stash"}
             title={hasChanges ? "Stash all changes" : "No changes to stash"}
           >
             <IconStash />
@@ -88,6 +101,7 @@ export function Toolbar() {
             label="Pop"
             onClick={() => stashPop(0)}
             disabled={remoteBusy || stashes.length === 0}
+            busy={busyAction === "pop"}
             badge={stashes.length || undefined}
             title={stashes.length ? "Apply the latest stash" : "No stashes"}
           >
@@ -136,22 +150,39 @@ interface ToolButtonProps {
   caret?: boolean;
   onClick?: () => void;
   disabled?: boolean;
+  /** This button's action is running — its icon becomes a spinner. */
+  busy?: boolean;
   title?: string;
   /** Small count bubble shown on the icon (e.g. stash count on Pop). */
   badge?: number;
   children: React.ReactNode;
 }
 
-function ToolButton({ label, caret, onClick, disabled, title, badge, children }: ToolButtonProps) {
+function ToolButton({
+  label,
+  caret,
+  onClick,
+  disabled,
+  busy,
+  title,
+  badge,
+  children,
+}: ToolButtonProps) {
   return (
-    <button className="tb-btn" onClick={onClick} title={title ?? label} disabled={disabled}>
+    <button
+      className={"tb-btn" + (busy ? " busy" : "")}
+      onClick={onClick}
+      title={busy ? `${label}…` : title ?? label}
+      disabled={disabled}
+      aria-busy={busy || undefined}
+    >
       <span className="tb-btn-label">
         {label}
         {caret && <IconCaretDown className="tb-btn-label-caret" />}
       </span>
       <span className="tb-btn-icon">
-        {children}
-        {badge != null && <span className="tb-btn-badge">{badge}</span>}
+        {busy ? <IconSpinner /> : children}
+        {badge != null && !busy && <span className="tb-btn-badge">{badge}</span>}
       </span>
     </button>
   );

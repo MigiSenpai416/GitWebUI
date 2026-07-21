@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { api } from "../api/client";
 import type { GitHubAccount, GitHubLabel, PrContext, PrMeta } from "../types";
-import { IconCaretDown, IconClose, IconPullRequest } from "./icons";
+import { BusyLabel, IconCaretDown, IconClose, IconPullRequest } from "./icons";
 import "./AccountDialogs.css";
 import "./PullRequestDialog.css";
 
@@ -410,7 +410,7 @@ export function PullRequestDialog() {
                 Cancel
               </button>
               <button className="dialog-btn dialog-btn-primary" onClick={submit} disabled={busy}>
-                {busy ? "Creating…" : "Create Pull Request"}
+                {busy ? <BusyLabel>Creating…</BusyLabel> : "Create Pull Request"}
               </button>
             </div>
           </>

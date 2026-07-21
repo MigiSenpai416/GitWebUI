@@ -1,5 +1,6 @@
 import { useStore } from "../state/store";
-import { IconClose, IconPlus, IconRepo } from "./icons";
+import { repoColor } from "../brand";
+import { IconClose, IconMark, IconPlus, IconRepo } from "./icons";
 import "./TabBar.css";
 
 /** Workspace tab strip: one tab per open repo (or empty picker), plus a New Tab button. */
@@ -9,10 +10,15 @@ export function TabBar() {
   const selectTab = useStore((s) => s.selectTab);
   const closeTab = useStore((s) => s.closeTab);
   const newTab = useStore((s) => s.newTab);
+  const status = useStore((s) => s.status);
+
+  // Only the active repo's working tree is loaded, so only its tab can report
+  // uncommitted changes.
+  const activeDirty = status.staged.length + status.unstaged.length > 0;
 
   return (
     <div className="tabbar">
-      <span className="tabbar-brand" aria-hidden="true">◑</span>
+      <IconMark className="tabbar-brand" width={17} height={17} aria-hidden="true" />
       <div className="tabbar-tabs">
         {tabs.map((tab) => (
           <div
@@ -28,7 +34,14 @@ export function TabBar() {
             }}
             title={tab.root ?? "New tab"}
           >
-            <IconRepo className="tab-icon" width={13} height={13} />
+            <span
+              className="tab-icon"
+              style={tab.root ? { color: repoColor(tab.root) } : undefined}
+              title={tab.id === activeTabId && activeDirty ? "Uncommitted changes" : undefined}
+            >
+              <IconRepo width={13} height={13} />
+              {tab.id === activeTabId && activeDirty && <span className="tab-dirty" />}
+            </span>
             <span className="tab-name">{tab.root ? tab.name : "New Tab"}</span>
             <button
               className="tab-close"

@@ -94,6 +94,13 @@
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* The button that started the running action stays lit and tinted, so it reads
+   as "working", not as "unavailable" like the others it disables. */
+.tb-btn.busy:disabled {
+  opacity: 1;
+  cursor: default;
+  color: var(--accent-hover);
+}
 .tb-btn-label {
   display: inline-flex;
   align-items: center;

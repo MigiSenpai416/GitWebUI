@@ -8,12 +8,11 @@
   user-select: none;
 }
 .tabbar-brand {
-  display: flex;
-  align-items: center;
-  padding: 0 12px 0 14px;
-  color: var(--accent);
-  font-size: 16px;
-  line-height: 1;
+  /* An SVG with a fixed height can't stretch, so center it explicitly — the
+     tab strip's default alignment would pin it to the top edge. */
+  align-self: center;
+  margin: 0 12px 0 14px;
+  color: var(--graph-color);
   flex-shrink: 0;
 }
 .tabbar-tabs {
@@ -50,13 +49,32 @@
   border-top-color: var(--graph-color);
   color: var(--text-strong);
 }
+/* Each repo keeps a color derived from its path (see brand.ts), so a tab is
+   findable by color rather than by reading its label. */
 .tab-icon {
+  position: relative;
+  display: inline-flex;
   flex-shrink: 0;
-  color: var(--graph-color);
-  opacity: 0.85;
+  color: var(--text-faint);
+  opacity: 0.75;
 }
 .tab.active .tab-icon {
   opacity: 1;
+}
+/* Uncommitted changes in the repo currently in view. Light rather than the
+   repo's color, so it reads as state instead of part of the identity. */
+.tab-dirty {
+  position: absolute;
+  right: -3px;
+  bottom: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-strong);
+  box-shadow: 0 0 0 2px var(--bg-toolbar);
+}
+.tab.active .tab-dirty {
+  box-shadow: 0 0 0 2px var(--bg-app);
 }
 .tab-name {
   flex: 1;

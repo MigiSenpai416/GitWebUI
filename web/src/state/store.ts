@@ -157,6 +157,12 @@ export interface ChangesMenu {
   folderPath?: string;
 }
 
+/**
+ * The long-running action currently in flight, so the control that started it
+ * can show a spinner in place of its icon.
+ */
+export type BusyAction = "push" | "pull" | "stash" | "pop" | "remote" | "pr";
+
 export type ConfirmKind = "primary" | "neutral" | "danger";
 
 /** One button in the confirmation banner; `value` is what the promise resolves to. */
@@ -223,6 +229,8 @@ interface AppState {
   githubStatus: GitHubStatus | null;
   /** A push/pull/create-remote network op is in flight. */
   remoteBusy: boolean;
+  /** Which one, so its button can show the wait instead of just going dim. */
+  busyAction: BusyAction | null;
   addRemoteOpen: boolean;
   githubDialogOpen: boolean;
   identityDialogOpen: boolean;
@@ -444,6 +452,7 @@ export const useStore = create<AppState>((set, get) => ({
   stashes: [],
   githubStatus: null,
   remoteBusy: false,
+  busyAction: null,
   addRemoteOpen: false,
   githubDialogOpen: false,
   identityDialogOpen: false,
@@ -790,7 +799,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   async deleteRemoteBranch(remote: string, branch: string) {
     if (get().remoteBusy) return;
-    set({ remoteBusy: true, error: null });
+    set({ remoteBusy: true, busyAction: "remote", error: null });
     try {
       const { branches } = await api.deleteRemoteBranch(remote, branch);
       set({ remoteBranches: branches });
@@ -806,7 +815,7 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       reportError(set, e);
     } finally {
-      set({ remoteBusy: false });
+      set({ remoteBusy: false, busyAction: null });
     }
   },
 
@@ -922,7 +931,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async createGitHubRepo(opts) {
-    set({ remoteBusy: true });
+    set({ remoteBusy: true, busyAction: "remote" });
     try {
       const { repo, remotes } = await api.createGitHubRepo(opts);
       set({ remotes });
@@ -930,7 +939,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ notice: `Created ${repo.fullName} and pushed ${get().repo?.branch ?? ""}.` });
       return repo.htmlUrl;
     } finally {
-      set({ remoteBusy: false });
+      set({ remoteBusy: false, busyAction: null });
     }
   },
 
@@ -941,7 +950,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   async pull() {
     if (get().remoteBusy) return;
-    set({ remoteBusy: true, error: null });
+    set({ remoteBusy: true, busyAction: "pull", error: null });
     try {
       const { merge, status } = await api.pull();
       applyMerge(get, set, merge, status);
@@ -954,7 +963,7 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       reportError(set, e);
     } finally {
-      set({ remoteBusy: false });
+      set({ remoteBusy: false, busyAction: null });
     }
   },
 
@@ -996,7 +1005,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   async createPullRequest(input: CreatePrInput) {
     // Errors propagate so the dialog can show them inline.
-    set({ remoteBusy: true });
+    set({ remoteBusy: true, busyAction: "pr" });
     try {
       const created = await api.prCreate(input);
       // The PR lives on GitHub — open it so the user lands on the review page.
@@ -1006,7 +1015,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ notice: `Opened pull request #${created.number}${warn}` });
       return created;
     } finally {
-      set({ remoteBusy: false });
+      set({ remoteBusy: false, busyAction: null });
     }
   },
 
@@ -1143,7 +1152,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   async stash() {
     if (get().remoteBusy) return;
-    set({ remoteBusy: true, error: null });
+    set({ remoteBusy: true, busyAction: "stash", error: null });
     try {
       const { stashed } = await api.stashPush();
       set({ selectedFile: null });
@@ -1152,13 +1161,13 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       reportError(set, e);
     } finally {
-      set({ remoteBusy: false });
+      set({ remoteBusy: false, busyAction: null });
     }
   },
 
   async stashPop(index = 0) {
     if (get().remoteBusy) return;
-    set({ remoteBusy: true, error: null, stashMenu: null });
+    set({ remoteBusy: true, busyAction: "pop", error: null, stashMenu: null });
     try {
       await api.stashPop(index);
       await refreshRepoData(get, set);
@@ -1166,13 +1175,13 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       reportError(set, e);
     } finally {
-      set({ remoteBusy: false });
+      set({ remoteBusy: false, busyAction: null });
     }
   },
 
   async stashApply(index: number) {
     if (get().remoteBusy) return;
-    set({ remoteBusy: true, error: null, stashMenu: null });
+    set({ remoteBusy: true, busyAction: "pop", error: null, stashMenu: null });
     try {
       await api.stashApply(index);
       await refreshRepoData(get, set);
@@ -1180,7 +1189,7 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       reportError(set, e);
     } finally {
-      set({ remoteBusy: false });
+      set({ remoteBusy: false, busyAction: null });
     }
   },
 
@@ -1538,7 +1547,7 @@ const FORCE_PUSH_SKIP_KEY = "gwui.skipForcePushConfirm";
  * every divergence case except an unfetched remote advance (which asks to pull).
  */
 async function runPush(get: StoreGet, set: StoreSet, force: boolean): Promise<void> {
-  set({ remoteBusy: true, error: null });
+  set({ remoteBusy: true, busyAction: "push", error: null });
   let rejected: { branch: string; upstream: string | null } | null = null;
   try {
     const res = await api.push(force);
@@ -1551,7 +1560,7 @@ async function runPush(get: StoreGet, set: StoreSet, force: boolean): Promise<vo
   } catch (e) {
     reportError(set, e);
   } finally {
-    set({ remoteBusy: false });
+    set({ remoteBusy: false, busyAction: null });
   }
   // Prompt only after clearing remoteBusy so the follow-up Pull/Force can run.
   if (rejected) await promptRejectedPush(get, set, rejected);

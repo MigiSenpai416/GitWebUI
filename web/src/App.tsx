@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "./state/store";
+import { applyFavicon, repoColor } from "./brand";
 import { RepoPicker } from "./components/RepoPicker";
 import { Toolbar } from "./components/Toolbar";
 import { CommitList } from "./components/CommitList";
@@ -24,6 +25,7 @@ import { CreateDialog } from "./components/CreateDialog";
 import { GitHubDialog } from "./components/GitHubDialog";
 import { PullRequestDialog } from "./components/PullRequestDialog";
 import { IdentityDialog } from "./components/IdentityDialog";
+import { IconCheck, IconWarning } from "./components/icons";
 
 export function App() {
   const authState = useStore((s) => s.authState);
@@ -63,18 +65,24 @@ export function App() {
     };
   }, [refreshAll]);
 
-  // Auto-dismiss the neutral notice toast.
+  // Name the browser tab after the repo in view and tint the favicon with that
+  // repo's color, so several open GitWebUI tabs are told apart the same way the
+  // in-app tabs are.
   useEffect(() => {
-    if (!notice) return;
-    const t = setTimeout(() => setNotice(null), 3200);
-    return () => clearTimeout(t);
-  }, [notice, setNotice]);
+    const name = repo ? basename(repo.root) : "";
+    document.title = name ? `${name} · GitWebUI` : "GitWebUI";
+    applyFavicon(repoColor(repo?.root ?? null));
+  }, [repo]);
 
   const toasts = (
     <>
       <ConfirmBar />
-      {error && <Toast kind="error" message={error} onClose={() => setError(null)} />}
-      {notice && <Toast kind="notice" message={notice} onClose={() => setNotice(null)} />}
+      {(error || notice) && (
+        <div className="toast-stack">
+          {error && <Toast kind="error" message={error} onClose={() => setError(null)} />}
+          {notice && <Toast kind="notice" message={notice} onClose={() => setNotice(null)} />}
+        </div>
+      )}
     </>
   );
 
@@ -145,6 +153,19 @@ export function App() {
   );
 }
 
+function basename(p: string): string {
+  const parts = p.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? p;
+}
+
+/** How long a toast stays up, and how long its exit takes (mirrors theme.css). */
+const TOAST_LIFE_MS = 5000;
+const TOAST_EXIT_MS = 170;
+
+/**
+ * A result of the last action, bottom-left. It retreats the way it arrived —
+ * on its own after five seconds, or when dismissed.
+ */
 function Toast({
   kind,
   message,
@@ -154,10 +175,39 @@ function Toast({
   message: string;
   onClose: () => void;
 }) {
+  const [leaving, setLeaving] = useState(false);
+  // Held in a ref so the exit timer isn't restarted by the parent re-rendering.
+  const close = useRef(onClose);
+  close.current = onClose;
+
+  // A new message reuses this toast, so restart its life with it.
+  useEffect(() => {
+    setLeaving(false);
+    const t = setTimeout(() => setLeaving(true), TOAST_LIFE_MS);
+    return () => clearTimeout(t);
+  }, [message]);
+
+  useEffect(() => {
+    if (!leaving) return;
+    const t = setTimeout(() => close.current(), TOAST_EXIT_MS);
+    return () => clearTimeout(t);
+  }, [leaving]);
+
   return (
-    <div className={"toast toast-" + kind} role={kind === "error" ? "alert" : "status"}>
-      <span>{message}</span>
-      <button onClick={onClose} aria-label="Dismiss">
+    <div
+      className={"toast toast-" + kind + (leaving ? " leaving" : "")}
+      role={kind === "error" ? "alert" : "status"}
+    >
+      <span className="toast-rail" aria-hidden />
+      <span className="toast-icon" aria-hidden>
+        {kind === "error" ? (
+          <IconWarning width={15} height={15} />
+        ) : (
+          <IconCheck width={15} height={15} />
+        )}
+      </span>
+      <span className="toast-msg">{message}</span>
+      <button className="toast-x" onClick={() => setLeaving(true)} aria-label="Dismiss">
         ✕
       </button>
     </div>

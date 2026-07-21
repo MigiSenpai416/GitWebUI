@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../state/store";
-import { IconMonitor } from "./icons";
+import { BusyLabel, IconMonitor } from "./icons";
 import "./AccountDialogs.css";
 import "./CreateDialog.css";
 
@@ -250,7 +250,7 @@ export function CreateDialog() {
 
                 <div className="dialog-actions create-actions">
                   <button className="dialog-btn dialog-btn-primary" onClick={submit} disabled={busy}>
-                    {busy ? "Creating…" : submitLabel}
+                    {busy ? <BusyLabel>Creating…</BusyLabel> : submitLabel}
                   </button>
                 </div>
               </>

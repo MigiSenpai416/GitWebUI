@@ -16,6 +16,17 @@
   --confirm-bar-bg: #3a4a60;
   --confirm-bar-border: #4a5d76;
 
+  /* Toasts — panel greys pulled toward the accent hue, so a result reads at a
+     glance without shouting over the graph it sits on top of. */
+  --toast-ok-bg: #17251f;
+  --toast-ok-border: #2c4a3a;
+  --toast-ok-text: #cfe0d6;
+  --toast-err-bg: #2a171a;
+  --toast-err-border: #5a2a2c;
+  --toast-err-text: #f0d4d2;
+  /* How long a toast stays before it retreats (mirrored in App.tsx). */
+  --toast-life: 5s;
+
   /* Column widths (commit list) */
   --refs-w: 132px;
   --graph-w: 96px;

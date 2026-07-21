@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useStore } from "../state/store";
+import { IconMark } from "./icons";
 import "./AuthGate.css";
 
 /**
@@ -53,7 +54,7 @@ export function AuthGate() {
     <div className="auth">
       <form className="auth-card" onSubmit={submit}>
         <div className="auth-brand">
-          <span className="auth-logo">◑</span>
+          <IconMark className="auth-logo" width={30} height={30} aria-hidden="true" />
           <h1>GitWebUI</h1>
         </div>
         <p className="auth-sub">

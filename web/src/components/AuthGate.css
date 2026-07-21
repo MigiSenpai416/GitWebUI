@@ -22,9 +22,8 @@
   gap: 12px;
 }
 .auth-logo {
-  font-size: 30px;
-  color: var(--accent);
-  line-height: 1;
+  color: var(--graph-color);
+  flex-shrink: 0;
 }
 .auth-brand h1 {
   margin: 0;

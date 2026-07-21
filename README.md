@@ -33,6 +33,10 @@ Personal Access Token to push, pull, add remotes, and create repositories.
 - **Password-protected access** — the web UI is gated by a single password
   (set on first run), with an optional **Remember me** (stays signed in for 7
   days). Useful when running on a headless/remote host reachable over the network.
+- **Pull requests** — open a GitHub PR from the branch menu: pick the source and
+  target repo/branch (forks target their upstream by default), fill the title and
+  description from a repo **PR template**, add reviewers, assignees and labels,
+  and optionally **submit as draft**.
 - **GitHub remotes** — a **LOCAL / REMOTE** left sidebar (checkout branches;
   hover **REMOTE** for a green + to add a remote). Connect a GitHub Personal
   Access Token to **push**, **pull**, add a remote by **URL**, or **create a new
@@ -105,6 +109,26 @@ elsewhere; override with `GITWEBUI_CONFIG_DIR`). **Forgot the password?** Delete
      Public/Private, and **create the repository on GitHub and push local refs**.
 3. **Push / Pull** from the toolbar. HTTPS GitHub remotes authenticate with the
    stored token; SSH remotes use your SSH keys as usual.
+
+### Pull requests
+
+Open one from the branch dropdown → **…** next to a branch → **Create pull
+request…**, or from **Actions → Create pull request…** for the checked-out
+branch. The dialog reads the repo's GitHub remotes, so:
+
+- **Forks** target their upstream by default (the PR is sent as `owner:branch`);
+  pick any other GitHub remote — or the fork itself — as the target.
+- **Templates** are picked up from `.github/`, the repo root, and `docs/` —
+  both `pull_request_template.md` and a `PULL_REQUEST_TEMPLATE/` directory of
+  named templates. Choosing one fills the description (your own text is never
+  overwritten).
+- **Reviewers, assignees and labels** are listed from the target repository; they
+  need a token with push access there, and are attached after the PR is created,
+  so a rejected reviewer never loses the pull request.
+- If the source branch has commits that aren't on the remote, GitWebUI offers to
+  **push it first**.
+
+The created PR opens in a new browser tab.
 
 The token is injected per-command via an HTTP auth header, and any system
 credential manager is bypassed so operations never block on a GUI prompt — a

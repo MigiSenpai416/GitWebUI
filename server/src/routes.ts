@@ -45,6 +45,11 @@ import {
   createGitHubRepoNew,
 } from "./git/remote.js";
 import * as github from "./github.js";
+import {
+  githubRemotes,
+  findPullRequestTemplates,
+  readPullRequestTemplate,
+} from "./git/pullRequest.js";
 import { getIdentity, setIdentity, clearIdentity, type CommitIdentity } from "./identity.js";
 import { getStashes, stashPush, stashPop, stashApply, stashDrop } from "./git/stash.js";
 import {
@@ -471,6 +476,200 @@ api.get("/github/repos", h(async (_req, res) => {
     return;
   }
   res.json({ repos: await github.listRepos(token) });
+}));
+
+// ---- Pull requests (GitHub) ----
+
+/** How many GitHub remotes we resolve against the API when opening the dialog. */
+const MAX_PR_REPOS = 5;
+
+/**
+ * Wrap a pull-request handler so a rejected GitHub token surfaces as 403. The
+ * web client treats ANY 401 as "the GitWebUI session expired" and drops to the
+ * login screen (see api/client.ts) — a GitHub auth failure must not sign the
+ * user out of the app itself.
+ */
+function gh(fn: (req: Request, res: Response) => Promise<void>) {
+  return h(async (req, res) => {
+    try {
+      await fn(req, res);
+    } catch (e) {
+      if ((e as { status?: number }).status !== 401) throw e;
+      const message = e instanceof Error ? e.message : "GitHub authentication failed";
+      throw Object.assign(
+        new Error(`${message} — reconnect your GitHub account in Actions → GitHub.`),
+        { status: 403 },
+      );
+    }
+  });
+}
+
+async function requireGitHubToken(): Promise<string> {
+  const token = await github.getToken();
+  if (!token) throw Object.assign(new Error("Connect a GitHub account first"), { status: 403 });
+  return token;
+}
+
+/** Parse an "owner/name" request parameter. */
+function repoParam(v: unknown): { owner: string; repo: string } {
+  const [owner, repo] = String(v ?? "").trim().split("/");
+  if (!owner || !repo) {
+    throw Object.assign(new Error("A repository (owner/name) is required"), { status: 400 });
+  }
+  return { owner, repo };
+}
+
+api.get("/pr/context", gh(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const token = await requireGitHubToken();
+  const [remotes, branches, templates, branch] = await Promise.all([
+    githubRemotes(root),
+    getBranches(root),
+    findPullRequestTemplates(root),
+    currentBranch(root),
+  ]);
+
+  // Resolve each GitHub remote against the API; an inaccessible one is skipped
+  // rather than failing the whole dialog.
+  const resolved = await Promise.all(
+    remotes.slice(0, MAX_PR_REPOS).map(async (r) => {
+      try {
+        return { remote: r.remote, ref: await github.fetchRepo(token, r.owner, r.repo) };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const live = resolved.filter((x): x is { remote: string; ref: github.GitHubRepoRef } => x !== null);
+  const byFullName = new Map<string, github.GitHubRepoRef>();
+  for (const { ref } of live) byFullName.set(ref.fullName, ref);
+
+  // A fork's upstream is the usual PR target, so offer it as a base candidate.
+  for (const { ref } of live) {
+    if (!ref.parentFullName || byFullName.has(ref.parentFullName)) continue;
+    const [owner, name] = ref.parentFullName.split("/");
+    try {
+      const parent = await github.fetchRepo(token, owner, name);
+      byFullName.set(parent.fullName, parent);
+    } catch {
+      /* parent deleted or not visible to this token */
+    }
+  }
+
+  // Prefer the remote the current branch tracks, then origin, then whatever exists.
+  const upstreamRemote = branches.find((b) => b.current)?.upstream?.split("/")[0] ?? null;
+  const headEntry =
+    live.find((x) => x.remote === upstreamRemote) ??
+    live.find((x) => x.remote === "origin") ??
+    live[0] ??
+    null;
+  const headRef = headEntry?.ref ?? null;
+  const baseRef =
+    (headRef?.parentFullName ? byFullName.get(headRef.parentFullName) : null) ?? headRef;
+
+  res.json({
+    viewer: (await github.status()).user,
+    head: {
+      branch,
+      branches,
+      repo: headRef,
+      remote: headEntry?.remote ?? null,
+    },
+    baseCandidates: [...byFullName.values()],
+    defaults: {
+      baseRepo: baseRef?.fullName ?? null,
+      baseBranch: baseRef?.defaultBranch ?? null,
+    },
+    templates,
+  });
+}));
+
+api.get("/pr/branches", gh(async (req, res) => {
+  requireRepoRoot(req);
+  const token = await requireGitHubToken();
+  const { owner, repo } = repoParam(req.query.repo);
+  res.json({ branches: await github.listBranchNames(token, owner, repo) });
+}));
+
+api.get("/pr/meta", gh(async (req, res) => {
+  requireRepoRoot(req);
+  const token = await requireGitHubToken();
+  const { owner, repo } = repoParam(req.query.repo);
+  const [collaborators, assignees, labels] = await Promise.all([
+    github.listCollaborators(token, owner, repo),
+    github.listAssignableUsers(token, owner, repo),
+    github.listLabels(token, owner, repo),
+  ]);
+  res.json({ collaborators, assignees, labels });
+}));
+
+api.get("/pr/template", gh(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const path = String(req.query.path ?? "").trim();
+  if (!path) {
+    res.status(400).json({ error: "A template path is required" });
+    return;
+  }
+  res.json({ body: await readPullRequestTemplate(root, path) });
+}));
+
+api.post("/pr/create", gh(async (req, res) => {
+  requireRepoRoot(req);
+  const token = await requireGitHubToken();
+  const base = repoParam(req.body?.baseRepo);
+  const head = repoParam(req.body?.headRepo);
+  const baseBranch = String(req.body?.base ?? "").trim();
+  const headBranch = String(req.body?.head ?? "").trim();
+  const title = String(req.body?.title ?? "").trim();
+  if (!title) {
+    res.status(400).json({ error: "A title is required" });
+    return;
+  }
+  if (!baseBranch || !headBranch) {
+    res.status(400).json({ error: "A source and target branch are required" });
+    return;
+  }
+
+  // Cross-repository (fork) pull requests identify the source as "owner:branch".
+  const sameRepo =
+    `${base.owner}/${base.repo}`.toLowerCase() === `${head.owner}/${head.repo}`.toLowerCase();
+  const pr = await github.createPullRequest(token, {
+    owner: base.owner,
+    repo: base.repo,
+    title,
+    body: String(req.body?.body ?? ""),
+    head: sameRepo ? headBranch : `${head.owner}:${headBranch}`,
+    base: baseBranch,
+    draft: Boolean(req.body?.draft),
+  });
+
+  // The pull request exists now — attaching people and labels is best-effort, so
+  // a rejected reviewer never reads as a failed creation.
+  const warnings: string[] = [];
+  const reviewers = asStringArray(req.body?.reviewers);
+  const assignees = asStringArray(req.body?.assignees);
+  const labels = asStringArray(req.body?.labels);
+  if (reviewers.length > 0) {
+    try {
+      await github.requestReviewers(token, base.owner, base.repo, pr.number, reviewers);
+    } catch (e) {
+      warnings.push(`reviewers not set (${e instanceof Error ? e.message : "failed"})`);
+    }
+  }
+  if (assignees.length > 0 || labels.length > 0) {
+    try {
+      await github.updateIssueFields(token, base.owner, base.repo, pr.number, {
+        ...(assignees.length > 0 ? { assignees } : {}),
+        ...(labels.length > 0 ? { labels } : {}),
+      });
+    } catch (e) {
+      warnings.push(
+        `assignees/labels not set (${e instanceof Error ? e.message : "failed"})`,
+      );
+    }
+  }
+
+  res.json({ number: pr.number, htmlUrl: pr.htmlUrl, warnings });
 }));
 
 // ---- Remotes ----

@@ -22,6 +22,7 @@ import { AddRemoteDialog } from "./components/AddRemoteDialog";
 import { CloneDialog } from "./components/CloneDialog";
 import { CreateDialog } from "./components/CreateDialog";
 import { GitHubDialog } from "./components/GitHubDialog";
+import { PullRequestDialog } from "./components/PullRequestDialog";
 import { IdentityDialog } from "./components/IdentityDialog";
 
 export function App() {
@@ -137,6 +138,7 @@ export function App() {
       <CloneDialog />
       <CreateDialog />
       <GitHubDialog />
+      <PullRequestDialog />
       <IdentityDialog />
       {toasts}
     </div>

@@ -1,0 +1,197 @@
+/* Create Pull Request dialog. Builds on .dialog / .acct-* (AccountDialogs.css). */
+
+.pr-dialog {
+  width: 560px;
+  max-width: 95vw;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.pr-loading {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+
+/* From Repo → To Repo, then the two branch pickers, on a shared grid. */
+.pr-repos {
+  display: grid;
+  grid-template-columns: 1fr 24px 1fr;
+  align-items: end;
+  gap: 8px 10px;
+  margin-bottom: 16px;
+}
+.pr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.pr-field > span {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-faint);
+}
+.pr-field select {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: var(--fs-md);
+}
+.pr-arrow {
+  padding-bottom: 9px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 14px;
+}
+
+.pr-template-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pr-template-row select {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  font-size: var(--fs-md);
+}
+.pr-template-clear {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-faint);
+  padding: 7px 8px;
+  display: inline-flex;
+}
+.pr-template-clear:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-elevated);
+}
+
+.pr-body {
+  width: 100%;
+  min-height: 110px;
+  padding: 9px 11px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+/* Multi-select (reviewers / assignees / labels) */
+.pr-multi {
+  position: relative;
+}
+.pr-multi-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  min-height: 34px;
+  text-align: left;
+}
+.pr-multi-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.pr-multi-btn:disabled {
+  opacity: 0.7;
+}
+.pr-multi-value {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.pr-multi-placeholder {
+  color: var(--text-faint);
+  font-size: var(--fs-md);
+}
+.pr-multi-caret {
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+.pr-chip {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-size: var(--fs-xs);
+  color: var(--text);
+}
+
+.pr-multi-menu {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 210px;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
+  padding: 4px;
+}
+.pr-multi-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-md);
+  color: var(--text);
+  cursor: pointer;
+}
+.pr-multi-item:hover {
+  background: var(--bg-elevated);
+}
+.pr-multi-item input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent, #2f81f7);
+}
+.pr-multi-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-multi-empty {
+  padding: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}
+.pr-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.pr-draft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-md);
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+.pr-draft input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent, #2f81f7);
+  cursor: pointer;
+}
+
+.pr-hint {
+  font-size: var(--fs-sm);
+  color: #e6c07a;
+  margin-bottom: 10px;
+}

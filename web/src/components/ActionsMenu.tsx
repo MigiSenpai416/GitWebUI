@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "../state/store";
-import { IconRefresh } from "./icons";
+import { IconPullRequest, IconRefresh } from "./icons";
 import "./BranchMenu.css";
 
 export function ActionsMenu({ onClose }: { onClose: () => void }) {
@@ -11,6 +11,7 @@ export function ActionsMenu({ onClose }: { onClose: () => void }) {
   const loadBranches = useStore((s) => s.loadBranches);
   const openGitHubDialog = useStore((s) => s.openGitHubDialog);
   const openIdentityDialog = useStore((s) => s.openIdentityDialog);
+  const openPullRequest = useStore((s) => s.openPullRequest);
   const githubStatus = useStore((s) => s.githubStatus);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -44,6 +45,16 @@ export function ActionsMenu({ onClose }: { onClose: () => void }) {
         <button className="branch-menu-item" onClick={refresh}>
           <IconRefresh width={14} height={14} className="bmi-icon" />
           <span className="bmi-name">Refresh</span>
+        </button>
+        <button
+          className="branch-menu-item"
+          onClick={() => {
+            openPullRequest();
+            onClose();
+          }}
+        >
+          <IconPullRequest width={14} height={14} className="bmi-icon" />
+          <span className="bmi-name">Create pull request…</span>
         </button>
         <button
           className="branch-menu-item"

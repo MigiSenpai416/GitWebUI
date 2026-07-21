@@ -79,6 +79,16 @@ function ghError(status: number, body: string): Error & { status: number } {
   try {
     const j = JSON.parse(body);
     if (j?.message) message = j.message;
+    // Validation failures say only "Validation Failed" at the top level — the
+    // actionable text ("No commits between …", "A pull request already exists …")
+    // lives in errors[].message.
+    const detail = Array.isArray(j?.errors)
+      ? j.errors
+          .map((e: { message?: string }) => (typeof e === "string" ? e : e?.message))
+          .filter(Boolean)
+          .join("; ")
+      : "";
+    if (detail) message = detail;
   } catch {
     /* non-JSON */
   }
@@ -237,6 +247,245 @@ export async function createRepo(
   if (!res.ok) throw ghError(res.status, await res.text());
   const j = (await res.json()) as { full_name: string; clone_url: string; html_url: string };
   return { fullName: j.full_name, cloneUrl: j.clone_url, htmlUrl: j.html_url };
+}
+
+// ---- Pull requests ----
+
+/** A repository as the pull-request dialog needs it (target + fork lineage). */
+export interface GitHubRepoRef {
+  fullName: string;
+  owner: string;
+  name: string;
+  defaultBranch: string;
+  private: boolean;
+  isFork: boolean;
+  /** The upstream this repo was forked from ("owner/name"), or null. */
+  parentFullName: string | null;
+}
+
+/** A user that can be requested as a reviewer or set as an assignee. */
+export interface GitHubAccount {
+  login: string;
+  avatarUrl: string | null;
+}
+
+export interface GitHubLabel {
+  name: string;
+  color: string;
+  description: string | null;
+}
+
+export interface CreatedPullRequest {
+  number: number;
+  htmlUrl: string;
+  title: string;
+}
+
+/**
+ * Extract `owner/repo` from a github.com clone URL — HTTPS, `ssh://`, `git://`,
+ * and the scp-like `git@github.com:owner/repo.git` form. Anything hosted
+ * elsewhere (GitLab, a private server) returns null so non-GitHub remotes are
+ * simply skipped by the caller.
+ */
+export function parseGitHubSlug(url: string): { owner: string; repo: string } | null {
+  const raw = (url ?? "").trim();
+  if (!raw) return null;
+
+  let host: string;
+  let rest: string;
+  const scp = raw.match(/^[\w.+-]+@([^/:]+):(.+)$/);
+  if (scp) {
+    host = scp[1];
+    rest = scp[2];
+  } else {
+    const m = raw.match(/^(?:https?|ssh|git):\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/i);
+    if (!m) return null;
+    host = m[1];
+    rest = m[2];
+  }
+
+  host = host.toLowerCase().replace(/:\d+$/, "");
+  if (host !== "github.com" && host !== "www.github.com") return null;
+
+  const segments = rest
+    .replace(/[/]+$/, "")
+    .replace(/\.git$/i, "")
+    .split("/")
+    .filter(Boolean);
+  if (segments.length < 2) return null;
+  return { owner: segments[0], repo: segments[1] };
+}
+
+function toRepoRef(j: {
+  full_name: string;
+  name: string;
+  owner: { login: string };
+  default_branch: string;
+  private: boolean;
+  fork: boolean;
+  parent?: { full_name: string } | null;
+}): GitHubRepoRef {
+  return {
+    fullName: j.full_name,
+    owner: j.owner?.login ?? "",
+    name: j.name,
+    defaultBranch: j.default_branch || "main",
+    private: j.private,
+    isFork: Boolean(j.fork),
+    parentFullName: j.parent?.full_name ?? null,
+  };
+}
+
+/** Fetch a single repository, including its fork parent when it has one. */
+export async function fetchRepo(token: string, owner: string, repo: string): Promise<GitHubRepoRef> {
+  const res = await fetch(`${API}/repos/${owner}/${repo}`, { headers: ghHeaders(token) });
+  if (!res.ok) throw ghError(res.status, await res.text());
+  return toRepoRef(await res.json());
+}
+
+/** Branch names of a repository (paginated up to a sane cap). */
+export async function listBranchNames(
+  token: string,
+  owner: string,
+  repo: string,
+): Promise<string[]> {
+  const perPage = 100;
+  const maxPages = 5;
+  const names: string[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const url = `${API}/repos/${owner}/${repo}/branches?per_page=${perPage}&page=${page}`;
+    const res = await fetch(url, { headers: ghHeaders(token) });
+    if (!res.ok) throw ghError(res.status, await res.text());
+    const batch = (await res.json()) as Array<{ name: string }>;
+    for (const b of batch) names.push(b.name);
+    if (batch.length < perPage) break;
+  }
+  return names;
+}
+
+/**
+ * GET a list endpoint that requires push access, degrading to an empty list when
+ * the token can only read the repo — the dialog then shows "None available"
+ * instead of failing outright.
+ */
+async function listOrEmpty<T>(token: string, path: string): Promise<T[]> {
+  try {
+    const res = await fetch(`${API}${path}`, { headers: ghHeaders(token) });
+    if (!res.ok) return [];
+    const j = await res.json();
+    return Array.isArray(j) ? (j as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function toAccounts(raw: Array<{ login: string; avatar_url: string | null }>): GitHubAccount[] {
+  return raw.map((u) => ({ login: u.login, avatarUrl: u.avatar_url ?? null }));
+}
+
+/** Users who can be requested as reviewers (repo collaborators). */
+export async function listCollaborators(
+  token: string,
+  owner: string,
+  repo: string,
+): Promise<GitHubAccount[]> {
+  return toAccounts(
+    await listOrEmpty<{ login: string; avatar_url: string | null }>(
+      token,
+      `/repos/${owner}/${repo}/collaborators?per_page=100`,
+    ),
+  );
+}
+
+/** Users who can be assigned to an issue/pull request. */
+export async function listAssignableUsers(
+  token: string,
+  owner: string,
+  repo: string,
+): Promise<GitHubAccount[]> {
+  return toAccounts(
+    await listOrEmpty<{ login: string; avatar_url: string | null }>(
+      token,
+      `/repos/${owner}/${repo}/assignees?per_page=100`,
+    ),
+  );
+}
+
+/** Labels defined on a repository. */
+export async function listLabels(
+  token: string,
+  owner: string,
+  repo: string,
+): Promise<GitHubLabel[]> {
+  const raw = await listOrEmpty<{ name: string; color: string; description: string | null }>(
+    token,
+    `/repos/${owner}/${repo}/labels?per_page=100`,
+  );
+  return raw.map((l) => ({ name: l.name, color: l.color, description: l.description ?? null }));
+}
+
+/**
+ * Open a pull request on `owner/repo`. For a cross-repository (fork) PR the
+ * caller passes `head` as "owner:branch"; same-repo PRs pass the bare branch.
+ */
+export async function createPullRequest(
+  token: string,
+  opts: {
+    owner: string;
+    repo: string;
+    title: string;
+    body: string;
+    head: string;
+    base: string;
+    draft: boolean;
+  },
+): Promise<CreatedPullRequest> {
+  const res = await fetch(`${API}/repos/${opts.owner}/${opts.repo}/pulls`, {
+    method: "POST",
+    headers: { ...ghHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: opts.title,
+      body: opts.body || undefined,
+      head: opts.head,
+      base: opts.base,
+      draft: opts.draft,
+    }),
+  });
+  if (!res.ok) throw ghError(res.status, await res.text());
+  const j = (await res.json()) as { number: number; html_url: string; title: string };
+  return { number: j.number, htmlUrl: j.html_url, title: j.title };
+}
+
+/** Request reviews on an open pull request. */
+export async function requestReviewers(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+  reviewers: string[],
+): Promise<void> {
+  const res = await fetch(`${API}/repos/${owner}/${repo}/pulls/${number}/requested_reviewers`, {
+    method: "POST",
+    headers: { ...ghHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ reviewers }),
+  });
+  if (!res.ok) throw ghError(res.status, await res.text());
+}
+
+/** Set assignees and/or labels (a PR is an issue as far as these fields go). */
+export async function updateIssueFields(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+  fields: { assignees?: string[]; labels?: string[] },
+): Promise<void> {
+  const res = await fetch(`${API}/repos/${owner}/${repo}/issues/${number}`, {
+    method: "PATCH",
+    headers: { ...ghHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) throw ghError(res.status, await res.text());
 }
 
 /** Test hook to reset the in-memory cache. */

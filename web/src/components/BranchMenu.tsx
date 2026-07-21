@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
-import { IconBranch, IconCheck, IconDots, IconMerge, IconTrash } from "./icons";
+import { IconBranch, IconCheck, IconDots, IconMerge, IconPullRequest, IconTrash } from "./icons";
 import "./BranchMenu.css";
 
 /** Which branch's action popover is open, anchored at these screen coords. */
@@ -16,6 +16,7 @@ export function BranchMenu({ onClose }: { onClose: () => void }) {
   const checkout = useStore((s) => s.checkout);
   const deleteBranch = useStore((s) => s.deleteBranch);
   const mergeBranch = useStore((s) => s.mergeBranch);
+  const openPullRequest = useStore((s) => s.openPullRequest);
   const requestConfirm = useStore((s) => s.requestConfirm);
   const requestChoice = useStore((s) => s.requestChoice);
   const ref = useRef<HTMLDivElement>(null);
@@ -113,6 +114,17 @@ export function BranchMenu({ onClose }: { onClose: () => void }) {
           <button className="branch-action" onClick={() => merge(actions.name)}>
             <IconMerge width={14} height={14} className="ba-icon" />
             Merge into <span className="ba-branch">{current}</span>
+          </button>
+          <button
+            className="branch-action"
+            onClick={() => {
+              const name = actions.name;
+              onClose();
+              openPullRequest(name);
+            }}
+          >
+            <IconPullRequest width={14} height={14} className="ba-icon" />
+            Create pull request…
           </button>
           <div className="branch-action-sep" />
           <button className="branch-action danger" onClick={() => remove(actions.name)}>

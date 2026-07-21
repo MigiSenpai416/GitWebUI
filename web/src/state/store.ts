@@ -5,6 +5,8 @@ import type {
   Commit,
   CommitFile,
   ConflictFileData,
+  CreatePrInput,
+  CreatedPr,
   GitHubStatus,
   GitHubUser,
   IdentityInfo,
@@ -225,6 +227,10 @@ interface AppState {
   githubDialogOpen: boolean;
   identityDialogOpen: boolean;
   identity: IdentityInfo | null;
+  /** Whether the Create Pull Request dialog is open. */
+  prDialogOpen: boolean;
+  /** Branch the PR dialog opened for (null → the current branch). */
+  prHeadBranch: string | null;
 
   /** Whether the LOCAL/REMOTE left rail is collapsed (persisted). */
   sidebarCollapsed: boolean;
@@ -306,6 +312,12 @@ interface AppState {
   }) => Promise<string>;
   push: () => Promise<void>;
   pull: () => Promise<void>;
+
+  openPullRequest: (branch?: string) => void;
+  closePullRequest: () => void;
+  /** Make sure `branch` is on the remote before a PR targets it (may prompt to push). */
+  ensureBranchPushed: (branch: string) => Promise<{ ok: boolean; reason?: string }>;
+  createPullRequest: (input: CreatePrInput) => Promise<CreatedPr>;
 
   loadMergeState: () => Promise<void>;
   mergeBranch: (name: string) => Promise<void>;
@@ -434,6 +446,8 @@ export const useStore = create<AppState>((set, get) => ({
   githubDialogOpen: false,
   identityDialogOpen: false,
   identity: null,
+  prDialogOpen: false,
+  prHeadBranch: null,
 
   sidebarCollapsed: readSidebarCollapsed(),
 
@@ -915,6 +929,58 @@ export const useStore = create<AppState>((set, get) => ({
       }
     } catch (e) {
       reportError(set, e);
+    } finally {
+      set({ remoteBusy: false });
+    }
+  },
+
+  openPullRequest(branch?: string) {
+    set({ prDialogOpen: true, prHeadBranch: branch ?? null });
+  },
+  closePullRequest() {
+    set({ prDialogOpen: false, prHeadBranch: null });
+  },
+
+  async ensureBranchPushed(branch: string) {
+    const pushed = (name: string): boolean => {
+      const b = get().branches.find((x) => x.name === name);
+      return Boolean(b && b.upstream && !b.upstreamGone && b.ahead === 0);
+    };
+    if (pushed(branch)) return { ok: true };
+    // Only the checked-out branch can be pushed from here (git pushes HEAD).
+    if (branch !== get().repo?.branch) {
+      return {
+        ok: false,
+        reason: `"${branch}" has commits that aren't on the remote. Check it out and push it first.`,
+      };
+    }
+    const entry = get().branches.find((b) => b.name === branch);
+    const ahead = entry?.ahead ?? 0;
+    const detail = !entry?.upstream
+      ? `"${branch}" isn't on the remote yet.`
+      : `"${branch}" has ${ahead} unpushed commit${ahead === 1 ? "" : "s"}.`;
+    const choice = await get().requestChoice(`${detail} Push it before opening the pull request?`, [
+      { label: "Push and continue", value: "push", kind: "primary" },
+      { label: "Cancel", value: "cancel", kind: "neutral" },
+    ]);
+    if (choice !== "push") return { ok: false };
+    await get().push();
+    return pushed(branch)
+      ? { ok: true }
+      : { ok: false, reason: `Couldn't push "${branch}" — resolve the push first, then try again.` };
+  },
+
+  async createPullRequest(input: CreatePrInput) {
+    // Errors propagate so the dialog can show them inline.
+    set({ remoteBusy: true });
+    try {
+      const created = await api.prCreate(input);
+      // The PR lives on GitHub — open it so the user lands on the review page.
+      window.open(created.htmlUrl, "_blank", "noopener");
+      await refreshRepoData(get, set);
+      const warn = created.warnings.length > 0 ? ` — ${created.warnings.join("; ")}` : "";
+      set({ notice: `Opened pull request #${created.number}${warn}` });
+      return created;
     } finally {
       set({ remoteBusy: false });
     }

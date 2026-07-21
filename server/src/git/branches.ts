@@ -5,10 +5,36 @@ export interface Branch {
   current: boolean;
   shortHash: string;
   upstream: string | null;
+  /** Commits the branch has that its upstream lacks (0 without an upstream). */
+  ahead: number;
+  /** Commits the upstream has that the branch lacks. */
+  behind: number;
+  /** The upstream ref no longer exists on the remote (git's "[gone]"). */
+  upstreamGone: boolean;
 }
 
 const US = "\x1f";
 const RS = "\x1e";
+
+/**
+ * Read git's `%(upstream:track)` field — "[ahead 2]", "[behind 1]",
+ * "[ahead 2, behind 1]", "[gone]", or empty. for-each-ref emits these markers in
+ * fixed English (unlike porcelain status), so matching on them is safe.
+ */
+function parseTrack(track: string | undefined): {
+  ahead: number;
+  behind: number;
+  upstreamGone: boolean;
+} {
+  const t = track ?? "";
+  const ahead = t.match(/ahead (\d+)/);
+  const behind = t.match(/behind (\d+)/);
+  return {
+    ahead: ahead ? parseInt(ahead[1], 10) : 0,
+    behind: behind ? parseInt(behind[1], 10) : 0,
+    upstreamGone: /\bgone\b/.test(t),
+  };
+}
 
 /** List local branches with the current one marked. */
 export function parseBranches(stdout: string): Branch[] {
@@ -16,20 +42,28 @@ export function parseBranches(stdout: string): Branch[] {
   for (const record of stdout.split(RS)) {
     const rec = record.replace(/^\n/, "").trim();
     if (!rec) continue;
-    const [head, name, hash, upstream] = rec.split(US);
+    const [head, name, hash, upstream, track] = rec.split(US);
     if (!name) continue;
     branches.push({
       name,
       current: head.trim() === "*",
       shortHash: hash ?? "",
       upstream: upstream ? upstream : null,
+      ...parseTrack(track),
     });
   }
   return branches;
 }
 
 export async function getBranches(root: string): Promise<Branch[]> {
-  const format = ["%(HEAD)", "%(refname:short)", "%(objectname:short)", "%(upstream:short)"].join(US) + RS;
+  const format =
+    [
+      "%(HEAD)",
+      "%(refname:short)",
+      "%(objectname:short)",
+      "%(upstream:short)",
+      "%(upstream:track)",
+    ].join(US) + RS;
   const { stdout } = await runGit(root, [
     "for-each-ref",
     `--format=${format}`,

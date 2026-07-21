@@ -3,6 +3,8 @@ import type {
   Commit,
   CommitFile,
   ConflictFileData,
+  CreatePrInput,
+  CreatedPr,
   DiffResult,
   DiffSource,
   GitHubRepo,
@@ -10,6 +12,8 @@ import type {
   GitHubUser,
   IdentityInfo,
   MergeState,
+  PrContext,
+  PrMeta,
   RepoInfo,
   Remote,
   RemoteBranch,
@@ -239,6 +243,16 @@ export const api = {
       "/api/github/create-repo",
       { method: "POST", body: JSON.stringify(opts) },
     ),
+
+  // Pull requests (GitHub)
+  prContext: () => req<PrContext>("/api/pr/context"),
+  prBranches: (repo: string) =>
+    req<{ branches: string[] }>(`/api/pr/branches?repo=${encodeURIComponent(repo)}`),
+  prMeta: (repo: string) => req<PrMeta>(`/api/pr/meta?repo=${encodeURIComponent(repo)}`),
+  prTemplate: (path: string) =>
+    req<{ body: string }>(`/api/pr/template?path=${encodeURIComponent(path)}`),
+  prCreate: (input: CreatePrInput) =>
+    req<CreatedPr>("/api/pr/create", { method: "POST", body: JSON.stringify(input) }),
 
   // Push / Pull
   push: (force = false) =>

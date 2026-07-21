@@ -49,6 +49,16 @@ export const IconBranch = (p: P) => (
     <path d="M18 9.4c0 4-3 4.6-6 5.6" />
   </svg>
 );
+export const IconPullRequest = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="6" cy="6" r="2.4" />
+    <circle cx="6" cy="18" r="2.4" />
+    <circle cx="18" cy="18" r="2.4" />
+    <path d="M6 8.4v7.2" />
+    <path d="M18 15.6V9a3 3 0 0 0-3-3h-3" />
+    <path d="m14 3.5-2.5 2.5 2.5 2.5" />
+  </svg>
+);
 export const IconStash = (p: P) => (
   <svg {...base(p)}>
     <path d="M4 8h16l-1.2 11a2 2 0 0 1-2 1.8H7.2a2 2 0 0 1-2-1.8Z" />

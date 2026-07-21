@@ -114,12 +114,42 @@ describe("parseUnifiedDiff", () => {
 describe("parseBranches", () => {
   it("marks the current branch and parses hash + upstream", () => {
     const data =
-      ["*", "main", "9ef9033", "origin/main"].join(US) + RS +
-      [" ", "feature/enchant-ui", "abc1234", ""].join(US) + RS;
+      ["*", "main", "9ef9033", "origin/main", ""].join(US) + RS +
+      [" ", "feature/enchant-ui", "abc1234", "", ""].join(US) + RS;
     const branches = parseBranches(data);
     expect(branches).toEqual([
-      { name: "main", current: true, shortHash: "9ef9033", upstream: "origin/main" },
-      { name: "feature/enchant-ui", current: false, shortHash: "abc1234", upstream: null },
+      {
+        name: "main",
+        current: true,
+        shortHash: "9ef9033",
+        upstream: "origin/main",
+        ahead: 0,
+        behind: 0,
+        upstreamGone: false,
+      },
+      {
+        name: "feature/enchant-ui",
+        current: false,
+        shortHash: "abc1234",
+        upstream: null,
+        ahead: 0,
+        behind: 0,
+        upstreamGone: false,
+      },
+    ]);
+  });
+
+  it("reads ahead/behind counts and a gone upstream from the track field", () => {
+    const data =
+      ["*", "ahead", "1111111", "origin/ahead", "[ahead 2]"].join(US) + RS +
+      [" ", "behind", "2222222", "origin/behind", "[behind 3]"].join(US) + RS +
+      [" ", "diverged", "3333333", "origin/diverged", "[ahead 2, behind 3]"].join(US) + RS +
+      [" ", "orphan", "4444444", "origin/orphan", "[gone]"].join(US) + RS;
+    expect(parseBranches(data).map((b) => [b.name, b.ahead, b.behind, b.upstreamGone])).toEqual([
+      ["ahead", 2, 0, false],
+      ["behind", 0, 3, false],
+      ["diverged", 2, 3, false],
+      ["orphan", 0, 0, true],
     ]);
   });
 });

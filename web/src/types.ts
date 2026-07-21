@@ -71,6 +71,12 @@ export interface Branch {
   current: boolean;
   shortHash: string;
   upstream: string | null;
+  /** Commits the branch has that its upstream lacks (0 without an upstream). */
+  ahead: number;
+  /** Commits the upstream has that the branch lacks. */
+  behind: number;
+  /** The upstream ref no longer exists on the remote. */
+  upstreamGone: boolean;
 }
 
 export interface Remote {
@@ -137,6 +143,76 @@ export interface GitHubRepo {
   cloneUrl: string;
   description: string | null;
   updatedAt: string | null;
+}
+
+/** A repository the pull-request dialog can target, with its fork lineage. */
+export interface GitHubRepoRef {
+  fullName: string;
+  owner: string;
+  name: string;
+  defaultBranch: string;
+  private: boolean;
+  isFork: boolean;
+  parentFullName: string | null;
+}
+
+/** A user selectable as a reviewer or assignee. */
+export interface GitHubAccount {
+  login: string;
+  avatarUrl: string | null;
+}
+
+export interface GitHubLabel {
+  name: string;
+  color: string;
+  description: string | null;
+}
+
+/** A pull-request template found in the working tree. */
+export interface PrTemplate {
+  path: string;
+  name: string;
+}
+
+/** Everything the Create Pull Request dialog needs on open. */
+export interface PrContext {
+  viewer: GitHubUser | null;
+  head: {
+    branch: string;
+    branches: Branch[];
+    repo: GitHubRepoRef | null;
+    remote: string | null;
+  };
+  baseCandidates: GitHubRepoRef[];
+  defaults: { baseRepo: string | null; baseBranch: string | null };
+  templates: PrTemplate[];
+}
+
+/** Reviewer/assignee/label options for a chosen target repository. */
+export interface PrMeta {
+  collaborators: GitHubAccount[];
+  assignees: GitHubAccount[];
+  labels: GitHubLabel[];
+}
+
+export interface CreatePrInput {
+  baseRepo: string;
+  base: string;
+  headRepo: string;
+  head: string;
+  title: string;
+  body: string;
+  draft: boolean;
+  reviewers: string[];
+  assignees: string[];
+  labels: string[];
+}
+
+export interface CreatedPr {
+  number: number;
+  htmlUrl: string;
+  /** Non-fatal problems, e.g. reviewers that couldn't be requested. */
+  warnings: string[];
 }
 
 export type MergeKind = "merge" | "rebase" | "cherry-pick" | "revert";

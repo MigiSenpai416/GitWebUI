@@ -1,16 +1,22 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { localRef, useStore } from "../state/store";
-import type { Branch, RemoteBranch } from "../types";
+import type { Branch, RemoteBranch, Worktree } from "../types";
 import { buildTree, type TreeNode } from "./fileTree";
 import {
   IconBranch,
   IconChevron,
   IconChevronDown,
+  IconClipboard,
+  IconExternal,
   IconEye,
   IconEyeOff,
   IconFolder,
+  IconHome,
   IconMonitor,
+  IconPlus as IconPlusGlyph,
+  IconRefresh,
   IconTrash,
+  IconWorktree,
 } from "./icons";
 import "./Sidebar.css";
 
@@ -33,8 +39,19 @@ export function Sidebar() {
   const collapsed = useStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
 
+  const worktrees = useStore((s) => s.worktrees);
+  const loadWorktrees = useStore((s) => s.loadWorktrees);
+  const openWorktreeCreate = useStore((s) => s.openWorktreeCreate);
+  const openWorktree = useStore((s) => s.openWorktree);
+  const removeWorktree = useStore((s) => s.removeWorktree);
+  const pruneWorktrees = useStore((s) => s.pruneWorktrees);
+  const revealWorktree = useStore((s) => s.revealWorktree);
+  const setNotice = useStore((s) => s.setNotice);
+
   const [localOpen, setLocalOpen] = useState(true);
   const [remoteOpen, setRemoteOpen] = useState(true);
+  const [worktreeOpen, setWorktreeOpen] = useState(true);
+  const [wtMenu, setWtMenu] = useState<{ wt: Worktree; x: number; y: number } | null>(null);
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
   const toggleDir = (key: string) =>
     setCollapsedDirs((prev) => {
@@ -58,6 +75,25 @@ export function Sidebar() {
       "Remove",
     );
     if (ok) removeRemote(name);
+  };
+
+  const onRemoveWorktree = async (wt: Worktree) => {
+    const label = wt.branch ?? wt.path;
+    const branchNote = wt.branch ? ` and its branch "${wt.branch}"` : "";
+    const ok = await requestConfirm(
+      `Remove the worktree "${label}"${branchNote}? Its working directory will be deleted.`,
+      "Remove",
+    );
+    if (ok) removeWorktree(wt.path);
+  };
+
+  const copyPath = async (path: string) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      setNotice("Copied the worktree path.");
+    } catch {
+      setNotice("Couldn't access the clipboard.");
+    }
   };
 
   if (collapsed) {
@@ -105,7 +141,14 @@ export function Sidebar() {
         count={remoteBranches.length}
         open={remoteOpen}
         onToggle={() => setRemoteOpen((v) => !v)}
-        action={{ title: "Add remote", onClick: openAddRemote }}
+        actions={[
+          {
+            title: "Add remote",
+            icon: <IconPlusGlyph width={15} height={15} />,
+            onClick: openAddRemote,
+            tone: "green",
+          },
+        ]}
       >
         {remoteNames.length === 0 ? (
           <div className="sb-empty">No remotes — add one to push</div>
@@ -131,9 +174,62 @@ export function Sidebar() {
         )}
       </Section>
 
+      <Section
+        icon={<IconWorktree width={15} height={15} />}
+        label="Worktrees"
+        count={worktrees.length}
+        open={worktreeOpen}
+        onToggle={() => setWorktreeOpen((v) => !v)}
+        actions={[
+          { title: "Refresh WIP", icon: <IconRefresh width={14} height={14} />, onClick: loadWorktrees },
+          {
+            title: "Create worktree",
+            icon: <IconPlusGlyph width={15} height={15} />,
+            onClick: openWorktreeCreate,
+            tone: "green",
+          },
+        ]}
+      >
+        {worktrees.length === 0 ? (
+          <div className="sb-empty">No worktrees</div>
+        ) : (
+          worktrees.map((wt) => (
+            <WorktreeRow
+              key={wt.path}
+              wt={wt}
+              onOpen={() => openWorktree(wt.path)}
+              onMenu={(e) => {
+                e.preventDefault();
+                setWtMenu({ wt, x: e.clientX, y: e.clientY });
+              }}
+            />
+          ))
+        )}
+      </Section>
+
       {repo && <div className="sb-repo" title={repo.root}>{repo.root}</div>}
+
+      {wtMenu && (
+        <WorktreeMenu
+          menu={wtMenu}
+          onClose={() => setWtMenu(null)}
+          onOpen={() => openWorktree(wtMenu.wt.path)}
+          onRemove={() => onRemoveWorktree(wtMenu.wt)}
+          onReveal={() => revealWorktree(wtMenu.wt.path)}
+          onCopy={() => copyPath(wtMenu.wt.path)}
+          onPrune={pruneWorktrees}
+        />
+      )}
     </aside>
   );
+}
+
+interface SectionAction {
+  title: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+  /** "green" for creative actions (default is a neutral tint). */
+  tone?: "green";
 }
 
 interface SectionProps {
@@ -142,13 +238,14 @@ interface SectionProps {
   count: number;
   open: boolean;
   onToggle: () => void;
-  action?: { title: string; onClick: () => void };
+  actions?: SectionAction[];
   children: React.ReactNode;
 }
 
-function Section({ icon, label, count, open, onToggle, action, children }: SectionProps) {
+function Section({ icon, label, count, open, onToggle, actions, children }: SectionProps) {
+  const hasActions = !!actions && actions.length > 0;
   return (
-    <section className={"sb-section" + (action ? " has-action" : "")}>
+    <section className={"sb-section" + (hasActions ? " has-action" : "")}>
       <div className="sb-head">
         <button className="sb-head-btn" onClick={onToggle}>
           {open ? <IconChevronDown width={13} height={13} /> : <IconChevron width={13} height={13} />}
@@ -156,17 +253,22 @@ function Section({ icon, label, count, open, onToggle, action, children }: Secti
           <span className="sb-head-label">{label}</span>
           <span className="sb-head-count">{count}</span>
         </button>
-        {action && (
-          <button
-            className="sb-add"
-            title={action.title}
-            onClick={(e) => {
-              e.stopPropagation();
-              action.onClick();
-            }}
-          >
-            <IconPlus />
-          </button>
+        {hasActions && (
+          <div className="sb-actions">
+            {actions!.map((a) => (
+              <button
+                key={a.title}
+                className={"sb-add" + (a.tone === "green" ? " green" : "")}
+                title={a.title}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  a.onClick();
+                }}
+              >
+                {a.icon}
+              </button>
+            ))}
+          </div>
         )}
       </div>
       {open && <div className="sb-list">{children}</div>}
@@ -409,11 +511,110 @@ function IconCloud() {
   );
 }
 
-function IconPlus() {
+function basename(p: string): string {
+  const parts = p.replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? p;
+}
+
+/** One worktree row: double-click opens it; right-click reveals its actions. */
+function WorktreeRow({
+  wt,
+  onOpen,
+  onMenu,
+}: {
+  wt: Worktree;
+  onOpen: () => void;
+  onMenu: (e: React.MouseEvent) => void;
+}) {
+  const label = wt.branch ?? (wt.detached && wt.head ? wt.head.slice(0, 7) : basename(wt.path));
   return (
-    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
-      <path d="M12 5v14M5 12h14" />
-    </svg>
+    <div
+      className={"sb-item sb-worktree" + (wt.current ? " current" : "")}
+      title={`${wt.path}\nDouble-click to open`}
+      onDoubleClick={onOpen}
+      onContextMenu={onMenu}
+    >
+      {wt.isMain ? (
+        <IconHome width={14} height={14} className="sb-item-icon" />
+      ) : (
+        <IconWorktree width={14} height={14} className="sb-item-icon" />
+      )}
+      <span className="sb-item-name">{label}</span>
+      {wt.locked && <span className="sb-wt-lock" title="Locked">🔒</span>}
+    </div>
+  );
+}
+
+/** Right-click actions for a worktree. */
+function WorktreeMenu({
+  menu,
+  onClose,
+  onOpen,
+  onRemove,
+  onReveal,
+  onCopy,
+  onPrune,
+}: {
+  menu: { wt: Worktree; x: number; y: number };
+  onClose: () => void;
+  onOpen: () => void;
+  onRemove: () => void;
+  onReveal: () => void;
+  onCopy: () => void;
+  onPrune: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (e: MouseEvent) => {
+      if (ref.current && ref.current.contains(e.target as Node)) return;
+      onClose();
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // Defer so the opening right-click doesn't immediately dismiss the menu.
+    const id = window.setTimeout(() => document.addEventListener("mousedown", close), 0);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  const removable = !menu.wt.isMain && !menu.wt.current;
+  const run = (fn: () => void) => {
+    onClose();
+    fn();
+  };
+
+  return (
+    <div
+      ref={ref}
+      className="wt-menu"
+      style={{ top: menu.y, left: menu.x }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <button className="wt-menu-item" onClick={() => run(onOpen)}>
+        <IconExternal width={14} height={14} /> Open
+      </button>
+      <button className="wt-menu-item" onClick={() => run(onReveal)}>
+        <IconFolder width={14} height={14} /> Open folder in file explorer
+      </button>
+      <button className="wt-menu-item" onClick={() => run(onCopy)}>
+        <IconClipboard width={14} height={14} /> Copy path
+      </button>
+      <div className="wt-menu-sep" />
+      <button
+        className="wt-menu-item danger"
+        disabled={!removable}
+        title={removable ? undefined : "The main and current worktrees can't be removed"}
+        onClick={() => removable && run(onRemove)}
+      >
+        <IconTrash width={14} height={14} /> Remove worktree
+      </button>
+      <button className="wt-menu-item" onClick={() => run(onPrune)}>
+        <IconRefresh width={14} height={14} /> Prune stale worktrees
+      </button>
+    </div>
   );
 }
 

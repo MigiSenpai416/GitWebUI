@@ -15,6 +15,7 @@ import type {
   RemoteBranch,
   StashEntry,
   StatusResult,
+  Worktree,
 } from "../types";
 
 /** Thrown on a 401 so the store can drop back to the login screen. */
@@ -117,6 +118,22 @@ export const api = {
 
   branches: () => req<{ branches: Branch[] }>("/api/branches"),
   remoteBranches: () => req<{ branches: RemoteBranch[] }>("/api/remote-branches"),
+
+  worktrees: () => req<{ worktrees: Worktree[] }>("/api/worktrees"),
+  addWorktree: (path: string, ref: string, branch: string) =>
+    req<{ worktrees: Worktree[] }>("/api/worktree/add", {
+      method: "POST",
+      body: JSON.stringify({ path, ref, branch }),
+    }),
+  removeWorktree: (path: string) =>
+    req<{ worktrees: Worktree[] }>("/api/worktree/remove", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
+  pruneWorktrees: () =>
+    req<{ worktrees: Worktree[] }>("/api/worktree/prune", { method: "POST", body: "{}" }),
+  revealWorktree: (path: string) =>
+    req<{ ok: true }>("/api/worktree/reveal", { method: "POST", body: JSON.stringify({ path }) }),
   checkout: (branch: string) =>
     req<{ repo: RepoInfo }>("/api/checkout", {
       method: "POST",

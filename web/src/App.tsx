@@ -6,6 +6,7 @@ import { CommitList } from "./components/CommitList";
 import { ChangesPanel } from "./components/ChangesPanel";
 import { ConflictPanel } from "./components/ConflictPanel";
 import { ConflictResolver } from "./components/ConflictResolver";
+import { CreateWorktreePanel } from "./components/CreateWorktreePanel";
 import { CommitBox } from "./components/CommitBox";
 import { CommitDetails } from "./components/CommitDetails";
 import { DiffViewer } from "./components/DiffViewer/DiffViewer";
@@ -34,6 +35,7 @@ export function App() {
   const selectedFile = useStore((s) => s.selectedFile);
   const mergeActive = useStore((s) => s.mergeState?.active ?? false);
   const conflictPath = useStore((s) => s.conflictPath);
+  const worktreeCreateOpen = useStore((s) => s.worktreeCreateOpen);
   const init = useStore((s) => s.init);
   const refreshAll = useStore((s) => s.refreshAll);
   const lastRefresh = useRef(0);
@@ -96,26 +98,32 @@ export function App() {
           <Toolbar />
           <div className="app-body">
             <Sidebar />
-            <div className="commit-pane">
-              <CommitList />
-              {!conflictPath && selectedFile && <DiffViewer />}
-            </div>
-            <div className="side-pane">
-              {selectedCommitHash ? (
-                <CommitDetails />
-              ) : mergeActive ? (
-                <>
-                  <ConflictPanel />
-                  <CommitBox />
-                </>
-              ) : (
-                <>
-                  <ChangesPanel />
-                  <CommitBox />
-                </>
-              )}
-            </div>
-            {conflictPath && <ConflictResolver />}
+            {worktreeCreateOpen ? (
+              <CreateWorktreePanel />
+            ) : (
+              <>
+                <div className="commit-pane">
+                  <CommitList />
+                  {!conflictPath && selectedFile && <DiffViewer />}
+                </div>
+                <div className="side-pane">
+                  {selectedCommitHash ? (
+                    <CommitDetails />
+                  ) : mergeActive ? (
+                    <>
+                      <ConflictPanel />
+                      <CommitBox />
+                    </>
+                  ) : (
+                    <>
+                      <ChangesPanel />
+                      <CommitBox />
+                    </>
+                  )}
+                </div>
+                {conflictPath && <ConflictResolver />}
+              </>
+            )}
           </div>
         </>
       ) : (

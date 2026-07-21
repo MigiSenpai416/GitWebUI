@@ -31,6 +31,21 @@ export async function revealFolder(root: string, relPath: string): Promise<void>
   launch(dir);
 }
 
+/**
+ * Open an absolute path in the host's file manager. Unlike revealFolder this
+ * doesn't constrain to a repo root — callers must validate the path first (e.g.
+ * that it is a known worktree of the repo).
+ */
+export async function openFolderAbsolute(abs: string): Promise<void> {
+  const stat = await fs.stat(abs).catch(() => null);
+  if (!stat) {
+    const err = new Error("Folder no longer exists") as Error & { status?: number };
+    err.status = 404;
+    throw err;
+  }
+  launch(stat.isDirectory() ? abs : path.dirname(abs));
+}
+
 function launch(target: string): void {
   const platform = process.platform;
   const [cmd, args] =

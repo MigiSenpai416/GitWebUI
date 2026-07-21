@@ -89,6 +89,12 @@
 /* Green + revealed on hovering a section that supports adding. It collapses to
    zero width when hidden so the count sits in the SAME spot as other sections'
    counts, then expands on hover — nudging the count left to make room. */
+.sb-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
 .sb-add {
   display: inline-flex;
   align-items: center;
@@ -100,17 +106,25 @@
   border-radius: var(--radius-sm);
   background: transparent;
   border: none;
-  color: var(--green);
+  color: var(--text-dim);
   opacity: 0;
   flex-shrink: 0;
   transition: width 0.12s ease, opacity 0.12s ease, background 0.12s ease;
+}
+.sb-add.green {
+  color: var(--green);
 }
 .sb-section.has-action:hover .sb-add {
   width: 22px;
   opacity: 1;
 }
 .sb-add:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+.sb-add.green:hover {
   background: rgba(63, 185, 80, 0.16);
+  color: var(--green);
 }
 
 .sb-list {
@@ -286,6 +300,79 @@ button.sb-dir:hover {
 .sb-remote-remove:hover {
   color: var(--red);
   background: rgba(248, 81, 73, 0.14);
+}
+
+/* Worktree rows: like local branches; the current worktree reads as active. */
+.sb-worktree {
+  cursor: pointer;
+  padding-left: 22px;
+}
+.sb-worktree:hover {
+  background: var(--bg-row-hover);
+}
+.sb-worktree.current {
+  background: rgba(63, 185, 80, 0.1);
+}
+.sb-worktree.current .sb-item-name {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.sb-worktree.current .sb-item-icon {
+  color: var(--green);
+}
+.sb-wt-lock {
+  margin-left: auto;
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+/* Worktree right-click menu. */
+.wt-menu {
+  position: fixed;
+  z-index: 320;
+  min-width: 210px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+}
+.wt-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+.wt-menu-item > svg {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.wt-menu-item:hover {
+  background: var(--bg-row-selected);
+}
+.wt-menu-item:disabled {
+  opacity: 0.4;
+}
+.wt-menu-item.danger {
+  color: var(--red);
+}
+.wt-menu-item.danger > svg {
+  color: var(--red);
+}
+.wt-menu-item.danger:not(:disabled):hover {
+  background: rgba(248, 81, 73, 0.14);
+}
+.wt-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
 }
 
 .sb-repo {

@@ -15,6 +15,7 @@ import type {
   SelectedFile,
   StashEntry,
   StatusResult,
+  Worktree,
 } from "../types";
 
 const PAGE = 150;
@@ -211,6 +212,9 @@ interface AppState {
   branches: Branch[];
   remotes: Remote[];
   remoteBranches: RemoteBranch[];
+  worktrees: Worktree[];
+  /** Whether the "Create Worktree" panel is showing in the content area. */
+  worktreeCreateOpen: boolean;
   /** Extra remote branch refs (beyond HEAD) whose commits show in the log. */
   visibleRefs: string[];
   stashes: StashEntry[];
@@ -279,6 +283,15 @@ interface AppState {
   loadRemoteBranches: () => Promise<void>;
   toggleBranchVisibility: (ref: string) => void;
   checkout: (branch: string) => Promise<void>;
+
+  loadWorktrees: () => Promise<void>;
+  openWorktreeCreate: () => void;
+  closeWorktreeCreate: () => void;
+  createWorktree: (path: string, ref: string, branch: string) => Promise<void>;
+  openWorktree: (path: string) => Promise<void>;
+  removeWorktree: (path: string) => Promise<void>;
+  pruneWorktrees: () => Promise<void>;
+  revealWorktree: (path: string) => Promise<void>;
   checkoutRemote: (remote: string, local: string) => Promise<void>;
   deleteBranch: (name: string) => Promise<void>;
 
@@ -411,6 +424,8 @@ export const useStore = create<AppState>((set, get) => ({
   branches: [],
   remotes: [],
   remoteBranches: [],
+  worktrees: [],
+  worktreeCreateOpen: false,
   visibleRefs: [],
   stashes: [],
   githubStatus: null,
@@ -718,7 +733,7 @@ export const useStore = create<AppState>((set, get) => ({
         selectedFile: null,
       });
       syncActiveTab(get, set, repo);
-      await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
+      await refreshRepoData(get, set);
     } catch (e) {
       reportError(set, e);
     }
@@ -730,7 +745,7 @@ export const useStore = create<AppState>((set, get) => ({
       const { repo } = await api.checkoutRemote(remote, local);
       set({ repo, selectedCommitHash: null, commitFiles: [], selectedFile: null });
       syncActiveTab(get, set, repo);
-      await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
+      await refreshRepoData(get, set);
       set({ notice: `Checked out ${local} (tracking ${remote}).` });
     } catch (e) {
       reportError(set, e);
@@ -751,7 +766,91 @@ export const useStore = create<AppState>((set, get) => ({
         writeVisibleFor(get().repo?.root ?? "", next);
       }
       // A deleted branch's ref badge should disappear from the graph.
-      await get().loadCommits(true);
+      await refreshRepoData(get, set);
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  async loadWorktrees() {
+    try {
+      const { worktrees } = await api.worktrees();
+      set({ worktrees });
+    } catch {
+      /* non-fatal */
+    }
+  },
+
+  openWorktreeCreate() {
+    set({ worktreeCreateOpen: true, selectedCommitHash: null, selectedFile: null });
+    // Ensure the branch list (for the reference dropdown) is fresh.
+    get().loadBranches();
+  },
+  closeWorktreeCreate() {
+    set({ worktreeCreateOpen: false });
+  },
+
+  async createWorktree(path: string, ref: string, branch: string) {
+    // Errors propagate so the create panel can show them inline.
+    await api.addWorktree(path, ref, branch);
+    set({ worktreeCreateOpen: false, notice: `Created worktree ${branch}.` });
+    await refreshRepoData(get, set);
+  },
+
+  async openWorktree(path: string) {
+    const state = get();
+    // If the worktree is already open in a tab, just switch to it.
+    const existing = state.tabs.find((t) => t.root === path);
+    if (existing) {
+      await get().selectTab(existing.id);
+      return;
+    }
+    set({ opening: true, error: null, worktreeCreateOpen: false });
+    try {
+      // Re-point the CURRENT tab at the worktree's directory (a valid repo root
+      // sharing the same .git), then load its data.
+      const { repo } = await api.openRepo(path);
+      const tabs = state.tabs.map((t) =>
+        t.id === state.activeTabId
+          ? { ...t, root: repo.root, name: basename(repo.root), branch: repo.branch }
+          : t,
+      );
+      set({ tabs });
+      persistTabs(tabs, state.activeTabId);
+      await hydrateRepo(get, set, repo);
+      await get().loadRecent();
+    } catch (e) {
+      reportError(set, e);
+    } finally {
+      set({ opening: false });
+    }
+  },
+
+  async removeWorktree(path: string) {
+    set({ error: null });
+    try {
+      await api.removeWorktree(path);
+      set({ notice: "Removed the worktree." });
+      await refreshRepoData(get, set);
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  async pruneWorktrees() {
+    set({ error: null });
+    try {
+      await api.pruneWorktrees();
+      set({ notice: "Pruned stale worktrees." });
+      await refreshRepoData(get, set);
+    } catch (e) {
+      reportError(set, e);
+    }
+  },
+
+  async revealWorktree(path: string) {
+    try {
+      await api.revealWorktree(path);
     } catch (e) {
       reportError(set, e);
     }
@@ -777,6 +876,8 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const { remotes } = await api.removeRemote(name);
       set({ remotes });
+      // Its remote-tracking branches should disappear from the sidebar/graph.
+      await refreshRepoData(get, set);
     } catch (e) {
       reportError(set, e);
     }
@@ -787,7 +888,7 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const { repo, remotes } = await api.createGitHubRepo(opts);
       set({ remotes });
-      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      await refreshRepoData(get, set);
       set({ notice: `Created ${repo.fullName} and pushed ${get().repo?.branch ?? ""}.` });
       return repo.htmlUrl;
     } finally {
@@ -806,7 +907,7 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const { merge, status } = await api.pull();
       applyMerge(get, set, merge, status);
-      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      await refreshRepoData(get, set);
       if (merge.active) {
         set({ selectedCommitHash: null, selectedFile: null });
       } else {
@@ -837,7 +938,7 @@ export const useStore = create<AppState>((set, get) => ({
         syncActiveTab(get, set, repo);
       }
       applyMerge(get, set, merge, status);
-      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      await refreshRepoData(get, set);
       if (merge.active) {
         // Conflicts — jump to the WIP/conflict view so the resolver is reachable.
         set({ selectedCommitHash: null, selectedFile: null });
@@ -859,7 +960,7 @@ export const useStore = create<AppState>((set, get) => ({
       }
       set({ selectedCommitHash: null, commitFiles: [], selectedFile: null });
       applyMerge(get, set, merge, status);
-      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      await refreshRepoData(get, set);
       set({ notice: `Checked out ${hash.slice(0, 7)} (detached HEAD).` });
     } catch (e) {
       reportError(set, e);
@@ -875,7 +976,7 @@ export const useStore = create<AppState>((set, get) => ({
         syncActiveTab(get, set, repo);
       }
       applyMerge(get, set, merge, status);
-      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      await refreshRepoData(get, set);
       if (merge.active) {
         set({ selectedCommitHash: null, selectedFile: null });
       } else if (noCommit) {
@@ -902,7 +1003,7 @@ export const useStore = create<AppState>((set, get) => ({
       }
       set({ mergeSeen: [], conflictPath: null, conflictData: null });
       applyMerge(get, set, merge, status);
-      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      await refreshRepoData(get, set);
       set({ notice: "Aborted — restored the pre-merge state." });
     } catch (e) {
       reportError(set, e);
@@ -954,8 +1055,9 @@ export const useStore = create<AppState>((set, get) => ({
     if (get().remoteBusy) return;
     set({ remoteBusy: true, error: null });
     try {
-      const { stashed, status, stashes } = await api.stashPush();
-      set({ status, stashes, selectedFile: null });
+      const { stashed } = await api.stashPush();
+      set({ selectedFile: null });
+      await refreshRepoData(get, set);
       set({ notice: stashed ? "Stashed your changes." : "Nothing to stash — working tree is clean." });
     } catch (e) {
       reportError(set, e);
@@ -968,8 +1070,8 @@ export const useStore = create<AppState>((set, get) => ({
     if (get().remoteBusy) return;
     set({ remoteBusy: true, error: null, stashMenu: null });
     try {
-      const { status, stashes } = await api.stashPop(index);
-      set({ status, stashes });
+      await api.stashPop(index);
+      await refreshRepoData(get, set);
       set({ notice: "Popped the stash." });
     } catch (e) {
       reportError(set, e);
@@ -982,8 +1084,8 @@ export const useStore = create<AppState>((set, get) => ({
     if (get().remoteBusy) return;
     set({ remoteBusy: true, error: null, stashMenu: null });
     try {
-      const { status, stashes } = await api.stashApply(index);
-      set({ status, stashes });
+      await api.stashApply(index);
+      await refreshRepoData(get, set);
       set({ notice: "Applied the stash (kept it in the list)." });
     } catch (e) {
       reportError(set, e);
@@ -995,8 +1097,8 @@ export const useStore = create<AppState>((set, get) => ({
   async stashDrop(index: number) {
     set({ error: null, stashMenu: null });
     try {
-      const { stashes } = await api.stashDrop(index);
-      set({ stashes });
+      await api.stashDrop(index);
+      await refreshRepoData(get, set);
       set({ notice: "Dropped the stash." });
     } catch (e) {
       reportError(set, e);
@@ -1139,7 +1241,7 @@ export const useStore = create<AppState>((set, get) => ({
       const { repo } = await api.createBranch(name, hash);
       set({ repo });
       syncActiveTab(get, set, repo);
-      await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
+      await refreshRepoData(get, set);
     } catch (e) {
       reportError(set, e);
     }
@@ -1150,7 +1252,7 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const { repo } = await api.reset(hash, mode);
       set({ repo, selectedCommitHash: null, commitFiles: [], selectedFile: null });
-      await Promise.all([get().loadCommits(true), get().refreshStatus(), get().loadBranches()]);
+      await refreshRepoData(get, set);
     } catch (e) {
       reportError(set, e);
     }
@@ -1163,7 +1265,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (repo) set({ repo });
       set({ selectedCommitHash: null, commitFiles: [], selectedFile: null });
       applyMerge(get, set, merge, status);
-      await Promise.all([get().loadCommits(true), get().loadBranches()]);
+      await refreshRepoData(get, set);
     } catch (e) {
       reportError(set, e);
     }
@@ -1182,29 +1284,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async refreshAll() {
-    const s = get();
-    if (!s.repo || s.opening) return;
-    // Bump the tick first so an open diff refetches alongside the lists.
-    set({ refreshTick: s.refreshTick + 1 });
-    // Refresh remote branches first so any deleted refs are pruned from the
-    // visible set before we query the log with them.
-    await s.loadRemoteBranches();
-    // Reload as many commits as are currently paged in, so a deep scroll
-    // position survives the refresh (server caps the page at 1000).
-    const count = Math.min(1000, Math.max(PAGE, s.commits.length));
-    const commitsPromise = api
-      .commits(0, count, get().visibleRefs)
-      .then(({ commits, hasMore }) => set({ commits, hasMore }))
-      .catch((e) => reportError(set, e));
-    // A selected commit's file list is immutable, so it needs no reload.
-    await Promise.all([
-      commitsPromise,
-      s.refreshStatus(),
-      s.loadBranches(),
-      s.loadRemotes(),
-      s.loadStashes(),
-      s.loadMergeState(),
-    ]);
+    if (!get().repo || get().opening) return;
+    await refreshRepoData(get, set);
   },
 
   async stage(paths: string[]) {
@@ -1285,9 +1366,9 @@ export const useStore = create<AppState>((set, get) => ({
   async commit(title: string, description: string, amend: boolean) {
     set({ committing: true, error: null });
     try {
-      const { status } = await api.commit(title, description, amend);
-      set({ status, selectedFile: null });
-      await Promise.all([get().loadCommits(true), get().loadBranches(), get().loadMergeState()]);
+      await api.commit(title, description, amend);
+      set({ selectedFile: null });
+      await refreshRepoData(get, set);
     } catch (e) {
       reportError(set, e);
       throw e;
@@ -1324,6 +1405,39 @@ export const useStore = create<AppState>((set, get) => ({
 type StoreGet = () => AppState;
 type StoreSet = (partial: Partial<AppState>) => void;
 
+/**
+ * Re-sync every piece of repo data that a mutation could have changed: commits,
+ * status, local/remote branches, remotes, stashes, merge state, and worktrees.
+ * This is the single "everything is fresh now" path — every mutating action ends
+ * with it, so no action has to remember which specific lists it touched. It
+ * preserves scroll (reloads only as many commits as are paged in) and doesn't
+ * disturb the current selection. Read-only/selection actions skip it.
+ */
+async function refreshRepoData(get: StoreGet, set: StoreSet): Promise<void> {
+  if (!get().repo) return;
+  // Bump the tick first so an open diff refetches alongside the lists.
+  set({ refreshTick: get().refreshTick + 1 });
+  // Refresh remote branches first so any deleted refs are pruned from the
+  // visible set before we query the log with them.
+  await get().loadRemoteBranches();
+  // Reload as many commits as are currently paged in, so a deep scroll position
+  // survives the refresh (server caps the page at 1000).
+  const count = Math.min(1000, Math.max(PAGE, get().commits.length));
+  const commitsPromise = api
+    .commits(0, count, get().visibleRefs)
+    .then(({ commits, hasMore }) => set({ commits, hasMore }))
+    .catch((e) => reportError(set, e));
+  await Promise.all([
+    commitsPromise,
+    get().refreshStatus(),
+    get().loadBranches(),
+    get().loadRemotes(),
+    get().loadStashes(),
+    get().loadMergeState(),
+    get().loadWorktrees(),
+  ]);
+}
+
 const FORCE_PUSH_SKIP_KEY = "gwui.skipForcePushConfirm";
 
 /**
@@ -1338,11 +1452,10 @@ async function runPush(get: StoreGet, set: StoreSet, force: boolean): Promise<vo
   let rejected: { branch: string; upstream: string | null } | null = null;
   try {
     const res = await api.push(force);
-    set({ branches: res.branches });
     if (res.rejected && !force) {
       rejected = { branch: res.branch, upstream: res.upstream ?? null };
     } else {
-      await get().loadCommits(true);
+      await refreshRepoData(get, set);
       set({ notice: force ? `Force-pushed ${res.branch}.` : `Pushed ${res.branch}.` });
     }
   } catch (e) {
@@ -1416,6 +1529,8 @@ function showPicker(set: StoreSet): void {
     branches: [],
     remotes: [],
     remoteBranches: [],
+    worktrees: [],
+    worktreeCreateOpen: false,
     visibleRefs: [],
     stashes: [],
     commitMenu: null,
@@ -1441,6 +1556,8 @@ async function hydrateRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promis
     branches: [],
     remotes: [],
     remoteBranches: [],
+    worktrees: [],
+    worktreeCreateOpen: false,
     visibleRefs: [],
     stashes: [],
     commitMenu: null,
@@ -1461,6 +1578,7 @@ async function hydrateRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promis
     get().loadRemotes(),
     get().loadStashes(),
     get().loadMergeState(),
+    get().loadWorktrees(),
   ]);
 }
 

@@ -86,6 +86,17 @@ export interface RemoteBranch {
   shortHash: string;
 }
 
+export interface Worktree {
+  path: string;
+  head: string | null;
+  branch: string | null;
+  isMain: boolean;
+  current: boolean;
+  detached: boolean;
+  bare: boolean;
+  locked: boolean;
+}
+
 export interface StashEntry {
   index: number;
   ref: string;

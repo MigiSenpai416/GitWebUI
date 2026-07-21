@@ -16,7 +16,14 @@ import {
   revertCommit,
   type ResetMode,
 } from "./git/mutate.js";
-import { revealFolder } from "./system.js";
+import { revealFolder, openFolderAbsolute } from "./system.js";
+import {
+  listWorktrees,
+  addWorktree,
+  removeWorktree,
+  pruneWorktrees,
+  samePath,
+} from "./git/worktree.js";
 import {
   getBranches,
   getRemoteBranches,
@@ -314,6 +321,56 @@ api.post("/reveal", h(async (req, res) => {
   const root = requireRepoRoot(req);
   const path = String(req.body?.path ?? "").trim();
   await revealFolder(root, path);
+  res.json({ ok: true });
+}));
+
+// ---- Worktrees ----
+
+api.get("/worktrees", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  res.json({ worktrees: await listWorktrees(root) });
+}));
+
+api.post("/worktree/add", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const path = String(req.body?.path ?? "").trim();
+  const ref = String(req.body?.ref ?? "").trim();
+  const branch = String(req.body?.branch ?? "").trim();
+  if (!path) {
+    res.status(400).json({ error: "A working directory is required" });
+    return;
+  }
+  await addWorktree(root, { path, ref, newBranch: branch });
+  res.json({ worktrees: await listWorktrees(root) });
+}));
+
+api.post("/worktree/remove", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const path = String(req.body?.path ?? "").trim();
+  if (!path) {
+    res.status(400).json({ error: "A worktree path is required" });
+    return;
+  }
+  await removeWorktree(root, path);
+  res.json({ worktrees: await listWorktrees(root) });
+}));
+
+api.post("/worktree/prune", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  await pruneWorktrees(root);
+  res.json({ worktrees: await listWorktrees(root) });
+}));
+
+api.post("/worktree/reveal", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const path = String(req.body?.path ?? "").trim();
+  // Only reveal a directory that is actually a worktree of this repo.
+  const worktrees = await listWorktrees(root);
+  if (!path || !worktrees.some((w) => samePath(w.path, path))) {
+    res.status(400).json({ error: "Unknown worktree" });
+    return;
+  }
+  await openFolderAbsolute(path);
   res.json({ ok: true });
 }));
 

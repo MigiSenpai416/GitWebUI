@@ -229,6 +229,28 @@ export const IconExternal = (p: P) => (
     <path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
   </svg>
 );
+export const IconClipboard = (p: P) => (
+  <svg {...base({ width: 14, height: 14, ...p })}>
+    <rect x="6" y="4" width="12" height="17" rx="2" />
+    <path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1" />
+  </svg>
+);
+export const IconHome = (p: P) => (
+  <svg {...base({ strokeWidth: 1.7, ...p })}>
+    <path d="M4 11.5 12 4l8 7.5" />
+    <path d="M6 10v9h12v-9" />
+    <path d="M10 19v-5h4v5" />
+  </svg>
+);
+export const IconWorktree = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="7" cy="5" r="2.2" />
+    <path d="M7 7.2v9.6" />
+    <circle cx="7" cy="19" r="2.2" />
+    <path d="M7 12h6a3 3 0 0 0 3-3V7.5" />
+    <circle cx="16" cy="5" r="2.2" />
+  </svg>
+);
 export const IconRepo = (p: P) => (
   <svg {...base({ strokeWidth: 1.7, ...p })}>
     <path d="M6 4h11a1 1 0 0 1 1 1v13H7a1 1 0 0 1-1-1Z" />

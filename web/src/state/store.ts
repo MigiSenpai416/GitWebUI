@@ -178,6 +178,7 @@ interface AppState {
   tabs: RepoTab[];
   activeTabId: string | null;
   cloneDialogOpen: boolean;
+  createDialogOpen: boolean;
 
   repo: RepoInfo | null;
   recent: string[];
@@ -251,6 +252,15 @@ interface AppState {
   loadRecent: () => Promise<void>;
   openRepo: (path: string) => Promise<void>;
   cloneRepo: (dir: string, url: string) => Promise<void>;
+  createRepo: (dir: string, name: string, branch: string) => Promise<void>;
+  createGitHubRepoNew: (opts: {
+    name: string;
+    description: string;
+    private: boolean;
+    branch: string;
+    clone: boolean;
+    dir: string;
+  }) => Promise<void>;
   closeRepo: () => void;
 
   /** Tabs. */
@@ -259,6 +269,8 @@ interface AppState {
   closeTab: (id: string) => void;
   openCloneDialog: () => void;
   closeCloneDialog: () => void;
+  openCreateDialog: () => void;
+  closeCreateDialog: () => void;
 
   loadCommits: (reset: boolean) => Promise<void>;
   selectCommit: (hash: string | null) => Promise<void>;
@@ -370,6 +382,7 @@ export const useStore = create<AppState>((set, get) => ({
   tabs: initialTabs.tabs,
   activeTabId: initialTabs.activeTabId,
   cloneDialogOpen: false,
+  createDialogOpen: false,
 
   repo: null,
   recent: [],
@@ -515,6 +528,24 @@ export const useStore = create<AppState>((set, get) => ({
     await get().loadRecent();
   },
 
+  async createRepo(dir: string, name: string, branch: string) {
+    // Errors propagate so the Create dialog can show them inline.
+    const { repo } = await api.createRepo(dir, name, branch);
+    await adoptRepo(get, set, repo);
+    await get().loadRecent();
+  },
+
+  async createGitHubRepoNew(opts) {
+    // Errors propagate so the Create dialog can show them inline.
+    const { created, repo } = await api.createGitHubRepoNew(opts);
+    if (repo) {
+      await adoptRepo(get, set, repo);
+    } else {
+      set({ notice: `Created ${created.fullName} on GitHub.` });
+    }
+    await get().loadRecent();
+  },
+
   newTab() {
     const t = pickerTab();
     const tabs = [...get().tabs, t];
@@ -574,6 +605,12 @@ export const useStore = create<AppState>((set, get) => ({
   },
   closeCloneDialog() {
     set({ cloneDialogOpen: false });
+  },
+  openCreateDialog() {
+    set({ createDialogOpen: true });
+  },
+  closeCreateDialog() {
+    set({ createDialogOpen: false });
   },
 
   // Turn the active tab back into an empty picker ("Open a different repository").

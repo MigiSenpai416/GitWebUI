@@ -28,7 +28,8 @@ button {
 }
 
 input,
-textarea {
+textarea,
+select {
   font-family: inherit;
   color: var(--text);
   background: var(--bg-input);
@@ -37,8 +38,14 @@ textarea {
   outline: none;
 }
 input:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
   border-color: var(--accent-quiet);
+}
+/* Native select options fall back to OS colors in some browsers — pin them. */
+select option {
+  color: var(--text);
+  background: var(--bg-input);
 }
 
 ::-webkit-scrollbar {

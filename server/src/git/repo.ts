@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import { runGit, gitOut, GitError } from "./gitRunner.js";
 
 export interface RepoInfo {
@@ -53,6 +54,92 @@ export async function openRepo(input: string): Promise<RepoInfo> {
     branch: await currentBranch(root),
     head: await headHash(root),
   };
+}
+
+/**
+ * Initialize a brand-new local repository named `name` inside `parentDir` on
+ * `defaultBranch` (default "main"), seed it with a `README.md` containing
+ * `# <name>`, make the initial commit, and return its info. The name must be a
+ * single folder segment (no separators or traversal), the parent must exist, and
+ * the target must not already be a git repo. `identity` authors the first commit;
+ * a safe default is used if none is available so creation never fails.
+ */
+export async function createLocalRepo(
+  parentDir: string,
+  name: string,
+  defaultBranch: string,
+  identity: { name: string; email: string } | null = null,
+): Promise<RepoInfo> {
+  const parent = (parentDir ?? "").trim();
+  const repoName = (name ?? "").trim();
+  const branch = (defaultBranch ?? "").trim() || "main";
+
+  if (!parent) throw badRequest("A parent folder is required");
+  if (!repoName) throw badRequest("A repository name is required");
+  if (/[\\/]/.test(repoName) || repoName === "." || repoName === ".." || repoName.includes("..")) {
+    throw badRequest("The repository name can't contain path separators");
+  }
+  if (branch.startsWith("-") || /\s/.test(branch)) {
+    throw badRequest("Invalid default branch name");
+  }
+
+  let pstat;
+  try {
+    pstat = await fs.stat(parent);
+  } catch {
+    throw badRequest(`Path not found: ${parent}`);
+  }
+  if (!pstat.isDirectory()) throw badRequest(`Not a folder: ${parent}`);
+
+  const full = path.join(parent, repoName);
+  let alreadyRepo = false;
+  try {
+    await fs.stat(path.join(full, ".git"));
+    alreadyRepo = true;
+  } catch {
+    /* no .git — good */
+  }
+  if (alreadyRepo) throw badRequest(`A git repository already exists at ${full}`);
+
+  await fs.mkdir(full, { recursive: true });
+  try {
+    await runGit(full, ["init", "-b", branch]);
+  } catch (e) {
+    if (e instanceof GitError && /ENOENT|not recognized|No such file/i.test(e.message)) {
+      throw badRequest("git is not installed or not on PATH");
+    }
+    throw e;
+  }
+
+  // Seed a README and make the initial commit (matches GitKraken's behavior).
+  await fs.writeFile(path.join(full, "README.md"), `# ${repoName}\n`, "utf8");
+  await runGit(full, ["add", "--", "README.md"]);
+  await initialCommit(full, "Initial commit", identity);
+
+  return openRepo(full);
+}
+
+/** Commit with the given identity; retry with a safe default if git has none. */
+async function initialCommit(
+  root: string,
+  message: string,
+  identity: { name: string; email: string } | null,
+): Promise<void> {
+  const args = (id: { name: string; email: string } | null): string[] => {
+    const a: string[] = [];
+    if (id?.name && id?.email) {
+      a.push("-c", `user.name=${id.name}`, "-c", `user.email=${id.email}`);
+    }
+    return [...a, "commit", "-m", message];
+  };
+  try {
+    await runGit(root, args(identity));
+  } catch (e) {
+    // A missing author config is the likely failure — retry with a default so
+    // repo creation succeeds regardless of the host's git setup.
+    if (identity?.name && identity?.email) throw e;
+    await runGit(root, args({ name: "GitWebUI", email: "gitwebui@localhost" }));
+  }
 }
 
 export async function currentBranch(root: string): Promise<string> {

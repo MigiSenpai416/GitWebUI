@@ -1,0 +1,123 @@
+.create-dialog {
+  width: 720px;
+  max-width: 95vw;
+  padding: 18px 20px 20px;
+}
+.create-body {
+  display: flex;
+  gap: 20px;
+  min-height: 300px;
+}
+
+/* Provider rail: Local Only is active; remote providers are placeholders. */
+.create-rail {
+  width: 210px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--border);
+  padding-right: 8px;
+}
+.create-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius);
+  padding: 8px 11px;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+.create-rail-item > svg:first-child {
+  flex-shrink: 0;
+}
+.create-rail-item:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+.create-rail-item.active {
+  background: var(--bg-row-selected);
+  color: #fff;
+}
+
+/* Panel: right-aligned labels beside their fields, matching the reference. */
+.create-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.create-panel-title {
+  font-size: var(--fs-lg, 15px);
+  font-weight: 600;
+  color: var(--text-strong);
+  margin-bottom: 16px;
+}
+.create-field {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 13px;
+}
+.create-field > label,
+.create-field-label {
+  text-align: right;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.create-field input,
+.create-field select {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: var(--fs-md);
+}
+.create-field input:disabled,
+.create-field select:disabled {
+  opacity: 0.7;
+}
+.create-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+.create-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+.create-check {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+}
+.create-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent, #2f81f7);
+  cursor: pointer;
+}
+.create-fullpath {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 0;
+}
+.create-error {
+  margin-top: 4px;
+}
+.create-actions {
+  justify-content: flex-end;
+  margin-top: auto;
+  padding-top: 10px;
+}

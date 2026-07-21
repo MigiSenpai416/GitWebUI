@@ -10,7 +10,7 @@ export function RepoPicker() {
   const openRepo = useStore((s) => s.openRepo);
   const loadRecent = useStore((s) => s.loadRecent);
   const openCloneDialog = useStore((s) => s.openCloneDialog);
-  const setNotice = useStore((s) => s.setNotice);
+  const openCreateDialog = useStore((s) => s.openCreateDialog);
 
   const [showPath, setShowPath] = useState(false);
   const [path, setPath] = useState("");
@@ -45,10 +45,7 @@ export function RepoPicker() {
             <IconCloud width={18} height={18} />
             Clone
           </button>
-          <button
-            className="picker-action"
-            onClick={() => setNotice("Creating a brand-new repository isn't available yet — clone or open an existing one for now.")}
-          >
+          <button className="picker-action" onClick={openCreateDialog}>
             <IconPlus width={18} height={18} />
             Create
           </button>

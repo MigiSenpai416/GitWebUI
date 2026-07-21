@@ -1,6 +1,6 @@
 import path from "node:path";
 import { runGit } from "./gitRunner.js";
-import { currentBranch, openRepo, type RepoInfo } from "./repo.js";
+import { currentBranch, createLocalRepo, openRepo, type RepoInfo } from "./repo.js";
 import { getToken, createRepo, type CreatedRepo } from "../github.js";
 
 export interface Remote {
@@ -218,4 +218,56 @@ export async function createGitHubRemote(
     env: AUTH_ENV,
   });
   return { repo, remotes: await getRemotes(root) };
+}
+
+export interface CreateGitHubResult {
+  created: CreatedRepo;
+  /** The local clone, or null when "clone after init" was off. */
+  repo: RepoInfo | null;
+}
+
+/**
+ * Create a brand-new repository on GitHub for the connected account. When
+ * `clone` is set, also initialize a matching local repo (seeded README + initial
+ * commit on `defaultBranch`), wire it to the new remote, and push — so the user
+ * lands in a ready-to-work local checkout. Without `clone`, the repo is created
+ * on GitHub with an auto-generated README and nothing is written locally.
+ */
+export async function createGitHubRepoNew(opts: {
+  name: string;
+  description?: string;
+  private: boolean;
+  defaultBranch: string;
+  clone: boolean;
+  dir: string;
+  identity: { name: string; email: string } | null;
+}): Promise<CreateGitHubResult> {
+  const token = await getToken();
+  if (!token) {
+    throw Object.assign(new Error("Connect a GitHub account first"), { status: 401 });
+  }
+  if (opts.clone && !opts.dir.trim()) {
+    throw Object.assign(new Error("A folder to clone into is required"), { status: 400 });
+  }
+  // When cloning we seed locally and push; otherwise let GitHub auto-init a README.
+  const created = await createRepo(token, {
+    name: opts.name,
+    description: opts.description,
+    private: opts.private,
+    autoInit: !opts.clone,
+  });
+  if (!opts.clone) return { created, repo: null };
+
+  const info = await createLocalRepo(opts.dir, opts.name, opts.defaultBranch, opts.identity);
+  await addRemote(info.root, "origin", created.cloneUrl);
+  try {
+    await runGit(
+      info.root,
+      [...authArgs(token), "push", "--set-upstream", "origin", info.branch],
+      { env: AUTH_ENV },
+    );
+  } catch (e) {
+    rethrowRemoteError(e, token);
+  }
+  return { created, repo: await openRepo(info.root) };
 }

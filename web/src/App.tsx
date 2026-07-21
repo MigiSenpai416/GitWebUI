@@ -19,6 +19,7 @@ import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { AddRemoteDialog } from "./components/AddRemoteDialog";
 import { CloneDialog } from "./components/CloneDialog";
+import { CreateDialog } from "./components/CreateDialog";
 import { GitHubDialog } from "./components/GitHubDialog";
 import { IdentityDialog } from "./components/IdentityDialog";
 
@@ -126,6 +127,7 @@ export function App() {
       <CreateBranchDialog />
       <AddRemoteDialog />
       <CloneDialog />
+      <CreateDialog />
       <GitHubDialog />
       <IdentityDialog />
       {toasts}

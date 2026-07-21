@@ -222,7 +222,7 @@ export interface CreatedRepo {
 /** Create a repository under the authenticated account. */
 export async function createRepo(
   token: string,
-  opts: { name: string; description?: string; private: boolean },
+  opts: { name: string; description?: string; private: boolean; autoInit?: boolean },
 ): Promise<CreatedRepo> {
   const res = await fetch(`${API}/user/repos`, {
     method: "POST",
@@ -231,7 +231,7 @@ export async function createRepo(
       name: opts.name,
       description: opts.description || undefined,
       private: opts.private,
-      auto_init: false,
+      auto_init: opts.autoInit ?? false,
     }),
   });
   if (!res.ok) throw ghError(res.status, await res.text());

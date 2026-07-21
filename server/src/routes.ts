@@ -1,5 +1,5 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
-import { openRepo, currentBranch, headHash, type RepoInfo } from "./git/repo.js";
+import { openRepo, createLocalRepo, currentBranch, headHash, type RepoInfo } from "./git/repo.js";
 import { getLog } from "./git/log.js";
 import { getStatus } from "./git/status.js";
 import { getCommitFiles } from "./git/commitFiles.js";
@@ -35,6 +35,7 @@ import {
   pull,
   cloneRepo,
   createGitHubRemote,
+  createGitHubRepoNew,
 } from "./git/remote.js";
 import * as github from "./github.js";
 import { getIdentity, setIdentity, clearIdentity, type CommitIdentity } from "./identity.js";
@@ -102,6 +103,44 @@ api.post("/repo/open", h(async (req, res) => {
   const info = registerRepo(await openRepo(path));
   await addRecent(info.root);
   res.json({ repo: info });
+}));
+
+api.post("/repo/create", h(async (req, res) => {
+  const dir = String(req.body?.dir ?? "").trim();
+  const name = String(req.body?.name ?? "").trim();
+  const branch = String(req.body?.branch ?? "").trim();
+  if (!dir || !name) {
+    res.status(400).json({ error: "A parent folder and repository name are required" });
+    return;
+  }
+  const identity = await resolveCommitIdentity();
+  const info = registerRepo(await createLocalRepo(dir, name, branch, identity));
+  await addRecent(info.root);
+  res.json({ repo: info });
+}));
+
+api.post("/repo/create-github", h(async (req, res) => {
+  const name = String(req.body?.name ?? "").trim();
+  if (!name) {
+    res.status(400).json({ error: "A repository name is required" });
+    return;
+  }
+  const clone = Boolean(req.body?.clone);
+  const identity = await resolveCommitIdentity();
+  const { created, repo } = await createGitHubRepoNew({
+    name,
+    description: String(req.body?.description ?? "").trim(),
+    private: Boolean(req.body?.private),
+    defaultBranch: String(req.body?.branch ?? "").trim(),
+    clone,
+    dir: String(req.body?.dir ?? "").trim(),
+    identity,
+  });
+  if (repo) {
+    registerRepo(repo);
+    await addRecent(repo.root);
+  }
+  res.json({ created, repo });
 }));
 
 api.post("/repo/clone", h(async (req, res) => {

@@ -82,6 +82,23 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ dir, url }),
     }),
+  createRepo: (dir: string, name: string, branch: string) =>
+    req<{ repo: RepoInfo }>("/api/repo/create", {
+      method: "POST",
+      body: JSON.stringify({ dir, name, branch }),
+    }),
+  createGitHubRepoNew: (opts: {
+    name: string;
+    description: string;
+    private: boolean;
+    branch: string;
+    clone: boolean;
+    dir: string;
+  }) =>
+    req<{
+      created: { fullName: string; cloneUrl: string; htmlUrl: string };
+      repo: RepoInfo | null;
+    }>("/api/repo/create-github", { method: "POST", body: JSON.stringify(opts) }),
   closeRepo: (root: string) =>
     req<{ ok: true }>("/api/repo/close", {
       method: "POST",

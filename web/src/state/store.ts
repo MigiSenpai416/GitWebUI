@@ -300,6 +300,8 @@ interface AppState {
   revealWorktree: (path: string) => Promise<void>;
   checkoutRemote: (remote: string, local: string) => Promise<void>;
   deleteBranch: (name: string) => Promise<void>;
+  /** Delete a branch on the remote itself (e.g. "origin", "feature/x"). */
+  deleteRemoteBranch: (remote: string, branch: string) => Promise<void>;
 
   loadRemotes: () => Promise<void>;
   addRemote: (name: string, url: string) => Promise<void>;
@@ -783,6 +785,28 @@ export const useStore = create<AppState>((set, get) => ({
       await refreshRepoData(get, set);
     } catch (e) {
       reportError(set, e);
+    }
+  },
+
+  async deleteRemoteBranch(remote: string, branch: string) {
+    if (get().remoteBusy) return;
+    set({ remoteBusy: true, error: null });
+    try {
+      const { branches } = await api.deleteRemoteBranch(remote, branch);
+      set({ remoteBranches: branches });
+      // Its commits can no longer be requested from the log — drop the ref.
+      const ref = `refs/remotes/${remote}/${branch}`;
+      if (get().visibleRefs.includes(ref)) {
+        const next = get().visibleRefs.filter((r) => r !== ref);
+        set({ visibleRefs: next });
+        writeVisibleFor(get().repo?.root ?? "", next);
+      }
+      await refreshRepoData(get, set);
+      set({ notice: `Deleted ${remote}/${branch} on the remote.` });
+    } catch (e) {
+      reportError(set, e);
+    } finally {
+      set({ remoteBusy: false });
     }
   },
 

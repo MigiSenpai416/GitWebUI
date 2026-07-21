@@ -158,6 +158,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name }),
     }),
+  deleteRemoteBranch: (remote: string, branch: string) =>
+    req<{ branches: RemoteBranch[] }>("/api/remote-branch/delete", {
+      method: "POST",
+      body: JSON.stringify({ remote, branch }),
+    }),
   reset: (hash: string, mode: "hard" | "soft" | "mixed") =>
     req<{ repo: RepoInfo }>("/api/reset", {
       method: "POST",

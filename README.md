@@ -38,6 +38,7 @@ Personal Access Token to push, pull, add remotes, and create repositories.
   description from a repo **PR template**, add reviewers, assignees and labels,
   and optionally **submit as draft**.
 - **GitHub remotes** — a **LOCAL / REMOTE** left sidebar (checkout branches;
+  right-click a remote branch to check it out or **delete it on the remote**;
   hover **REMOTE** for a green + to add a remote). Connect a GitHub Personal
   Access Token to **push**, **pull**, add a remote by **URL**, or **create a new
   GitHub repository** and push to it. The token is stored on the host and can be

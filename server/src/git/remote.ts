@@ -151,6 +151,27 @@ export async function push(root: string, opts: { force?: boolean } = {}): Promis
   }
 }
 
+/**
+ * Delete a branch on the remote (`git push <remote> --delete <branch>`), which
+ * also drops the local remote-tracking ref. Destructive and not undoable from
+ * here — the caller confirms first. HTTPS remotes use the stored token.
+ */
+export async function deleteRemoteBranch(
+  root: string,
+  remote: string,
+  branch: string,
+): Promise<void> {
+  if (!remote || !branch || remote.startsWith("-") || branch.startsWith("-")) {
+    throw Object.assign(new Error("Invalid remote branch"), { status: 400 });
+  }
+  const token = await getToken();
+  try {
+    await runGit(root, [...authArgs(token), "push", remote, "--delete", branch], { env: AUTH_ENV });
+  } catch (e) {
+    rethrowRemoteError(e, token);
+  }
+}
+
 export interface PullResult {
   output: string;
 }

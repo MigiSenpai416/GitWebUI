@@ -40,6 +40,7 @@ import {
   removeRemote,
   push,
   pull,
+  deleteRemoteBranch,
   cloneRepo,
   createGitHubRemote,
   createGitHubRepoNew,
@@ -261,6 +262,18 @@ api.post("/branch/delete", h(async (req, res) => {
   }
   await deleteBranch(root, name);
   res.json({ branches: await getBranches(root) });
+}));
+
+api.post("/remote-branch/delete", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const remote = String(req.body?.remote ?? "").trim();
+  const branch = String(req.body?.branch ?? "").trim();
+  if (!remote || !branch) {
+    res.status(400).json({ error: "A remote and branch name are required" });
+    return;
+  }
+  await deleteRemoteBranch(root, remote, branch);
+  res.json({ branches: await getRemoteBranches(root) });
 }));
 
 api.post("/reset", h(async (req, res) => {

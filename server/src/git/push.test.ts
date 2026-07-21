@@ -4,7 +4,8 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { runGit } from "./gitRunner.js";
-import { push } from "./remote.js";
+import { push, deleteRemoteBranch } from "./remote.js";
+import { getRemoteBranches } from "./branches.js";
 
 const BASE = path.join(os.tmpdir(), `gitwebui-push-${randomBytes(6).toString("hex")}`);
 const ORIGIN = path.join(BASE, "origin.git");
@@ -109,5 +110,28 @@ describe("push", () => {
     const res = await push(WORK);
     expect(res.rejected).toBeUndefined();
     expect(await revParse(ORIGIN, "main")).toBe(await revParse(WORK, "HEAD"));
+  });
+});
+
+describe("deleteRemoteBranch", () => {
+  it("removes the branch on the remote and its tracking ref", async () => {
+    await setupAmended();
+    await runGit(WORK, ["checkout", "-b", "feature"]);
+    await runGit(WORK, ["push", "-u", "origin", "feature"]);
+    expect(await revParse(ORIGIN, "feature")).toBeTruthy();
+
+    await deleteRemoteBranch(WORK, "origin", "feature");
+
+    await expect(revParse(ORIGIN, "feature")).rejects.toThrow();
+    const remaining = await getRemoteBranches(WORK);
+    expect(remaining.map((b) => b.name)).not.toContain("origin/feature");
+  });
+
+  it("rejects names that could be read as flags", async () => {
+    await setupAmended();
+    await expect(deleteRemoteBranch(WORK, "origin", "--mirror")).rejects.toMatchObject({
+      status: 400,
+    });
+    await expect(deleteRemoteBranch(WORK, "", "main")).rejects.toMatchObject({ status: 400 });
   });
 });

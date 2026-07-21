@@ -337,6 +337,15 @@ button.sb-dir:hover {
   border-radius: var(--radius);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
 }
+.wt-menu-head {
+  padding: 5px 10px 7px;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .wt-menu-item {
   display: flex;
   align-items: center;

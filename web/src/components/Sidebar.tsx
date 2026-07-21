@@ -35,6 +35,7 @@ export function Sidebar() {
   const checkoutRemote = useStore((s) => s.checkoutRemote);
   const openAddRemote = useStore((s) => s.openAddRemote);
   const removeRemote = useStore((s) => s.removeRemote);
+  const deleteRemoteBranch = useStore((s) => s.deleteRemoteBranch);
   const requestConfirm = useStore((s) => s.requestConfirm);
   const collapsed = useStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
@@ -52,6 +53,7 @@ export function Sidebar() {
   const [remoteOpen, setRemoteOpen] = useState(true);
   const [worktreeOpen, setWorktreeOpen] = useState(true);
   const [wtMenu, setWtMenu] = useState<{ wt: Worktree; x: number; y: number } | null>(null);
+  const [rbMenu, setRbMenu] = useState<{ branch: RemoteBranch; x: number; y: number } | null>(null);
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
   const toggleDir = (key: string) =>
     setCollapsedDirs((prev) => {
@@ -75,6 +77,14 @@ export function Sidebar() {
       "Remove",
     );
     if (ok) removeRemote(name);
+  };
+
+  const onDeleteRemoteBranch = async (branch: RemoteBranch) => {
+    const ok = await requestConfirm(
+      `This is a destructive operation, are you sure you want to delete "${branch.name}" on the remote?`,
+      "Delete",
+    );
+    if (ok) deleteRemoteBranch(branch.remote, branch.shortName);
   };
 
   const onRemoveWorktree = async (wt: Worktree) => {
@@ -167,6 +177,10 @@ export function Sidebar() {
                 toggleDir={toggleDir}
                 onToggleVisible={toggleBranchVisibility}
                 onCheckout={(b) => checkoutRemote(b.name, b.shortName)}
+                onMenu={(b, e) => {
+                  e.preventDefault();
+                  setRbMenu({ branch: b, x: e.clientX, y: e.clientY });
+                }}
                 onRemove={remote ? () => onRemoveRemote(name) : undefined}
               />
             );
@@ -208,6 +222,15 @@ export function Sidebar() {
       </Section>
 
       {repo && <div className="sb-repo" title={repo.root}>{repo.root}</div>}
+
+      {rbMenu && (
+        <RemoteBranchMenu
+          menu={rbMenu}
+          onClose={() => setRbMenu(null)}
+          onCheckout={() => checkoutRemote(rbMenu.branch.name, rbMenu.branch.shortName)}
+          onDelete={() => onDeleteRemoteBranch(rbMenu.branch)}
+        />
+      )}
 
       {wtMenu && (
         <WorktreeMenu
@@ -330,6 +353,7 @@ interface RemoteGroupProps {
   toggleDir: (key: string) => void;
   onToggleVisible: (ref: string) => void;
   onCheckout: (branch: RemoteBranch) => void;
+  onMenu: (branch: RemoteBranch, e: React.MouseEvent) => void;
   onRemove?: () => void;
 }
 
@@ -343,6 +367,7 @@ function RemoteGroup({
   toggleDir,
   onToggleVisible,
   onCheckout,
+  onMenu,
   onRemove,
 }: RemoteGroupProps) {
   const tree = useMemo(
@@ -379,6 +404,7 @@ function RemoteGroup({
           toggleDir={toggleDir}
           onToggleVisible={onToggleVisible}
           onCheckout={onCheckout}
+          onMenu={onMenu}
         />
       ))}
     </>
@@ -396,6 +422,7 @@ interface TreeRowsProps {
   toggleDir: (key: string) => void;
   onToggleVisible: (ref: string) => void;
   onCheckout: (branch: RemoteBranch) => void;
+  onMenu: (branch: RemoteBranch, e: React.MouseEvent) => void;
 }
 
 function RemoteTreeRows({
@@ -407,6 +434,7 @@ function RemoteTreeRows({
   toggleDir,
   onToggleVisible,
   onCheckout,
+  onMenu,
 }: TreeRowsProps) {
   if (node.type === "file") {
     const b = node.file.branch;
@@ -418,6 +446,7 @@ function RemoteTreeRows({
         visible={visibleSet.has(b.ref)}
         onToggleVisible={onToggleVisible}
         onCheckout={onCheckout}
+        onMenu={onMenu}
       />
     );
   }
@@ -446,6 +475,7 @@ function RemoteTreeRows({
             toggleDir={toggleDir}
             onToggleVisible={onToggleVisible}
             onCheckout={onCheckout}
+            onMenu={onMenu}
           />
         ))}
     </>
@@ -459,12 +489,13 @@ interface RemoteBranchLeafProps {
   visible: boolean;
   onToggleVisible: (ref: string) => void;
   onCheckout: (branch: RemoteBranch) => void;
+  onMenu: (branch: RemoteBranch, e: React.MouseEvent) => void;
 }
 
 /**
  * A remote-tracking branch leaf. A single click does nothing; toggling the eye
- * shows/hides the branch's commits in the graph, and a double click checks it
- * out as a local tracking branch (like GitKraken).
+ * shows/hides the branch's commits in the graph, a double click checks it out as
+ * a local tracking branch, and a right click opens its actions (like GitKraken).
  */
 function RemoteBranchLeaf({
   branch,
@@ -473,13 +504,15 @@ function RemoteBranchLeaf({
   visible,
   onToggleVisible,
   onCheckout,
+  onMenu,
 }: RemoteBranchLeafProps) {
   return (
     <div
       className={"sb-item sb-branch" + (visible ? " visible" : "")}
       style={{ paddingLeft: 8 + depth * 14 }}
-      title={`${branch.name} — double-click to check out; toggle the eye to ${visible ? "hide" : "show"} its commits`}
+      title={`${branch.name} — double-click to check out; right-click for actions`}
       onDoubleClick={() => onCheckout(branch)}
+      onContextMenu={(e) => onMenu(branch, e)}
     >
       <button
         className="sb-eye"
@@ -541,6 +574,59 @@ function WorktreeRow({
       )}
       <span className="sb-item-name">{label}</span>
       {wt.locked && <span className="sb-wt-lock" title="Locked">🔒</span>}
+    </div>
+  );
+}
+
+/** Right-click actions for a remote-tracking branch. */
+function RemoteBranchMenu({
+  menu,
+  onClose,
+  onCheckout,
+  onDelete,
+}: {
+  menu: { branch: RemoteBranch; x: number; y: number };
+  onClose: () => void;
+  onCheckout: () => void;
+  onDelete: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (e: MouseEvent) => {
+      if (ref.current && ref.current.contains(e.target as Node)) return;
+      onClose();
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // Defer so the opening right-click doesn't immediately dismiss the menu.
+    const id = window.setTimeout(() => document.addEventListener("mousedown", close), 0);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  const run = (fn: () => void) => {
+    onClose();
+    fn();
+  };
+
+  return (
+    <div
+      ref={ref}
+      className="wt-menu"
+      style={{ top: menu.y, left: menu.x }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div className="wt-menu-head">{menu.branch.name}</div>
+      <button className="wt-menu-item" onClick={() => run(onCheckout)}>
+        <IconBranch width={14} height={14} /> Checkout
+      </button>
+      <div className="wt-menu-sep" />
+      <button className="wt-menu-item danger" onClick={() => run(onDelete)}>
+        <IconTrash width={14} height={14} /> Delete branch on remote
+      </button>
     </div>
   );
 }

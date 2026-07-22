@@ -1,5 +1,4 @@
 import express, { type Express } from "express";
-import cors from "cors";
 import { api, apiErrorHandler } from "./routes.js";
 import { authRouter, requireAuth } from "./auth.js";
 
@@ -18,7 +17,10 @@ export interface AppOptions {
  */
 export function createApp(options: AppOptions = {}): Express {
   const app = express();
-  app.use(cors());
+  // No CORS: the UI and the API are always the same origin — Vite proxies /api
+  // in dev, and one server hosts both in production. Allowing cross-origin
+  // requests only granted any page the user visits a readable channel to the
+  // login endpoint, which is a password oracle against a machine-local port.
   app.use(express.json({ limit: "2mb" }));
 
   // Public auth endpoints must be reachable without a session.

@@ -46,6 +46,12 @@ Personal Access Token to push, pull, add remotes, and create repositories.
 - **Password-protected access** — the web UI is gated by a single password
   (set on first run), with an optional **Remember me** (stays signed in for 7
   days). Useful when running on a headless/remote host reachable over the network.
+  Signing out (**Lock**) retires that session for good, so a cookie captured
+  beforehand stops working rather than lasting until it expires. Eight wrong
+  passwords from one address pauses sign-in from it for five minutes. Note that
+  the server binds `0.0.0.0` by default and anyone who reaches it before you set
+  the password can set it themselves — on a shared network, configure it
+  immediately, or start it on `--host 127.0.0.1` until you have.
 - **Pull requests** — open a GitHub PR from the branch menu: pick the source and
   target repo/branch (forks target their upstream by default), fill the title and
   description from a repo **PR template**, add reviewers, assignees and labels,

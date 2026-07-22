@@ -12,8 +12,21 @@ Personal Access Token to push, pull, add remotes, and create repositories.
 - Open a local repo by its absolute path (native to the host OS). Recent repos
   are remembered.
 - GitKraken-style toolbar with a **branch switcher** (dropdown of local
-  branches; pick one to check it out). Undo/Redo/Pull/Push/Stash/Pop/Terminal
-  are present as placeholders for future work.
+  branches; pick one to check it out). Undo/Redo are present as placeholders for
+  future work.
+- **Terminal** — a dock across the bottom for running commands in the repo,
+  through your own shell: `$SHELL` (bash/zsh) on Linux and macOS, **Git Bash**
+  on Windows with **PowerShell** as the alternative, picked from the dock's
+  header. Output streams as it arrives with colours intact, `cd` carries from
+  one command to the next, ↑/↓ walks your history, and a running command can be
+  stopped. It is a command runner rather than a terminal session: there is no
+  pseudo-terminal behind it (that would need a native addon, which can't be
+  cross-compiled into the single-file binaries), so full-screen programs like
+  `vim` or `less` and interactive password prompts have nothing to talk to.
+  Anything the terminal does to the repo is picked up by the rest of the UI when
+  the command finishes. Note that it runs commands on the host with the same
+  session password as everything else — worth remembering if you expose the
+  server beyond localhost.
 - Commit list with a `Branch / Tag · Graph · Commit Message` layout: ref badges,
   a single-lane graph column, and subject + body preview. Virtualized and
   paginated for large histories.

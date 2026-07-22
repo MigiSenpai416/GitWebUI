@@ -61,6 +61,69 @@ export interface AuthStatus {
   authenticated: boolean;
 }
 
+export interface ShellInfo {
+  id: string;
+  label: string;
+  path: string;
+  kind: "bash" | "zsh" | "sh" | "powershell" | "pwsh";
+}
+
+/** One line of the terminal's output stream. */
+export interface RunEvent {
+  t: "out" | "err" | "exit";
+  d?: string;
+  code?: number | null;
+  cwd?: string;
+  killed?: boolean;
+}
+
+/**
+ * Run a command, handing each chunk to `onEvent` as it arrives rather than
+ * waiting for the whole response. Aborting `signal` closes the request, which
+ * is what stops the command server-side.
+ */
+export async function runTerminalCommand(
+  body: { command: string; cwd: string; shell: string },
+  onEvent: (e: RunEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (activeRepoRoot) headers["X-Repo-Root"] = activeRepoRoot;
+  const res = await fetch("/api/terminal/run", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const parsed = await res.json();
+      if (parsed?.error) message = parsed.error;
+    } catch {
+      /* non-JSON error */
+    }
+    if (res.status === 401) throw new AuthError(message);
+    throw new Error(message);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // Events are newline-delimited JSON; a chunk can split one in half.
+    let nl: number;
+    while ((nl = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, nl);
+      buffer = buffer.slice(nl + 1);
+      if (line.trim()) onEvent(JSON.parse(line) as RunEvent);
+    }
+  }
+}
+
 export const api = {
   authStatus: () => req<AuthStatus>("/api/auth/status"),
   authSetup: (password: string, remember: boolean) =>
@@ -333,6 +396,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ index }),
     }),
+  terminalShells: () => req<{ shells: ShellInfo[]; cwd: string }>("/api/terminal/shells"),
   stashNote: (hash: string, title: string, description: string) =>
     req<{ stashes: StashEntry[] }>("/api/stash/note", {
       method: "POST",

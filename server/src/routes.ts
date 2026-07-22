@@ -1,3 +1,4 @@
+import { promises as fsPromises } from "node:fs";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { openRepo, createLocalRepo, currentBranch, headHash, type RepoInfo } from "./git/repo.js";
 import { getLog } from "./git/log.js";
@@ -82,6 +83,7 @@ import {
 } from "./session.js";
 import { getRecent, addRecent } from "./config.js";
 import { GitError } from "./git/gitRunner.js";
+import { detectShells, pickShell, runCommand } from "./terminal.js";
 
 export const api = Router();
 
@@ -927,6 +929,57 @@ api.post("/merge/abort", h(async (req, res) => {
     status: await getStatus(root),
   });
 }));
+
+// ---- Terminal ----
+
+api.get("/terminal/shells", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const shells = detectShells();
+  res.json({ shells, cwd: root });
+}));
+
+/**
+ * Run one command and stream its output as newline-delimited JSON events. The
+ * response body is the stream, so the client aborting the request is what stops
+ * a runaway command — no second endpoint, and no process left behind when the
+ * browser goes away mid-command.
+ */
+api.post("/terminal/run", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const command = String(req.body?.command ?? "");
+  if (!command.trim()) {
+    res.status(400).json({ error: "Nothing to run" });
+    return;
+  }
+  const shell = pickShell(req.body?.shell ? String(req.body.shell) : undefined);
+  const cwd = await usableCwd(String(req.body?.cwd ?? ""), root);
+
+  res.status(200);
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  // Proxies and Node's own buffering would otherwise hold output back until the
+  // command finished, which is the one thing a terminal can't do.
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const run = runCommand({ command, cwd, shell }, (e) => {
+    if (!res.writableEnded) res.write(JSON.stringify(e) + "\n");
+  });
+  res.on("close", () => run.kill());
+  await run.done;
+  res.end();
+}));
+
+/** Fall back to the repo root if the client's directory has gone away. */
+async function usableCwd(want: string, root: string): Promise<string> {
+  if (!want) return root;
+  try {
+    if ((await fsPromises.stat(want)).isDirectory()) return want;
+  } catch {
+    /* gone or unreadable */
+  }
+  return root;
+}
 
 /** Re-read the branch and HEAD into the registry after a ref-moving op. */
 async function refreshSession(root: string): Promise<RepoInfo | null> {

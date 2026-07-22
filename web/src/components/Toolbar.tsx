@@ -30,6 +30,8 @@ export function Toolbar() {
   const stashPop = useStore((s) => s.stashPop);
   const stashes = useStore((s) => s.stashes);
   const selectedStashHash = useStore((s) => s.selectedStashHash);
+  const terminalOpen = useStore((s) => s.terminalOpen);
+  const toggleTerminal = useStore((s) => s.toggleTerminal);
   const status = useStore((s) => s.status);
   const [branchOpen, setBranchOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -122,7 +124,12 @@ export function Toolbar() {
         <div className="tb-divider" />
 
         <div className="tb-group">
-          <ToolButton label="Terminal" onClick={soon("Terminal")}>
+          <ToolButton
+            label="Terminal"
+            onClick={toggleTerminal}
+            active={terminalOpen}
+            title={terminalOpen ? "Hide the terminal" : "Run commands in this repo"}
+          >
             <IconTerminal />
           </ToolButton>
         </div>
@@ -165,6 +172,8 @@ interface ToolButtonProps {
   title?: string;
   /** Small count bubble shown on the icon (e.g. stash count on Pop). */
   badge?: number;
+  /** This button toggles something that is currently showing. */
+  active?: boolean;
   children: React.ReactNode;
 }
 
@@ -176,11 +185,13 @@ function ToolButton({
   busy,
   title,
   badge,
+  active,
   children,
 }: ToolButtonProps) {
   return (
     <button
-      className={"tb-btn" + (busy ? " busy" : "")}
+      className={"tb-btn" + (busy ? " busy" : "") + (active ? " active" : "")}
+      aria-pressed={active}
       onClick={onClick}
       title={busy ? `${label}…` : title ?? label}
       disabled={disabled}

@@ -24,6 +24,7 @@ const PAGE = 150;
 const SIDEBAR_KEY = "gwui.sidebarCollapsed";
 const TABS_KEY = "gwui.tabs";
 const VISIBLE_KEY = "gwui.visibleRefs";
+const TERMINAL_H_KEY = "gwui.terminalHeight";
 
 /** Per-repo set of extra remote branch refs whose commits are shown in the log. */
 function readVisibleMap(): Record<string, string[]> {
@@ -58,6 +59,19 @@ function readSidebarCollapsed(): boolean {
     return localStorage.getItem(SIDEBAR_KEY) === "1";
   } catch {
     return false;
+  }
+}
+
+/** Terminal dock: tall enough to hold a command's output without hiding the graph. */
+const DEFAULT_TERMINAL_H = 260;
+const MIN_TERMINAL_H = 120;
+
+function readTerminalHeight(): number {
+  try {
+    const n = Number(localStorage.getItem(TERMINAL_H_KEY));
+    return Number.isFinite(n) && n >= MIN_TERMINAL_H ? n : DEFAULT_TERMINAL_H;
+  } catch {
+    return DEFAULT_TERMINAL_H;
   }
 }
 
@@ -279,6 +293,9 @@ interface AppState {
 
   /** Whether the LOCAL/REMOTE left rail is collapsed (persisted). */
   sidebarCollapsed: boolean;
+  /** Whether the terminal dock is showing, and how tall it is (persisted). */
+  terminalOpen: boolean;
+  terminalHeight: number;
 
   selectedFile: SelectedFile | null;
   viewMode: ViewMode;
@@ -401,6 +418,8 @@ interface AppState {
   openGitHubDialog: () => void;
   closeGitHubDialog: () => void;
   toggleSidebar: () => void;
+  toggleTerminal: () => void;
+  setTerminalHeight: (px: number) => void;
 
   /** Show a two-button confirm banner; resolves true if confirmed, false otherwise. */
   requestConfirm: (message: string, confirmLabel?: string) => Promise<boolean>;
@@ -501,6 +520,8 @@ export const useStore = create<AppState>((set, get) => ({
   prHeadBranch: null,
 
   sidebarCollapsed: readSidebarCollapsed(),
+  terminalOpen: false,
+  terminalHeight: readTerminalHeight(),
 
   selectedFile: null,
   viewMode: "diff",
@@ -1367,6 +1388,19 @@ export const useStore = create<AppState>((set, get) => ({
       /* ignore storage failures */
     }
     set({ sidebarCollapsed: next });
+  },
+
+  toggleTerminal() {
+    set({ terminalOpen: !get().terminalOpen });
+  },
+  setTerminalHeight(px: number) {
+    const clamped = Math.max(MIN_TERMINAL_H, Math.min(px, Math.round(window.innerHeight * 0.8)));
+    try {
+      localStorage.setItem(TERMINAL_H_KEY, String(clamped));
+    } catch {
+      /* ignore storage failures */
+    }
+    set({ terminalHeight: clamped });
   },
 
   requestConfirm(message: string, confirmLabel = "Confirm") {

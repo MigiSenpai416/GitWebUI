@@ -98,6 +98,8 @@ select option {
   max-width: 560px;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   background: var(--bg-panel);
 }
 

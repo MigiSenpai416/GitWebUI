@@ -94,6 +94,11 @@
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* A button whose panel is open stays lit, so the toolbar shows what's showing. */
+.tb-btn.active {
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+}
 /* The button that started the running action stays lit and tinted, so it reads
    as "working", not as "unavailable" like the others it disables. */
 .tb-btn.busy:disabled {

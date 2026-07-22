@@ -3,6 +3,10 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* Squeezed short — a small window, or the terminal dock open — the header
+     rows still want their full height. Keep them inside the panel instead of
+     letting them paint over the commit box below. */
+  overflow: hidden;
 }
 
 /* Top bar: trash · title · AI */

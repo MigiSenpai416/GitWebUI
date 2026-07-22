@@ -11,6 +11,7 @@ import { CreateWorktreePanel } from "./components/CreateWorktreePanel";
 import { CommitBox } from "./components/CommitBox";
 import { CommitDetails } from "./components/CommitDetails";
 import { StashDetails } from "./components/StashDetails";
+import { TerminalPanel } from "./components/TerminalPanel";
 import { DiffViewer } from "./components/DiffViewer/DiffViewer";
 import { CommitContextMenu } from "./components/CommitContextMenu";
 import { StashContextMenu } from "./components/StashContextMenu";
@@ -129,6 +130,7 @@ export function App() {
               </>
             )}
           </div>
+          <TerminalPanel />
         </>
       ) : (
         <RepoPicker />

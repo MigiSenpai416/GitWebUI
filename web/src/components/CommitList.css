@@ -158,9 +158,14 @@
   stroke: var(--amber);
   stroke-width: 2;
 }
+/* The name the user gave the stash, or git's WIP label. It gives way to the
+   note beside it only when there isn't room for both. */
 .stash-title {
   color: var(--amber);
   font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .wip-title {

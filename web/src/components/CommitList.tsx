@@ -18,6 +18,8 @@ export function CommitList() {
   const openCommitMenu = useStore((s) => s.openCommitMenu);
   const status = useStore((s) => s.status);
   const stashes = useStore((s) => s.stashes);
+  const selectedStashHash = useStore((s) => s.selectedStashHash);
+  const selectStash = useStore((s) => s.selectStash);
   const openStashMenu = useStore((s) => s.openStashMenu);
   const branch = useStore((s) => s.repo?.branch ?? "");
   const mergeState = useStore((s) => s.mergeState);
@@ -59,7 +61,9 @@ export function CommitList() {
 
       {wipCount > 0 && (
         <button
-          className={"clrow wip-row" + (selectedCommitHash === null ? " selected" : "")}
+          className={
+            "clrow wip-row" + (selectedCommitHash === null && !selectedStashHash ? " selected" : "")
+          }
           onClick={() => selectCommit(null)}
         >
           <span className="col-refs" />
@@ -81,10 +85,15 @@ export function CommitList() {
 
       {stashes.map((st) => (
         <StashRow
-          key={st.ref}
+          key={st.hash}
           stash={st}
           branch={branch}
-          onMenu={(x, y) => openStashMenu({ index: st.index, x, y })}
+          selected={st.hash === selectedStashHash}
+          onSelect={() => selectStash(st.hash)}
+          onMenu={(x, y) => {
+            selectStash(st.hash);
+            openStashMenu({ index: st.index, x, y });
+          }}
         />
       ))}
 
@@ -163,22 +172,25 @@ function firstLine(body: string): string {
 function StashRow({
   stash,
   branch,
+  selected,
+  onSelect,
   onMenu,
 }: {
   stash: StashEntry;
   branch: string;
+  selected: boolean;
+  onSelect: () => void;
   onMenu: (x: number, y: number) => void;
 }) {
-  const open = (e: React.MouseEvent) => {
-    e.preventDefault();
-    onMenu(e.clientX, e.clientY);
-  };
   return (
     <div
-      className="clrow stash-row"
-      onClick={open}
-      onContextMenu={open}
-      title="Stash — click for pop / apply / drop"
+      className={"clrow stash-row" + (selected ? " selected" : "")}
+      onClick={onSelect}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu(e.clientX, e.clientY);
+      }}
+      title={stash.noteBody || "Stash — click to open, right-click for pop / apply / drop"}
     >
       <span className="col-refs" />
       <span className="col-graph">
@@ -189,13 +201,18 @@ function StashRow({
       </span>
       <span className="col-msg">
         <span className="stash-title">{stashTitle(stash, branch)}</span>
+        {stash.noteBody && <span className="msg-body">{firstLine(stash.noteBody)}</span>}
       </span>
     </div>
   );
 }
 
-/** GitKraken-style stash label: "WIP #<n> in <branch>". */
+/**
+ * What the user named the stash, else the GitKraken-style "WIP #<n> in <branch>"
+ * — git's own label says the same thing for every stash on a branch.
+ */
 function stashTitle(stash: StashEntry, fallbackBranch: string): string {
+  if (stash.noteTitle) return stash.noteTitle;
   const m = stash.message.match(/^(?:WIP on|On) ([^:]+):/);
   const branch = m ? m[1] : fallbackBranch;
   return `WIP #${stash.index} in ${branch}`;

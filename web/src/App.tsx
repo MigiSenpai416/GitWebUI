@@ -10,6 +10,7 @@ import { ConflictResolver } from "./components/ConflictResolver";
 import { CreateWorktreePanel } from "./components/CreateWorktreePanel";
 import { CommitBox } from "./components/CommitBox";
 import { CommitDetails } from "./components/CommitDetails";
+import { StashDetails } from "./components/StashDetails";
 import { DiffViewer } from "./components/DiffViewer/DiffViewer";
 import { CommitContextMenu } from "./components/CommitContextMenu";
 import { StashContextMenu } from "./components/StashContextMenu";
@@ -31,6 +32,7 @@ export function App() {
   const authState = useStore((s) => s.authState);
   const repo = useStore((s) => s.repo);
   const selectedCommitHash = useStore((s) => s.selectedCommitHash);
+  const selectedStashHash = useStore((s) => s.selectedStashHash);
   const selectedFile = useStore((s) => s.selectedFile);
   const mergeActive = useStore((s) => s.mergeState?.active ?? false);
   const conflictPath = useStore((s) => s.conflictPath);
@@ -109,6 +111,8 @@ export function App() {
                 <div className="side-pane">
                   {selectedCommitHash ? (
                     <CommitDetails />
+                  ) : selectedStashHash ? (
+                    <StashDetails />
                   ) : mergeActive ? (
                     <>
                       <ConflictPanel />

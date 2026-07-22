@@ -333,4 +333,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ index }),
     }),
+  stashNote: (hash: string, title: string, description: string) =>
+    req<{ stashes: StashEntry[] }>("/api/stash/note", {
+      method: "POST",
+      body: JSON.stringify({ hash, title, description }),
+    }),
 };

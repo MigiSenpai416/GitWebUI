@@ -29,6 +29,7 @@ export function Toolbar() {
   const stash = useStore((s) => s.stash);
   const stashPop = useStore((s) => s.stashPop);
   const stashes = useStore((s) => s.stashes);
+  const selectedStashHash = useStore((s) => s.selectedStashHash);
   const status = useStore((s) => s.status);
   const [branchOpen, setBranchOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -36,6 +37,15 @@ export function Toolbar() {
   if (!repo) return null;
 
   const hasChanges = status.staged.length + status.unstaged.length > 0;
+
+  // Pop takes the stash you have open, so a stash can be picked out of the
+  // graph and popped from here; with none open it stays on the latest.
+  const popTarget = stashes.find((s) => s.hash === selectedStashHash);
+  const popTitle = !stashes.length
+    ? "No stashes"
+    : popTarget
+      ? `Apply and remove ${popTarget.noteTitle || popTarget.ref}`
+      : "Apply the latest stash";
 
   const soon = (label: string) => () => setNotice(`${label} isn't available yet — remote & history actions are coming later.`);
 
@@ -99,11 +109,11 @@ export function Toolbar() {
           </ToolButton>
           <ToolButton
             label="Pop"
-            onClick={() => stashPop(0)}
+            onClick={() => stashPop(popTarget?.index ?? 0)}
             disabled={remoteBusy || stashes.length === 0}
             busy={busyAction === "pop"}
             badge={stashes.length || undefined}
-            title={stashes.length ? "Apply the latest stash" : "No stashes"}
+            title={popTitle}
           >
             <IconPop />
           </ToolButton>

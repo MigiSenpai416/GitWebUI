@@ -52,7 +52,15 @@ import {
   readPullRequestTemplate,
 } from "./git/pullRequest.js";
 import { getIdentity, setIdentity, clearIdentity, type CommitIdentity } from "./identity.js";
-import { getStashes, stashPush, stashPop, stashApply, stashDrop } from "./git/stash.js";
+import {
+  getStashes,
+  stashPush,
+  stashPop,
+  stashApply,
+  stashDrop,
+  setStashNote,
+  pruneStashNotes,
+} from "./git/stash.js";
 import {
   getMergeState,
   getConflictFile,
@@ -755,6 +763,7 @@ api.post("/stash/pop", h(async (req, res) => {
   const root = requireRepoRoot(req);
   const index = clampInt(req.body?.index, 0, 0, Number.MAX_SAFE_INTEGER);
   const result = await stashPop(root, index);
+  await forgetDeadStashNotes(root);
   res.json({ ...result, status: await getStatus(root), stashes: await getStashes(root) });
 }));
 
@@ -769,8 +778,32 @@ api.post("/stash/drop", h(async (req, res) => {
   const root = requireRepoRoot(req);
   const index = clampInt(req.body?.index, 0, 0, Number.MAX_SAFE_INTEGER);
   await stashDrop(root, index);
+  await forgetDeadStashNotes(root);
   res.json({ stashes: await getStashes(root) });
 }));
+
+/** The title/description the user keeps on a stash, stored as a git note. */
+api.post("/stash/note", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const hash = String(req.body?.hash ?? "");
+  const title = String(req.body?.title ?? "");
+  const description = String(req.body?.description ?? "");
+  const identity = await resolveCommitIdentity();
+  await setStashNote(root, hash, { title, description, identity });
+  res.json({ stashes: await getStashes(root) });
+}));
+
+/**
+ * Collect notes left behind by a stash that has just gone. Best-effort: losing
+ * a stale note matters far less than reporting the pop or drop that succeeded.
+ */
+async function forgetDeadStashNotes(root: string): Promise<void> {
+  try {
+    await pruneStashNotes(root);
+  } catch (e) {
+    console.error("[gitwebui] could not prune stash notes:", e);
+  }
+}
 
 // ---- Push / Pull ----
 

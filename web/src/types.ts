@@ -106,7 +106,16 @@ export interface Worktree {
 export interface StashEntry {
   index: number;
   ref: string;
+  /** The stash commit. Unlike the index, it doesn't shift as stashes come and go. */
+  hash: string;
+  /** git's own one-liner, e.g. "WIP on main: 1a2b3c4 Add feature". */
   message: string;
+  /** Author date, unix seconds. */
+  date: number;
+  /** First line of the note the user keeps on this stash, if any. */
+  noteTitle: string;
+  /** The rest of it. */
+  noteBody: string;
 }
 
 export interface GitHubUser {

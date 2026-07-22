@@ -233,6 +233,11 @@ interface AppState {
   loadingCommits: boolean;
 
   selectedCommitHash: string | null;
+  /**
+   * The stash open in the side pane, keyed by its commit — the stash@{N} index
+   * shifts whenever anything is pushed or dropped, the commit doesn't.
+   */
+  selectedStashHash: string | null;
   commitFiles: CommitFile[];
   loadingCommitFiles: boolean;
 
@@ -324,6 +329,8 @@ interface AppState {
 
   loadCommits: (reset: boolean) => Promise<void>;
   selectCommit: (hash: string | null) => Promise<void>;
+  selectStash: (hash: string | null) => Promise<void>;
+  saveStashNote: (hash: string, title: string, description: string) => Promise<void>;
 
   loadBranches: () => Promise<void>;
   loadRemoteBranches: () => Promise<void>;
@@ -462,6 +469,7 @@ export const useStore = create<AppState>((set, get) => ({
   loadingCommits: false,
 
   selectedCommitHash: null,
+  selectedStashHash: null,
   commitFiles: [],
   loadingCommitFiles: false,
 
@@ -717,7 +725,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async selectCommit(hash: string | null) {
-    set({ selectedCommitHash: hash, selectedFile: null });
+    // A commit and a stash both own the side pane, so selecting one drops the other.
+    set({ selectedCommitHash: hash, selectedStashHash: null, selectedFile: null });
     if (!hash) {
       set({ commitFiles: [] });
       return;
@@ -731,6 +740,38 @@ export const useStore = create<AppState>((set, get) => ({
       reportError(set, e);
     } finally {
       set({ loadingCommitFiles: false });
+    }
+  },
+
+  /**
+   * Open a stash in the side pane. A stash is a commit, so its file list and
+   * diffs come from the same place a commit's do.
+   */
+  async selectStash(hash: string | null) {
+    set({ selectedStashHash: hash, selectedCommitHash: null, selectedFile: null });
+    if (!hash) {
+      set({ commitFiles: [] });
+      return;
+    }
+    set({ loadingCommitFiles: true, commitFiles: [] });
+    try {
+      const { files } = await api.commitFiles(hash);
+      if (get().selectedStashHash === hash) set({ commitFiles: files });
+    } catch (e) {
+      reportError(set, e);
+    } finally {
+      set({ loadingCommitFiles: false });
+    }
+  },
+
+  /** Store the user's own title/description for a stash as a git note. */
+  async saveStashNote(hash: string, title: string, description: string) {
+    try {
+      const { stashes } = await api.stashNote(hash, title, description);
+      set({ stashes });
+      raise(set, "notice", title.trim() ? "Saved the stash note." : "Cleared the stash note.");
+    } catch (e) {
+      reportError(set, e);
     }
   },
 
@@ -1168,6 +1209,17 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const { stashes } = await api.stashes();
       set({ stashes });
+      // The open stash may have just been popped, dropped, or left behind by a
+      // repo switch — one guard here covers every way it can go.
+      const open = get().selectedStashHash;
+      if (open && !stashes.some((s) => s.hash === open)) {
+        const file = get().selectedFile;
+        set({
+          selectedStashHash: null,
+          commitFiles: [],
+          selectedFile: file?.source === "commit" && file.hash === open ? null : file,
+        });
+      }
     } catch {
       /* non-fatal */
     }

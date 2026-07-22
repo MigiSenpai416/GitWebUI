@@ -1,0 +1,109 @@
+/* The stash pane borrows the commit pane's frame (.commit-details) and adds the
+   two things a stash has that a commit doesn't: an editable note, and the
+   actions that consume it. */
+
+.sd-note {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.sd-note-title {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-strong);
+  font-family: inherit;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+.sd-note-body {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 58px;
+  max-height: 40vh;
+}
+.sd-note-title:focus,
+.sd-note-body:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.sd-note-title::placeholder,
+.sd-note-body::placeholder {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+.sd-note-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sd-note-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sd-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.sd-actions .spacer {
+  flex: 1;
+}
+.sd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 5px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.sd-btn:hover:not(:disabled) {
+  background: var(--bg-row-hover);
+  color: var(--text-strong);
+}
+.sd-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.sd-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.sd-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+  background: var(--accent);
+  color: #fff;
+}
+.sd-btn.danger:hover:not(:disabled) {
+  background: rgba(248, 81, 73, 0.14);
+  border-color: var(--red);
+  color: #ffb4ae;
+}

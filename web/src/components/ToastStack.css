@@ -1,0 +1,141 @@
+/* Toasts live in the bottom-left corner, out of the commit graph's way, and
+   arrive from off-screen left. The accent rail doubles as the countdown: it
+   drains over the toast's life, so "this will leave on its own" is visible
+   rather than assumed. The stack is anchored to the corner and grows upward, so
+   the newest result is always in the same place and older ones step aside. */
+.toast-stack {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(380px, calc(100vw - 28px));
+  pointer-events: none;
+}
+/* Carries the re-seating slide (set from JS), kept separate from the toast's
+   own enter/exit animation so the two can't fight over `transform`. */
+.toast-slot {
+  max-width: 100%;
+}
+.toast {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 10px 9px 15px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+  animation: toast-enter 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.toast.leaving {
+  animation: toast-exit 170ms ease-in forwards;
+}
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-115%);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes toast-exit {
+  to {
+    opacity: 0;
+    transform: translateX(-115%);
+  }
+}
+
+.toast-rail {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 3px;
+  height: 100%;
+  background: var(--toast-accent);
+  transform-origin: top;
+  animation: toast-drain var(--toast-life) linear forwards;
+}
+@keyframes toast-drain {
+  from {
+    transform: scaleY(1);
+  }
+  to {
+    transform: scaleY(0);
+  }
+}
+
+.toast-icon {
+  display: inline-flex;
+  padding-top: 1px;
+  color: var(--toast-accent);
+  flex-shrink: 0;
+}
+.toast-msg {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.toast-x {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 1px 3px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  opacity: 0.55;
+}
+.toast-x:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+.toast-x:focus-visible {
+  outline: 1px solid var(--toast-accent);
+  outline-offset: 1px;
+  opacity: 1;
+}
+
+.toast-error {
+  --toast-accent: var(--red);
+  background: var(--toast-err-bg);
+  border-color: var(--toast-err-border);
+  color: var(--toast-err-text);
+}
+.toast-notice {
+  --toast-accent: var(--green-dim);
+  background: var(--toast-ok-bg);
+  border-color: var(--toast-ok-border);
+  color: var(--toast-ok-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: toast-fade 120ms ease both;
+  }
+  .toast.leaving {
+    animation: none;
+    opacity: 0;
+  }
+  .toast-rail {
+    animation: none;
+  }
+  @keyframes toast-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}

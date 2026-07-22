@@ -180,6 +180,39 @@ export interface ConfirmRequest {
   checkbox?: string;
 }
 
+export type ToastKind = "error" | "notice";
+
+/** One message in the toast stack. */
+export interface ToastItem {
+  id: number;
+  kind: ToastKind;
+  message: string;
+  /**
+   * Bumped when the same message is raised again while it is still up, so the
+   * toast restarts its countdown instead of stacking a duplicate.
+   */
+  seq: number;
+}
+
+/** How many toasts are on screen at once; a new one evicts the oldest. */
+export const MAX_TOASTS = 3;
+
+let nextToastId = 1;
+
+/** Append a toast to `list`, collapsing a repeat of the newest one. */
+function appendToast(list: ToastItem[], kind: ToastKind, message: string): ToastItem[] {
+  const newest = list[list.length - 1];
+  if (newest && newest.kind === kind && newest.message === message) {
+    return [...list.slice(0, -1), { ...newest, seq: newest.seq + 1 }];
+  }
+  return [...list, { id: nextToastId++, kind, message, seq: 0 }].slice(-MAX_TOASTS);
+}
+
+/** Raise a toast from anywhere that holds `set` (actions and module helpers). */
+function raise(set: StoreSet, kind: ToastKind, message: string): void {
+  set((s) => ({ toasts: appendToast(s.toasts, kind, message) }));
+}
+
 interface AppState {
   authState: AuthState;
 
@@ -192,9 +225,8 @@ interface AppState {
   repo: RepoInfo | null;
   recent: string[];
   opening: boolean;
-  error: string | null;
-  /** Transient neutral message (e.g. "not implemented yet"). */
-  notice: string | null;
+  /** Results of recent actions, oldest first; the newest sits nearest the corner. */
+  toasts: ToastItem[];
 
   commits: Commit[];
   hasMore: boolean;
@@ -400,8 +432,9 @@ interface AppState {
   closeFile: () => void;
   setViewMode: (mode: ViewMode) => void;
   setFileLayout: (layout: FileLayout) => void;
-  setError: (msg: string | null) => void;
-  setNotice: (msg: string | null) => void;
+  setError: (msg: string) => void;
+  setNotice: (msg: string) => void;
+  dismissToast: (id: number) => void;
 }
 
 const EMPTY_STATUS: StatusResult = { staged: [], unstaged: [] };
@@ -422,8 +455,7 @@ export const useStore = create<AppState>((set, get) => ({
   repo: null,
   recent: [],
   opening: false,
-  error: null,
-  notice: null,
+  toasts: [],
 
   commits: [],
   hasMore: false,
@@ -486,7 +518,8 @@ export const useStore = create<AppState>((set, get) => ({
       if (authState !== "ok") return;
     } catch (e) {
       // Server unreachable or unexpected error — fall back to the login screen.
-      set({ authState: "login", error: errMsg(e) });
+      set({ authState: "login" });
+      raise(set, "error", errMsg(e));
       return;
     }
     await get().loadWorkspace();
@@ -495,13 +528,13 @@ export const useStore = create<AppState>((set, get) => ({
   async setupPassword(password: string, remember: boolean) {
     // Errors propagate to the AuthGate so it can show them inline.
     await api.authSetup(password, remember);
-    set({ authState: "ok", error: null });
+    set({ authState: "ok" });
     await get().loadWorkspace();
   },
 
   async login(password: string, remember: boolean) {
     await api.authLogin(password, remember);
-    set({ authState: "ok", error: null });
+    set({ authState: "ok" });
     await get().loadWorkspace();
   },
 
@@ -549,7 +582,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async openRepo(path: string) {
-    set({ opening: true, error: null });
+    set({ opening: true });
     try {
       const { repo } = await api.openRepo(path);
       await adoptRepo(get, set, repo);
@@ -581,7 +614,7 @@ export const useStore = create<AppState>((set, get) => ({
     if (repo) {
       await adoptRepo(get, set, repo);
     } else {
-      set({ notice: `Created ${created.fullName} on GitHub.` });
+      raise(set, "notice", `Created ${created.fullName} on GitHub.`);
     }
     await get().loadRecent();
   },
@@ -597,7 +630,7 @@ export const useStore = create<AppState>((set, get) => ({
   async selectTab(id: string) {
     const tab = get().tabs.find((t) => t.id === id);
     if (!tab) return;
-    set({ activeTabId: id, error: null });
+    set({ activeTabId: id });
     if (!tab.root) {
       persistTabs(get().tabs, id);
       showPicker(set);
@@ -748,7 +781,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async checkout(branch: string) {
-    set({ error: null });
     try {
       const { repo } = await api.checkout(branch);
       set({
@@ -765,20 +797,18 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async checkoutRemote(remote: string, local: string) {
-    set({ error: null });
     try {
       const { repo } = await api.checkoutRemote(remote, local);
       set({ repo, selectedCommitHash: null, commitFiles: [], selectedFile: null });
       syncActiveTab(get, set, repo);
       await refreshRepoData(get, set);
-      set({ notice: `Checked out ${local} (tracking ${remote}).` });
+      raise(set, "notice", `Checked out ${local} (tracking ${remote}).`);
     } catch (e) {
       reportError(set, e);
     }
   },
 
   async deleteBranch(name: string) {
-    set({ error: null });
     try {
       const { branches } = await api.deleteBranch(name);
       set({ branches });
@@ -799,7 +829,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   async deleteRemoteBranch(remote: string, branch: string) {
     if (get().remoteBusy) return;
-    set({ remoteBusy: true, busyAction: "remote", error: null });
+    set({ remoteBusy: true, busyAction: "remote" });
     try {
       const { branches } = await api.deleteRemoteBranch(remote, branch);
       set({ remoteBranches: branches });
@@ -811,7 +841,7 @@ export const useStore = create<AppState>((set, get) => ({
         writeVisibleFor(get().repo?.root ?? "", next);
       }
       await refreshRepoData(get, set);
-      set({ notice: `Deleted ${remote}/${branch} on the remote.` });
+      raise(set, "notice", `Deleted ${remote}/${branch} on the remote.`);
     } catch (e) {
       reportError(set, e);
     } finally {
@@ -840,7 +870,8 @@ export const useStore = create<AppState>((set, get) => ({
   async createWorktree(path: string, ref: string, branch: string) {
     // Errors propagate so the create panel can show them inline.
     await api.addWorktree(path, ref, branch);
-    set({ worktreeCreateOpen: false, notice: `Created worktree ${branch}.` });
+    set({ worktreeCreateOpen: false });
+    raise(set, "notice", `Created worktree ${branch}.`);
     await refreshRepoData(get, set);
   },
 
@@ -852,7 +883,7 @@ export const useStore = create<AppState>((set, get) => ({
       await get().selectTab(existing.id);
       return;
     }
-    set({ opening: true, error: null, worktreeCreateOpen: false });
+    set({ opening: true, worktreeCreateOpen: false });
     try {
       // Re-point the CURRENT tab at the worktree's directory (a valid repo root
       // sharing the same .git), then load its data.
@@ -874,10 +905,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async removeWorktree(path: string) {
-    set({ error: null });
     try {
       await api.removeWorktree(path);
-      set({ notice: "Removed the worktree." });
+      raise(set, "notice", "Removed the worktree.");
       await refreshRepoData(get, set);
     } catch (e) {
       reportError(set, e);
@@ -885,10 +915,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async pruneWorktrees() {
-    set({ error: null });
     try {
       await api.pruneWorktrees();
-      set({ notice: "Pruned stale worktrees." });
+      raise(set, "notice", "Pruned stale worktrees.");
       await refreshRepoData(get, set);
     } catch (e) {
       reportError(set, e);
@@ -919,7 +948,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async removeRemote(name: string) {
-    set({ error: null });
     try {
       const { remotes } = await api.removeRemote(name);
       set({ remotes });
@@ -936,7 +964,7 @@ export const useStore = create<AppState>((set, get) => ({
       const { repo, remotes } = await api.createGitHubRepo(opts);
       set({ remotes });
       await refreshRepoData(get, set);
-      set({ notice: `Created ${repo.fullName} and pushed ${get().repo?.branch ?? ""}.` });
+      raise(set, "notice", `Created ${repo.fullName} and pushed ${get().repo?.branch ?? ""}.`);
       return repo.htmlUrl;
     } finally {
       set({ remoteBusy: false, busyAction: null });
@@ -950,7 +978,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   async pull() {
     if (get().remoteBusy) return;
-    set({ remoteBusy: true, busyAction: "pull", error: null });
+    set({ remoteBusy: true, busyAction: "pull" });
     try {
       const { merge, status } = await api.pull();
       applyMerge(get, set, merge, status);
@@ -958,7 +986,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (merge.active) {
         set({ selectedCommitHash: null, selectedFile: null });
       } else {
-        set({ notice: "Pulled latest changes." });
+        raise(set, "notice", "Pulled latest changes.");
       }
     } catch (e) {
       reportError(set, e);
@@ -1012,7 +1040,7 @@ export const useStore = create<AppState>((set, get) => ({
       window.open(created.htmlUrl, "_blank", "noopener");
       await refreshRepoData(get, set);
       const warn = created.warnings.length > 0 ? ` — ${created.warnings.join("; ")}` : "";
-      set({ notice: `Opened pull request #${created.number}${warn}` });
+      raise(set, "notice", `Opened pull request #${created.number}${warn}`);
       return created;
     } finally {
       set({ remoteBusy: false, busyAction: null });
@@ -1029,7 +1057,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async mergeBranch(name: string) {
-    set({ error: null });
     try {
       const { repo, merge, status } = await api.merge(name);
       if (repo) {
@@ -1042,7 +1069,7 @@ export const useStore = create<AppState>((set, get) => ({
         // Conflicts — jump to the WIP/conflict view so the resolver is reachable.
         set({ selectedCommitHash: null, selectedFile: null });
       } else {
-        set({ notice: `Merged ${name} into ${get().repo?.branch ?? "the current branch"}.` });
+        raise(set, "notice", `Merged ${name} into ${get().repo?.branch ?? "the current branch"}.`);
       }
     } catch (e) {
       reportError(set, e);
@@ -1050,7 +1077,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async checkoutCommit(hash: string) {
-    set({ error: null, commitMenu: null });
+    set({ commitMenu: null });
     try {
       const { repo, merge, status } = await api.checkoutCommit(hash);
       if (repo) {
@@ -1060,14 +1087,14 @@ export const useStore = create<AppState>((set, get) => ({
       set({ selectedCommitHash: null, commitFiles: [], selectedFile: null });
       applyMerge(get, set, merge, status);
       await refreshRepoData(get, set);
-      set({ notice: `Checked out ${hash.slice(0, 7)} (detached HEAD).` });
+      raise(set, "notice", `Checked out ${hash.slice(0, 7)} (detached HEAD).`);
     } catch (e) {
       reportError(set, e);
     }
   },
 
   async cherryPick(hash: string, noCommit: boolean) {
-    set({ error: null, commitMenu: null });
+    set({ commitMenu: null });
     try {
       const { repo, merge, status } = await api.cherryPick(hash, noCommit);
       if (repo) {
@@ -1079,13 +1106,10 @@ export const useStore = create<AppState>((set, get) => ({
       if (merge.active) {
         set({ selectedCommitHash: null, selectedFile: null });
       } else if (noCommit) {
-        set({
-          selectedCommitHash: null,
-          selectedFile: null,
-          notice: `Cherry-picked ${hash.slice(0, 7)} — review the changes and commit.`,
-        });
+        set({ selectedCommitHash: null, selectedFile: null });
+        raise(set, "notice", `Cherry-picked ${hash.slice(0, 7)} — review the changes and commit.`);
       } else {
-        set({ notice: `Cherry-picked ${hash.slice(0, 7)}.` });
+        raise(set, "notice", `Cherry-picked ${hash.slice(0, 7)}.`);
       }
     } catch (e) {
       reportError(set, e);
@@ -1093,7 +1117,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async abortMerge() {
-    set({ error: null });
     try {
       const { repo, merge, status } = await api.abortMerge();
       if (repo) {
@@ -1103,7 +1126,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ mergeSeen: [], conflictPath: null, conflictData: null });
       applyMerge(get, set, merge, status);
       await refreshRepoData(get, set);
-      set({ notice: "Aborted — restored the pre-merge state." });
+      raise(set, "notice", "Aborted — restored the pre-merge state.");
     } catch (e) {
       reportError(set, e);
     }
@@ -1129,7 +1152,7 @@ export const useStore = create<AppState>((set, get) => ({
     // Errors propagate so the resolver can show them inline.
     const { merge, status } = await api.resolveConflict(path, content, resolved);
     applyMerge(get, set, merge, status);
-    if (resolved) set({ notice: `Resolved ${path}.` });
+    if (resolved) raise(set, "notice", `Resolved ${path}.`);
   },
 
   async markAllResolved() {
@@ -1152,12 +1175,12 @@ export const useStore = create<AppState>((set, get) => ({
 
   async stash() {
     if (get().remoteBusy) return;
-    set({ remoteBusy: true, busyAction: "stash", error: null });
+    set({ remoteBusy: true, busyAction: "stash" });
     try {
       const { stashed } = await api.stashPush();
       set({ selectedFile: null });
       await refreshRepoData(get, set);
-      set({ notice: stashed ? "Stashed your changes." : "Nothing to stash — working tree is clean." });
+      raise(set, "notice", stashed ? "Stashed your changes." : "Nothing to stash — working tree is clean.");
     } catch (e) {
       reportError(set, e);
     } finally {
@@ -1167,11 +1190,11 @@ export const useStore = create<AppState>((set, get) => ({
 
   async stashPop(index = 0) {
     if (get().remoteBusy) return;
-    set({ remoteBusy: true, busyAction: "pop", error: null, stashMenu: null });
+    set({ remoteBusy: true, busyAction: "pop", stashMenu: null });
     try {
       await api.stashPop(index);
       await refreshRepoData(get, set);
-      set({ notice: "Popped the stash." });
+      raise(set, "notice", "Popped the stash.");
     } catch (e) {
       reportError(set, e);
     } finally {
@@ -1181,11 +1204,11 @@ export const useStore = create<AppState>((set, get) => ({
 
   async stashApply(index: number) {
     if (get().remoteBusy) return;
-    set({ remoteBusy: true, busyAction: "pop", error: null, stashMenu: null });
+    set({ remoteBusy: true, busyAction: "pop", stashMenu: null });
     try {
       await api.stashApply(index);
       await refreshRepoData(get, set);
-      set({ notice: "Applied the stash (kept it in the list)." });
+      raise(set, "notice", "Applied the stash (kept it in the list).");
     } catch (e) {
       reportError(set, e);
     } finally {
@@ -1194,11 +1217,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async stashDrop(index: number) {
-    set({ error: null, stashMenu: null });
+    set({ stashMenu: null });
     try {
       await api.stashDrop(index);
       await refreshRepoData(get, set);
-      set({ notice: "Dropped the stash." });
+      raise(set, "notice", "Dropped the stash.");
     } catch (e) {
       reportError(set, e);
     }
@@ -1230,7 +1253,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async revokeGitHubToken() {
-    set({ error: null });
     try {
       const status = await api.githubRevoke();
       set({ githubStatus: status });
@@ -1257,7 +1279,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async clearIdentity() {
-    set({ error: null });
     try {
       const identity = await api.clearIdentity();
       set({ identity });
@@ -1335,7 +1356,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async createBranchAt(name: string, hash: string) {
-    set({ error: null, branchDialogHash: null, commitMenu: null });
+    set({ branchDialogHash: null, commitMenu: null });
     try {
       const { repo } = await api.createBranch(name, hash);
       set({ repo });
@@ -1347,7 +1368,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async resetToCommit(hash: string, mode: ResetMode) {
-    set({ error: null, commitMenu: null });
+    set({ commitMenu: null });
     try {
       const { repo } = await api.reset(hash, mode);
       set({ repo, selectedCommitHash: null, commitFiles: [], selectedFile: null });
@@ -1358,7 +1379,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async revertCommit(hash: string) {
-    set({ error: null, commitMenu: null });
+    set({ commitMenu: null });
     try {
       const { repo, merge, status } = await api.revert(hash);
       if (repo) set({ repo });
@@ -1440,7 +1461,7 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const status = await api.deleteFile(path);
       set({ status, selectedFile: null });
-      set({ notice: `Deleted ${path}.` });
+      raise(set, "notice", `Deleted ${path}.`);
     } catch (e) {
       reportError(set, e);
     }
@@ -1463,7 +1484,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async commit(title: string, description: string, amend: boolean) {
-    set({ committing: true, error: null });
+    set({ committing: true });
     try {
       await api.commit(title, description, amend);
       set({ selectedFile: null });
@@ -1492,17 +1513,21 @@ export const useStore = create<AppState>((set, get) => ({
     set({ fileLayout: layout });
   },
 
-  setError(msg: string | null) {
-    set({ error: msg });
+  setError(msg: string) {
+    raise(set, "error", msg);
   },
 
-  setNotice(msg: string | null) {
-    set({ notice: msg });
+  setNotice(msg: string) {
+    raise(set, "notice", msg);
+  },
+
+  dismissToast(id: number) {
+    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
   },
 }));
 
 type StoreGet = () => AppState;
-type StoreSet = (partial: Partial<AppState>) => void;
+type StoreSet = (partial: Partial<AppState> | ((s: AppState) => Partial<AppState>)) => void;
 
 /**
  * Re-sync every piece of repo data that a mutation could have changed: commits,
@@ -1547,7 +1572,7 @@ const FORCE_PUSH_SKIP_KEY = "gwui.skipForcePushConfirm";
  * every divergence case except an unfetched remote advance (which asks to pull).
  */
 async function runPush(get: StoreGet, set: StoreSet, force: boolean): Promise<void> {
-  set({ remoteBusy: true, busyAction: "push", error: null });
+  set({ remoteBusy: true, busyAction: "push" });
   let rejected: { branch: string; upstream: string | null } | null = null;
   try {
     const res = await api.push(force);
@@ -1555,7 +1580,7 @@ async function runPush(get: StoreGet, set: StoreSet, force: boolean): Promise<vo
       rejected = { branch: res.branch, upstream: res.upstream ?? null };
     } else {
       await refreshRepoData(get, set);
-      set({ notice: force ? `Force-pushed ${res.branch}.` : `Pushed ${res.branch}.` });
+      raise(set, "notice", force ? `Force-pushed ${res.branch}.` : `Pushed ${res.branch}.`);
     }
   } catch (e) {
     reportError(set, e);
@@ -1795,10 +1820,10 @@ function errMsg(e: unknown): string {
  * Route an action error: a 401 (session expired/invalid) drops back to the
  * login screen; anything else surfaces as the error toast.
  */
-function reportError(set: (partial: Partial<AppState>) => void, e: unknown): void {
+function reportError(set: StoreSet, e: unknown): void {
   if (e instanceof AuthError) {
     set({ authState: "login" });
     return;
   }
-  set({ error: errMsg(e) });
+  raise(set, "error", errMsg(e));
 }

@@ -24,7 +24,7 @@
   --toast-err-bg: #2a171a;
   --toast-err-border: #5a2a2c;
   --toast-err-text: #f0d4d2;
-  /* How long a toast stays before it retreats (mirrored in App.tsx). */
+  /* How long a toast stays before it retreats (mirrored in ToastStack.tsx). */
   --toast-life: 5s;
 
   /* Column widths (commit list) */

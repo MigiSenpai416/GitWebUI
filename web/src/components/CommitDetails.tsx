@@ -1,6 +1,7 @@
 import { useStore } from "../state/store";
 import type { CommitFile } from "../types";
 import { ChangedFiles } from "./ChangedFiles";
+import { IconClose } from "./icons";
 import "./CommitDetails.css";
 
 export function CommitDetails() {
@@ -50,7 +51,7 @@ export function CommitDetails() {
         <span className="cd-hash">{commit.shortHash}</span>
         <div className="spacer" />
         <button className="icon-btn" title="Back to changes" onClick={() => selectCommit(null)}>
-          ✕
+          <IconClose width={13} height={13} />
         </button>
       </div>
 

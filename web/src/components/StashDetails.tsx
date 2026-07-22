@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useStore } from "../state/store";
 import type { CommitFile, StashEntry } from "../types";
 import { ChangedFiles } from "./ChangedFiles";
-import { IconPop } from "./icons";
+import { IconPop, IconClose } from "./icons";
 // The stash pane wears the commit pane's frame — same header, meta rows and
 // scroll behaviour — so it pulls in those styles rather than restating them.
 import "./CommitDetails.css";
@@ -62,7 +62,7 @@ export function StashDetails() {
         <span className="cd-hash">{stash.ref}</span>
         <div className="spacer" />
         <button className="icon-btn" title="Back to changes" onClick={() => selectStash(null)}>
-          ✕
+          <IconClose width={13} height={13} />
         </button>
       </div>
 

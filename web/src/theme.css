@@ -135,6 +135,28 @@ select option {
   color: #fff;
 }
 
+/* Ghost square for a bare icon — close, back, dismiss. Nothing but the glyph
+   until you point at it, matching .tab-close and .wtp-x. Shared rather than
+   per-panel because an undefined one falls back to the browser's own button
+   chrome, which is grey plastic in the middle of a dark window. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+}
+.icon-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+}
+
 .status-badge {
   display: inline-flex;
   align-items: center;

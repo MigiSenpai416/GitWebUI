@@ -39,7 +39,7 @@ export function TabBar() {
               style={tab.root ? { color: repoColor(tab.root) } : undefined}
               title={tab.id === activeTabId && activeDirty ? "Uncommitted changes" : undefined}
             >
-              <IconRepo width={13} height={13} />
+              <IconRepo width={15} height={15} />
               {tab.id === activeTabId && activeDirty && <span className="tab-dirty" />}
             </span>
             <span className="tab-name">{tab.root ? tab.name : "New Tab"}</span>

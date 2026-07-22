@@ -290,10 +290,17 @@ export const IconWorktree = (p: P) => (
     <circle cx="16" cy="5" r="2.2" />
   </svg>
 );
+/**
+ * A book with a bookmark. Unlike the rest of the set it is only ever drawn at
+ * tab size, so it fills its box rather than sitting in the middle of it — the
+ * inset version left a ~7px mark whose strokes fell under one device pixel and
+ * closed up into a blob. The board edge and the bookmark keep their distance
+ * from each other for the same reason.
+ */
 export const IconRepo = (p: P) => (
-  <svg {...base({ strokeWidth: 1.7, ...p })}>
-    <path d="M6 4h11a1 1 0 0 1 1 1v13H7a1 1 0 0 1-1-1Z" />
-    <path d="M6 15h12" />
-    <path d="M9 4v9l2-1.5L13 13V4" />
+  <svg {...base(p)}>
+    <path d="M4.5 3.5h13.75a1.25 1.25 0 0 1 1.25 1.25V20.5H5.75A1.25 1.25 0 0 1 4.5 19.25Z" />
+    <path d="M4.5 17h15" />
+    <path d="M8.25 3.5v10.5l2.5-1.8 2.5 1.8V3.5" />
   </svg>
 );

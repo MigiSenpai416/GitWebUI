@@ -11,6 +11,7 @@ import type {
   GitHubUser,
   IdentityInfo,
   MergeState,
+  PushForce,
   RepoInfo,
   Remote,
   RemoteBranch,
@@ -1035,7 +1036,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   async push() {
     if (get().remoteBusy) return;
-    await runPush(get, set, false);
+    await runPush(get, set, null);
   },
 
   async pull() {
@@ -1653,11 +1654,10 @@ const FORCE_PUSH_SKIP_KEY = "gwui.skipForcePushConfirm";
 /**
  * Push the current branch, handling a non-fast-forward rejection like GitKraken:
  * whenever the local and remote tips have diverged (amend, rebase, reset, or a
- * remote that moved), offer Pull (to integrate the remote's work) or a confirmed
- * Force Push. The force uses --force-with-lease server-side, so it overwrites in
- * every divergence case except an unfetched remote advance (which asks to pull).
+ * remote that moved), offer Pull (to integrate the remote's work) or one of the
+ * two confirmed force modes — see `promptRejectedPush`.
  */
-async function runPush(get: StoreGet, set: StoreSet, force: boolean): Promise<void> {
+async function runPush(get: StoreGet, set: StoreSet, force: PushForce | null): Promise<void> {
   set({ remoteBusy: true, busyAction: "push" });
   let rejected: { branch: string; upstream: string | null } | null = null;
   try {
@@ -1677,7 +1677,13 @@ async function runPush(get: StoreGet, set: StoreSet, force: boolean): Promise<vo
   if (rejected) await promptRejectedPush(get, set, rejected);
 }
 
-/** The Pull / Force Push / Cancel banner shown when a push is rejected. */
+/**
+ * The banner shown when a push is rejected. Both force modes are offered so the
+ * choice is explicit: with-lease is the safe default (it still refuses when the
+ * remote holds commits we never fetched), while the bare force is the escape
+ * hatch for a locally rewritten history whose lease can't be verified. Each is
+ * confirmed before it runs.
+ */
 async function promptRejectedPush(
   get: StoreGet,
   set: StoreSet,
@@ -1685,37 +1691,51 @@ async function promptRejectedPush(
 ): Promise<void> {
   const target = rejected.upstream ? `'refs/remotes/${rejected.upstream}'` : "the remote";
   const choice = await get().requestChoice(
-    `'refs/heads/${rejected.branch}' is behind ${target}. Update your branch by doing a Pull.`,
+    `'refs/heads/${rejected.branch}' has diverged from ${target}. Pull to integrate the remote's work, or force push to overwrite it.`,
     [
       { label: "Pull (fast-forward if possible)", value: "pull", kind: "primary" },
-      { label: "Force Push", value: "force", kind: "danger" },
+      { label: "Force Push (with lease)", value: "lease", kind: "danger" },
+      { label: "Force Push (no lease)", value: "force", kind: "danger" },
       { label: "Cancel", value: "cancel", kind: "neutral" },
     ],
   );
   if (choice === "pull") {
     await get().pull();
-  } else if (choice === "force") {
-    if (await confirmForcePush(get)) await runPush(get, set, true);
+  } else if (choice === "lease" || choice === "force") {
+    if (await confirmForcePush(get, choice)) await runPush(get, set, choice);
   }
 }
 
-/** Confirm a destructive force push, honoring a saved "Don't ask again" choice. */
-async function confirmForcePush(get: StoreGet): Promise<boolean> {
-  try {
-    if (localStorage.getItem(FORCE_PUSH_SKIP_KEY) === "1") return true;
-  } catch {
-    /* ignore storage failures */
+/**
+ * Confirm a destructive force push. The with-lease mode honors a saved "Don't
+ * ask again" choice; the bare force always asks, because it's the one mode that
+ * can overwrite commits nobody here has ever seen.
+ */
+async function confirmForcePush(get: StoreGet, mode: PushForce): Promise<boolean> {
+  const bare = mode === "force";
+  if (!bare) {
+    try {
+      if (localStorage.getItem(FORCE_PUSH_SKIP_KEY) === "1") return true;
+    } catch {
+      /* ignore storage failures */
+    }
   }
   const value = await get().requestChoice(
-    "Force push is a destructive action and cannot be undone. Are you sure?",
+    bare
+      ? "Force push with no lease overwrites the remote branch unconditionally — including commits you've never fetched. This cannot be undone. Are you sure?"
+      : "Force push is a destructive action and cannot be undone. Are you sure?",
     [
-      { label: "Force Push", value: "force", kind: "danger" },
+      {
+        label: bare ? "Force Push (no lease)" : "Force Push (with lease)",
+        value: "force",
+        kind: "danger",
+      },
       { label: "Cancel", value: "cancel", kind: "neutral" },
     ],
-    { checkbox: "Don't ask again" },
+    bare ? undefined : { checkbox: "Don't ask again" },
   );
   if (value !== "force") return false;
-  if (get().confirmCheckbox) {
+  if (!bare && get().confirmCheckbox) {
     try {
       localStorage.setItem(FORCE_PUSH_SKIP_KEY, "1");
     } catch {

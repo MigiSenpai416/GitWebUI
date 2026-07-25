@@ -111,23 +111,37 @@ export interface PushResult {
 }
 
 /**
+ * How a force push overwrites the remote:
+ * - `"lease"` → `--force-with-lease`: overwrites unless the remote moved in ways
+ *   we never fetched, so a teammate's unpulled commits can't be clobbered.
+ * - `"force"` → `--force`: overwrites unconditionally. The only thing that works
+ *   when the lease can't be verified (e.g. a rewritten local history whose
+ *   remote-tracking ref is stale), and the only one that can destroy work.
+ */
+export type PushForce = "lease" | "force";
+
+/** The git flag that implements each force mode. */
+const FORCE_FLAG: Record<PushForce, string> = {
+  lease: "--force-with-lease",
+  force: "--force",
+};
+
+/**
  * Push the current branch. If it has no upstream, set one on `origin`. A normal
  * push rejected as non-fast-forward — for ANY reason the local and remote tips
  * have diverged (an amended/rebased/reset local branch, or a remote that gained
  * commits) — resolves to `{ rejected: true }` rather than throwing, so the
- * caller can offer Pull or Force Push. With `force`, push with
- * `--force-with-lease`, which overwrites the remote tip in every divergence case
- * EXCEPT one: it refuses if the remote moved in ways we haven't fetched, so a
- * teammate's unpulled commits can't be silently clobbered (that case surfaces a
- * clear "pull first" error). Requires an `origin` remote; HTTPS remotes use the
- * stored token.
+ * caller can offer Pull or one of the two force modes (see `PushForce`). A
+ * lease push that trips its own safety check surfaces a clear "pull first (or
+ * force)" error rather than a raw git message. Requires an `origin` remote;
+ * HTTPS remotes use the stored token.
  */
-export async function push(root: string, opts: { force?: boolean } = {}): Promise<PushResult> {
+export async function push(root: string, opts: { force?: PushForce } = {}): Promise<PushResult> {
   const token = await getToken();
   const branch = await currentBranch(root);
   const upstream = await upstreamName(root, branch);
   const args = [...authArgs(token), "push"];
-  if (opts.force) args.push("--force-with-lease");
+  if (opts.force) args.push(FORCE_FLAG[opts.force]);
   if (!upstream) args.push("--set-upstream", "origin", branch);
   try {
     const { stderr } = await runGit(root, args, { env: AUTH_ENV });
@@ -138,11 +152,12 @@ export async function push(root: string, opts: { force?: boolean } = {}): Promis
       return { branch, output: msg, rejected: true, upstream };
     }
     // A force-with-lease that fails on "stale info" means the remote gained
-    // commits we never fetched — the protection working as intended.
-    if (opts.force && /stale info/i.test(msg)) {
+    // commits we never fetched — the protection working as intended. Bare force
+    // is the deliberate way past it, so name it.
+    if (opts.force === "lease" && /stale info/i.test(msg)) {
       throw Object.assign(
         new Error(
-          "The remote has new commits you haven't fetched yet. Pull first, then push — force push won't overwrite unpulled work.",
+          "The remote has new commits you haven't fetched yet, so force-with-lease refused to overwrite them. Pull first, or push again and choose Force Push (no lease) to overwrite the remote anyway.",
         ),
         { status: 409 },
       );

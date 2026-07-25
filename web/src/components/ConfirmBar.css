@@ -7,7 +7,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  /* Wrap rather than squeeze the message when a prompt carries several buttons
+     (the push-rejected banner offers Pull, both force modes, and Cancel). */
+  flex-wrap: wrap;
+  gap: 8px 12px;
   min-height: 40px;
   padding: 7px 16px;
   background: var(--confirm-bar-bg);

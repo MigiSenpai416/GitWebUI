@@ -45,6 +45,7 @@ import {
   cloneRepo,
   createGitHubRemote,
   createGitHubRepoNew,
+  type PushForce,
 } from "./git/remote.js";
 import * as github from "./github.js";
 import {
@@ -809,9 +810,18 @@ async function forgetDeadStashNotes(root: string): Promise<void> {
 
 // ---- Push / Pull ----
 
+/**
+ * Read the requested force mode off a push body. `"force"` means bare `--force`;
+ * anything else truthy (including a legacy `true`) means `--force-with-lease`.
+ */
+function parseForce(raw: unknown): PushForce | undefined {
+  if (raw === "force") return "force";
+  return raw ? "lease" : undefined;
+}
+
 api.post("/push", h(async (req, res) => {
   const root = requireRepoRoot(req);
-  const force = Boolean(req.body?.force);
+  const force = parseForce(req.body?.force);
   const result = await push(root, { force });
   await refreshSession(root);
   res.json({ ...result, branches: await getBranches(root) });

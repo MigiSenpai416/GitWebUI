@@ -14,6 +14,7 @@ import type {
   MergeState,
   PrContext,
   PrMeta,
+  PushForce,
   RepoInfo,
   Remote,
   RemoteBranch,
@@ -323,14 +324,14 @@ export const api = {
     req<CreatedPr>("/api/pr/create", { method: "POST", body: JSON.stringify(input) }),
 
   // Push / Pull
-  push: (force = false) =>
+  push: (force: PushForce | null = null) =>
     req<{
       branch: string;
       output: string;
       rejected?: boolean;
       upstream?: string | null;
       branches: Branch[];
-    }>("/api/push", { method: "POST", body: JSON.stringify({ force }) }),
+    }>("/api/push", { method: "POST", body: JSON.stringify({ force: force ?? false }) }),
   pull: () =>
     req<{ output: string; merge: MergeState; status: StatusResult }>("/api/pull", {
       method: "POST",

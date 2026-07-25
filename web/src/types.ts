@@ -84,6 +84,14 @@ export interface Remote {
   url: string;
 }
 
+/**
+ * How a force push overwrites the remote: `"lease"` is `--force-with-lease`
+ * (refuses when the remote holds commits we never fetched), `"force"` is a bare
+ * `--force` (overwrites unconditionally — the only mode that can destroy work,
+ * and the only one that works when the lease can't be verified).
+ */
+export type PushForce = "lease" | "force";
+
 export interface RemoteBranch {
   name: string;
   remote: string;

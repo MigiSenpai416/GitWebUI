@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { existsSync } from "node:fs";
 import os from "node:os";
@@ -214,6 +214,16 @@ export interface RunHandle {
   done: Promise<void>;
   /** Stop the command; the stream ends with an exit event marked killed. */
   kill: () => void;
+  /**
+   * Stop the command without returning until the OS has been told to.
+   *
+   * Only for shutdown. `kill()` asks Windows to tear the tree down via a
+   * `taskkill` it does not wait for, which is right when the process will still
+   * be here a moment later — and wrong when it is exiting, because the caller
+   * can be gone before `taskkill` has done anything, leaving the command
+   * running with nobody left to stop it.
+   */
+  killSync: () => void;
 }
 
 /**
@@ -229,6 +239,32 @@ const DRAIN_GRACE_MS = 200;
  * Output is decoded incrementally so a multi-byte character split across two
  * reads isn't turned into replacement characters.
  */
+/**
+ * Every command currently running.
+ *
+ * A request that goes away takes its own command with it (`res.on("close")`),
+ * which covers the ordinary case. What it doesn't cover is the server itself
+ * going away: in the desktop app these are child processes of the process the
+ * user just quit, and without this they would be left running with nothing
+ * reading their output.
+ */
+const running = new Set<RunHandle>();
+
+/**
+ * Stop every command still running. Called when the host is shutting down, so
+ * the kills are synchronous: the process may not be alive long enough to see an
+ * asynchronous one through.
+ */
+export function killAllCommands(): void {
+  for (const handle of running) handle.killSync();
+  running.clear();
+}
+
+/** How many commands are in flight. Exposed for tests. */
+export function runningCommandCount(): number {
+  return running.size;
+}
+
 export function runCommand(
   opts: { command: string; cwd: string; shell: ShellInfo },
   onEvent: (e: RunEvent) => void,
@@ -261,6 +297,13 @@ export function runCommand(
         cwd: opts.cwd,
         env: commandEnv(opts.cwd, isPs ? cwdFile : bashPath(cwdFile)),
         windowsHide: true,
+        // POSIX only: make the shell a process-group leader so the whole tree
+        // can be signalled at once. Killing the shell alone would leave
+        // whatever it started — `sleep 30`, a build, an ssh — running with
+        // nothing reading it. Windows has no process groups to speak of and
+        // uses taskkill /T instead; passing detached there would spawn a
+        // console window.
+        detached: process.platform !== "win32",
       }) as ChildProcessWithoutNullStreams;
       child = proc;
 
@@ -313,18 +356,55 @@ export function runCommand(
     }
   })();
 
-  return {
-    done,
-    kill: () => {
-      if (!child || child.exitCode !== null) return;
-      killed = true;
-      // The shell is the process group's parent on Windows; taskkill takes the
-      // tree with it, where SIGKILL on the shell alone would orphan the command.
-      if (process.platform === "win32" && child.pid) {
-        spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
+  /**
+   * Tear down the shell and everything it started. `wait` decides whether the
+   * Windows path blocks until `taskkill` has finished; the POSIX path signals
+   * the process group directly and is synchronous either way.
+   */
+  const killTree = (wait: boolean): void => {
+    if (!child || child.exitCode !== null) return;
+    killed = true;
+    // The shell is the process group's parent on Windows; taskkill takes the
+    // tree with it, where SIGKILL on the shell alone would orphan the command.
+    if (process.platform === "win32" && child.pid) {
+      const args = ["/pid", String(child.pid), "/T", "/F"];
+      if (wait) {
+        try {
+          execFileSync("taskkill", args, { windowsHide: true, stdio: "ignore" });
+        } catch {
+          /* already gone, or never started */
+        }
       } else {
+        spawn("taskkill", args, { windowsHide: true });
+      }
+      return;
+    }
+    if (child.pid) {
+      try {
+        // Negative pid means "the whole process group", which is the shell and
+        // everything it started. It was made a group leader at spawn.
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // The group is already gone, or this platform wouldn't take it —
+        // fall back to the shell itself.
         child.kill("SIGKILL");
       }
-    },
+      return;
+    }
+    child.kill("SIGKILL");
   };
+
+  const handle: RunHandle = {
+    done,
+    kill: () => killTree(false),
+    killSync: () => killTree(true),
+  };
+
+  running.add(handle);
+  // Deregister however it ends — `done` never rejects, but a throw here would
+  // leak the entry and, worse, leave `killAllCommands` trying to kill a
+  // process that is already gone.
+  void done.catch(() => {}).finally(() => running.delete(handle));
+
+  return handle;
 }

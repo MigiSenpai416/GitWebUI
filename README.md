@@ -1,11 +1,27 @@
 # GitWebUI
 
-A local, GitKraken-style web UI for browsing and committing to a git repository
+A local, GitKraken-style git client for browsing and committing to a repository
 on your own machine. The backend shells out to your installed `git` binary; the
-frontend renders a dark, GitKraken-like interface in the browser.
+frontend renders a dark, GitKraken-like interface.
 
 It focuses on a **local** repo, and also supports GitHub remotes: connect a
 Personal Access Token to push, pull, add remotes, and create repositories.
+
+It runs two ways, from one codebase:
+
+| | Platforms | |
+|---|---|---|
+| **Desktop app** | Windows | A single standalone `.exe`. No install, no ports, no browser tab, no password. Native folder pickers and menus. |
+| **Server** | Windows, Linux, macOS | The original mode. Run it on a machine, reach it from a browser anywhere on your network, gated by a password. |
+
+The desktop app is the Express API and the web UI in a single process: the API
+listens on a random loopback port and the window is pointed at it, so both modes
+run exactly the same server code.
+
+The desktop build is Windows-only on purpose. Electron can target macOS and
+Linux, but their installers can only be built — and only meaningfully tested —
+on those platforms, and this is developed on Windows. The server mode covers
+them instead, and nothing in `server/` or `web/` is Windows-specific.
 
 ## Features
 
@@ -65,14 +81,19 @@ Personal Access Token to push, pull, add remotes, and create repositories.
 
 ## Requirements
 
-- Node.js 20+ (developed on 24) and npm 10+
-- `git` on your `PATH`
+- **`git` installed.** Everything in the app shells out to it. The desktop app
+  looks for it on your `PATH` and in the usual install locations, and offers to
+  be pointed at it if it can't find one.
+- To build from source: Node.js 20+ (developed on 24) and npm 10+. The desktop
+  app itself bundles its own Node, so installing it needs nothing but `git`.
 
-## Getting started
+## Getting started (development)
 
 ```bash
-npm install          # installs both workspaces (server + web)
-npm run dev          # Express API on :5174, Vite dev server on :5173
+npm install          # installs all three workspaces (server + web + desktop)
+
+npm run dev          # browser mode: Express API on :5174, Vite on :5173
+npm run dev:desktop  # desktop mode: Electron window with hot-reloading UI
 ```
 
 Open http://localhost:5173 and enter the absolute path to a local git repository,
@@ -81,7 +102,54 @@ for example:
 - Windows: `C:\Users\you\projects\my-repo`
 - Linux/macOS: `/home/you/projects/my-repo`
 
-### Production build
+## The desktop app (Windows)
+
+```bash
+npm run icons        # draws the app icon from the brand mark (once)
+npm run dist         # → release/desktop/GitWebUI-0.1.0.exe
+```
+
+One standalone executable, about 90 MB. There is no installer: copy it wherever
+you like and run it. Electron, the Express server and the built UI are all
+inside it, and the only thing it expects to find on the machine is `git`.
+
+Running it unpacks to `%LOCALAPPDATA%\Temp\GitWebUI`, so the first launch is a
+little slower than the ones after it. Your settings do not live there — they go
+to the config directory below and survive replacing the `.exe`.
+
+It is unsigned, so SmartScreen shows "Windows protected your PC" the first
+time; choose **More info → Run anyway**.
+
+### How it differs from the server
+
+- **No password.** The window is let in by a one-off token the app mints at
+  launch and plants as a cookie in its own session. That token also switches the
+  server into a private mode where signing in and setting a password are refused
+  outright — so a browser that finds the port can't claim an install whose owner
+  never set one.
+- **Bound to `127.0.0.1:5175`**, with a `Host` allowlist so a rebound DNS name
+  can't reach it. The port is fixed rather than random because the browser files
+  your open tabs — and the sidebar, visible refs and terminal height — under the
+  page's origin, and the port is part of that origin: a different port each
+  launch would mean the app forgot everything each launch. If something else
+  already has 5175 the app still starts on whatever port is free, and says so in
+  its log; the remembered state reappears once 5175 is free again. A predictable
+  port costs nothing here, since anything on your machine can scan the loopback
+  range in milliseconds — the session cookie is what keeps others out.
+- **Shares its configuration with the server.** The password, GitHub token,
+  commit identity and recent repositories live in the same place either way, so
+  switching between the two just works. Electron's own state (window size,
+  caches, open tabs) is kept separately in `gitwebui-desktop`.
+- Native folder pickers, an application menu with accelerators, remembered
+  window geometry, and external links opening in your real browser.
+
+A window that won't start has nothing to print to — a packaged Windows app has
+no console — so the main process logs to `main.log` under
+`%APPDATA%\gitwebui-desktop`.
+
+## Running it as a server
+
+Works on Windows, Linux and macOS.
 
 ```bash
 npm run build        # builds web/dist and server/dist
@@ -103,7 +171,30 @@ node server/dist/index.js --help               # usage
 ```
 
 Defaults are port `5174` and host `0.0.0.0` (all interfaces, so a remote machine
-can reach it). The same flags work on the standalone binaries below.
+can reach it). The same flags work on the standalone binaries below. If the port
+is already taken the server says so and exits rather than lingering with nothing
+listening.
+
+Requests carrying an `Origin` from a different host are refused, so a page on the
+web can't make your browser act against a server on your own network. Requests
+without an `Origin` — curl, scripts, the UI itself — are unaffected.
+
+If you know every name your server is reached by, list them in
+`GITWEBUI_ALLOWED_HOSTS` (comma-separated) and anything else is refused. That
+shuts out DNS rebinding, where an attacker's domain re-resolves to your address
+to become "same origin"; it is off by default because a LAN or reverse-proxy
+deployment can't know its own names in advance.
+
+```bash
+GITWEBUI_ALLOWED_HOSTS=git.example.com,127.0.0.1 node server/dist/index.js
+```
+
+### Pointing at a specific `git`
+
+By default the server runs whatever `git` is on its `PATH`. Set
+`GITWEBUI_GIT_PATH` to an absolute path when that isn't the right one — a
+service started with a minimal environment, or several git installations on one
+machine.
 
 ### First run & authentication
 
@@ -185,20 +276,54 @@ deploy. Run it and pass `--port`/`--host` as above, e.g. on a Linux server:
 ## Project layout
 
 ```
-server/  Express API that spawns git (never via a shell)
-  src/git/       gitRunner, log, status, diff, commitFiles, mutate parsers
+server/   Express API that spawns git (never via a shell)
+  src/git/       gitRunner, gitPath, log, status, diff, commitFiles, mutate
+  src/app.ts     createApp() — the factory all three entry points share
   src/routes.ts  REST endpoints
-web/     React + Vite + TypeScript SPA
-  src/components/           UI (CommitList, ChangesPanel, DiffViewer, …)
+  src/index.ts   Node entry (serves web/dist from disk)
+  src/bunEntry.ts  Bun single-file-binary entry (serves embedded assets)
+web/      React + Vite + TypeScript SPA
+  src/components/            UI (CommitList, ChangesPanel, DiffViewer, …)
   src/components/DiffViewer/ CodeMirror inline-diff rendering
-  src/state/store.ts        Zustand app state
+  src/state/store.ts         Zustand app state
+  src/desktop.ts             the Electron bridge, absent in a browser
+desktop/  Electron app — the third caller of createApp()
+  src/main/      lifecycle, the loopback server, menu, IPC, git probe
+  src/preload/   the contextBridge surface (sandboxed, CommonJS)
+  tests/         Playwright end-to-end tests against a real window
+scripts/  embed-web (Bun assets), stage-renderer, make-icons
 ```
+
+`server/src/app.ts` is the seam the whole thing turns on: one Express factory,
+three callers — Node from disk, Bun from embedded assets, Electron from memory.
+Nothing in `server/` imports `electron`, which is what keeps the headless and
+single-binary modes intact.
 
 ## Tests
 
 ```bash
-npm test             # Vitest unit tests for the git output parsers
+npm test             # Vitest: git output parsers, auth, config, origin guard
+npm run test:desktop # Playwright: a real Electron window, end to end
 ```
+
+The Playwright suite can also be pointed at a packaged build, which is the only
+way to catch failures specific to being packaged — asar path resolution above all:
+
+```bash
+GITWEBUI_E2E_BINARY=release/desktop/win-unpacked/GitWebUI.exe \
+  npm run test --workspace desktop
+```
+
+The desktop tests run on their own port and their own Electron profile
+(`desktop/tests/helpers.ts`), so they never read or overwrite the tabs and
+settings of an installed copy — including one that is open at the time. Two
+environment variables make that possible, and are useful on their own for
+running a second instance side by side with your usual one:
+
+| | |
+|---|---|
+| `GITWEBUI_DESKTOP_PORT` | Port to serve the window from, instead of 5175. |
+| `GITWEBUI_USER_DATA_DIR` | Where Electron keeps its profile — window state, and the tabs the UI remembers. |
 
 ## Security note
 

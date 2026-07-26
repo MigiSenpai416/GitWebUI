@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BusyLabel } from "./icons";
+import { BrowseButton } from "./BrowseButton";
+import { examplePath } from "../desktop";
 import { useStore } from "../state/store";
 import { api } from "../api/client";
 import type { GitHubRepo } from "../types";
@@ -90,13 +92,21 @@ export function CloneDialog() {
           <div className="clone-panel">
             <label className="acct-field">
               <span>Where to clone to</span>
-              <input
-                value={dir}
-                spellCheck={false}
-                placeholder={placeholderDir()}
-                onChange={(e) => setDir(e.target.value)}
-                disabled={busy}
-              />
+              <div className="dir-row">
+                <input
+                  value={dir}
+                  spellCheck={false}
+                  placeholder={placeholderDir()}
+                  onChange={(e) => setDir(e.target.value)}
+                  disabled={busy}
+                />
+                <BrowseButton
+                  title="Where to clone to"
+                  defaultPath={dir}
+                  disabled={busy}
+                  onPick={setDir}
+                />
+              </div>
             </label>
 
             {source === "url" ? (
@@ -306,7 +316,7 @@ function parentOf(p: string): string {
 }
 
 function placeholderDir(): string {
-  return navigator.userAgent.includes("Win") ? "C:\\Users\\you\\projects" : "/home/you/projects";
+  return examplePath("projects");
 }
 
 function IconGlobe() {

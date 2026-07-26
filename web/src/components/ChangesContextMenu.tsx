@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
+import { writeClipboard } from "../desktop";
 import "./CommitContextMenu.css";
 
 const MENU_W = 250;
@@ -53,7 +54,7 @@ export function ChangesContextMenu() {
     close();
     const abs = joinPath(repo?.root ?? "", menu.filePath ?? "");
     try {
-      await navigator.clipboard.writeText(abs);
+      await writeClipboard(abs);
       setNotice("Copied file path.");
     } catch {
       setNotice(abs);

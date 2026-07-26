@@ -46,7 +46,28 @@ export async function openFolderAbsolute(abs: string): Promise<void> {
   launch(stat.isDirectory() ? abs : path.dirname(abs));
 }
 
+/**
+ * How a folder gets opened. Replaceable because an embedder may have a better
+ * answer than spawning a command: the desktop app hands this to Electron's
+ * `shell`, which knows about the XDG desktop portal and so works inside an
+ * AppImage or a Flatpak, where a bare `xdg-open` frequently doesn't.
+ */
+export type Opener = (target: string) => void | Promise<void>;
+
+let opener: Opener | null = null;
+
+/** Install a replacement opener, or `null` to go back to spawning one. */
+export function setOpener(fn: Opener | null): void {
+  opener = fn;
+}
+
 function launch(target: string): void {
+  if (opener) {
+    // Failures here are the file manager's problem, not the request's — the
+    // caller has already been told the folder exists.
+    void Promise.resolve(opener(target)).catch(() => {});
+    return;
+  }
   const platform = process.platform;
   const [cmd, args] =
     platform === "win32"

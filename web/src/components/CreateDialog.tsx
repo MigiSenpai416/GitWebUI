@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../state/store";
 import { BusyLabel, IconMonitor } from "./icons";
+import { BrowseButton } from "./BrowseButton";
+import { examplePath } from "../desktop";
 import "./AccountDialogs.css";
 import "./CreateDialog.css";
 
@@ -215,15 +217,23 @@ export function CreateDialog() {
                       <label htmlFor="cr-dir">
                         {source === "github" ? "Where to clone to" : "Initialize in"}
                       </label>
-                      <input
-                        id="cr-dir"
-                        value={dir}
-                        spellCheck={false}
-                        placeholder={placeholderDir()}
-                        onChange={(e) => setDir(e.target.value)}
-                        onKeyDown={onEnter}
-                        disabled={busy}
-                      />
+                      <div className="dir-row">
+                        <input
+                          id="cr-dir"
+                          value={dir}
+                          spellCheck={false}
+                          placeholder={placeholderDir()}
+                          onChange={(e) => setDir(e.target.value)}
+                          onKeyDown={onEnter}
+                          disabled={busy}
+                        />
+                        <BrowseButton
+                          title={source === "github" ? "Where to clone to" : "Initialize in"}
+                          defaultPath={dir}
+                          disabled={busy}
+                          onPick={setDir}
+                        />
+                      </div>
                     </div>
 
                     <div className="create-field">
@@ -275,7 +285,7 @@ function joinPath(dir: string, name: string, sep: string): string {
 }
 
 function placeholderDir(): string {
-  return navigator.userAgent.includes("Win") ? "C:\\Users\\you\\projects" : "/home/you/projects";
+  return examplePath("projects");
 }
 
 function IconGitHubMark() {

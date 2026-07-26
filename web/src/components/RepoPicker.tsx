@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
+import { examplePath, isDesktop, pickDirectory } from "../desktop";
 import { IconCloud, IconFolder, IconPlus } from "./icons";
 import "./RepoPicker.css";
 
@@ -23,6 +24,12 @@ export function RepoPicker() {
   const submit = (value: string) => {
     const p = value.trim();
     if (p && !opening) openRepo(p);
+  };
+
+  const browse = async () => {
+    const picked = await pickDirectory({ title: "Open a repository", buttonLabel: "Open" });
+    // Cancelling leaves the field as it was rather than clearing it.
+    if (picked) submit(picked);
   };
 
   const toggleOpen = () => {
@@ -66,6 +73,13 @@ export function RepoPicker() {
               value={path}
               onChange={(e) => setPath(e.target.value)}
             />
+            {/* Browsing and pasting are both worth having: a path copied from a
+                terminal is quicker to paste than to navigate to. */}
+            {isDesktop() && (
+              <button className="btn" type="button" onClick={browse} disabled={opening}>
+                Browse…
+              </button>
+            )}
             <button className="btn btn-primary" type="submit" disabled={opening || !path.trim()}>
               {opening ? "Opening…" : "Open"}
             </button>
@@ -93,8 +107,7 @@ export function RepoPicker() {
 }
 
 function placeholderForOS(): string {
-  const win = navigator.userAgent.includes("Win");
-  return win ? "C:\\Users\\you\\projects\\my-repo" : "/home/you/projects/my-repo";
+  return examplePath("projects", "my-repo");
 }
 
 function basename(p: string): string {

@@ -1,6 +1,5 @@
 import { promises as fs } from "node:fs";
-import path from "node:path";
-import { CONFIG_DIR } from "./config.js";
+import { configPath, ensureConfigDir } from "./config.js";
 import type { CommitIdentity } from "./identity.js";
 
 /**
@@ -11,7 +10,7 @@ import type { CommitIdentity } from "./identity.js";
  * pushes/pulls. Treat the config dir as sensitive.
  */
 
-const TOKEN_FILE = path.join(CONFIG_DIR, "github.json");
+const tokenFile = () => configPath("github.json");
 const API = "https://api.github.com";
 
 export interface GitHubUser {
@@ -32,7 +31,7 @@ let loaded = false;
 async function read(): Promise<TokenConfig | null> {
   if (loaded) return cache;
   try {
-    const raw = await fs.readFile(TOKEN_FILE, "utf8");
+    const raw = await fs.readFile(tokenFile(), "utf8");
     const parsed = JSON.parse(raw) as Partial<TokenConfig>;
     cache = parsed.token ? { token: parsed.token } : null;
   } catch {
@@ -52,15 +51,15 @@ export async function hasToken(): Promise<boolean> {
 
 /** Persist the token. */
 export async function setToken(token: string): Promise<void> {
-  await fs.mkdir(CONFIG_DIR, { recursive: true });
-  await fs.writeFile(TOKEN_FILE, JSON.stringify({ token }, null, 2), "utf8");
+  await ensureConfigDir();
+  await fs.writeFile(tokenFile(), JSON.stringify({ token }, null, 2), "utf8");
   cache = { token };
   loaded = true;
 }
 
 /** Remove the stored token (revoke locally). */
 export async function deleteToken(): Promise<void> {
-  await fs.rm(TOKEN_FILE, { force: true });
+  await fs.rm(tokenFile(), { force: true });
   cache = null;
   loaded = true;
 }

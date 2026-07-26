@@ -1,0 +1,28 @@
+{
+  "name": "@gitwebui/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GitWebUI as a desktop application",
+  "productName": "GitWebUI",
+  "author": "GitWebUI",
+  "main": "dist/main.js",
+  "//": [
+    "Deliberately no \"type\" field. Electron's main process and (especially) a sandboxed preload want CommonJS, and the esbuild bundle emits CJS.",
+    "The electron version is pinned rather than a range: electron-builder downloads platform binaries for one exact release, and with npm workspace hoisting it cannot resolve a range from desktop/node_modules."
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "start": "electron dist/main.js",
+    "test": "playwright test",
+    "dist": "npm run build && electron-builder --config electron-builder.yml --win"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0",
+    "@types/node": "^22.10.0",
+    "electron": "43.2.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.2"
+  }
+}

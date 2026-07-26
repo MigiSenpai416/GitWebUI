@@ -1,0 +1,21 @@
+/* Rides on .btn from theme.css for colour and border; this only adds the
+   sizing that makes it sit level with the input beside it. */
+.browse-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* Pairs a path input with its Browse button. The input takes the slack so the
+   button keeps its natural width and the row doesn't reflow while typing. */
+.dir-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.dir-row > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}

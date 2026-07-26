@@ -3,18 +3,52 @@ import os from "node:os";
 import path from "node:path";
 
 /**
- * Directory where GitWebUI persists its state (recent repos, auth). Resolved
- * per-OS so it works the same for a `node`/`tsx` run and a compiled binary.
+ * Directory where GitWebUI persists its state (recent repos, auth, GitHub
+ * token, commit identity). Resolved per-OS so it works the same for a
+ * `node`/`tsx` run, a compiled binary, and the desktop app.
+ *
+ * Resolved *on every call* rather than once at import time. An embedder — the
+ * Electron main process — has to be able to choose the directory before
+ * anything reads it, and freezing it at import would make that depend on the
+ * order modules happen to be loaded in. Callers therefore ask for a path when
+ * they need one instead of capturing it in a module constant.
  */
-export const CONFIG_DIR =
-  process.env.GITWEBUI_CONFIG_DIR ||
-  path.join(
+
+let overrideDir: string | null = null;
+
+/**
+ * Point the config dir somewhere else. Takes precedence over the environment,
+ * so an embedder's choice is not silently overridden by a stray env var. Call
+ * it before serving requests; it has no effect on caches already populated
+ * from the previous location.
+ */
+export function setConfigDir(dir: string | null): void {
+  overrideDir = dir;
+}
+
+function platformDefault(): string {
+  return path.join(
     process.env.APPDATA ||
       process.env.XDG_CONFIG_HOME ||
       path.join(os.homedir(), ".config"),
     "gitwebui",
   );
-const CONFIG_FILE = path.join(CONFIG_DIR, "recent.json");
+}
+
+export function configDir(): string {
+  return overrideDir ?? process.env.GITWEBUI_CONFIG_DIR ?? platformDefault();
+}
+
+/** Path to a file inside the config dir. */
+export function configPath(name: string): string {
+  return path.join(configDir(), name);
+}
+
+/** Ensure the config dir exists before writing into it. */
+export async function ensureConfigDir(): Promise<void> {
+  await fs.mkdir(configDir(), { recursive: true });
+}
+
 const MAX_RECENT = 15;
 
 interface ConfigShape {
@@ -23,7 +57,7 @@ interface ConfigShape {
 
 async function read(): Promise<ConfigShape> {
   try {
-    const raw = await fs.readFile(CONFIG_FILE, "utf8");
+    const raw = await fs.readFile(configPath("recent.json"), "utf8");
     const parsed = JSON.parse(raw) as Partial<ConfigShape>;
     return { recent: Array.isArray(parsed.recent) ? parsed.recent : [] };
   } catch {
@@ -32,8 +66,8 @@ async function read(): Promise<ConfigShape> {
 }
 
 async function write(cfg: ConfigShape): Promise<void> {
-  await fs.mkdir(CONFIG_DIR, { recursive: true });
-  await fs.writeFile(CONFIG_FILE, JSON.stringify(cfg, null, 2), "utf8");
+  await ensureConfigDir();
+  await fs.writeFile(configPath("recent.json"), JSON.stringify(cfg, null, 2), "utf8");
 }
 
 export async function getRecent(): Promise<string[]> {

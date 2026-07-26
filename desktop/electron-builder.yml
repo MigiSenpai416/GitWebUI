@@ -1,0 +1,49 @@
+appId: dev.gitwebui.app
+productName: GitWebUI
+copyright: GitWebUI
+
+# Windows only, deliberately. The headless server still runs anywhere — see the
+# README — but the desktop app is built and tested on the one platform it is
+# developed on, rather than shipping installers nobody has ever launched.
+
+directories:
+  output: ../release/desktop
+  buildResources: build
+
+# Only the built output ships. `src/`, `tests/`, `build.mjs` and the icon
+# sources have no business inside the installed app.
+files:
+  - dist/**
+  - renderer/**
+  - package.json
+
+# Nothing needs to sit outside the archive: every process this app spawns —
+# git, the user's shell, taskkill, the file manager — is a system binary found
+# by absolute path, never one we ship. That is also why there are no
+# asarUnpack rules and no extraResources.
+asar: true
+
+# There are no native modules (the server's only runtime dependency is
+# express, and it is bundled into dist/main.js), so there is nothing to
+# rebuild against Electron's ABI.
+npmRebuild: false
+
+# The one thing the machine still needs is git. Said here so it survives into
+# the package metadata rather than living only in the README.
+extraMetadata:
+  description: A local, GitKraken-style git client. Requires git on the host.
+
+win:
+  icon: build/icon.ico
+  # One standalone executable, no installer. Everything the app needs — Electron,
+  # the Express server, the built UI — is inside it; the only thing it expects to
+  # find on the machine is git.
+  target:
+    - target: portable
+      arch: [x64]
+
+portable:
+  artifactName: GitWebUI-${version}.${ext}
+  # Extracted to a fixed directory under %LOCALAPPDATA%\Temp rather than a fresh
+  # one per launch, so starting it a second time doesn't unpack ~200 MB again.
+  unpackDirName: GitWebUI

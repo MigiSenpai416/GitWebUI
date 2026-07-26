@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useStore } from "../state/store";
+import { isDesktop } from "../desktop";
 import { BranchMenu } from "./BranchMenu";
 import { ActionsMenu } from "./ActionsMenu";
 import {
@@ -145,9 +146,13 @@ export function Toolbar() {
         <ToolButton label="Search" onClick={soon("Search")}>
           <IconSearch />
         </ToolButton>
-        <ToolButton label="Lock" onClick={() => logout()}>
-          <IconLock />
-        </ToolButton>
+        {/* There is no session to end in the desktop app — the window's
+            credential belongs to the app, not to a sign-in the user performed. */}
+        {!isDesktop() && (
+          <ToolButton label="Lock" onClick={() => logout()}>
+            <IconLock />
+          </ToolButton>
+        )}
       </div>
     </div>
   );

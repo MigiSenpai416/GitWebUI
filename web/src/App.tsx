@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "./state/store";
 import { applyFavicon, repoColor } from "./brand";
+import { useDesktopMenu } from "./useDesktopMenu";
 import { RepoPicker } from "./components/RepoPicker";
 import { Toolbar } from "./components/Toolbar";
 import { CommitList } from "./components/CommitList";
@@ -41,6 +42,10 @@ export function App() {
   const init = useStore((s) => s.init);
   const refreshAll = useStore((s) => s.refreshAll);
   const lastRefresh = useRef(0);
+
+  // The native menu, when there is one. Registered unconditionally because
+  // hooks must be, and inert in a browser.
+  useDesktopMenu();
 
   useEffect(() => {
     init();

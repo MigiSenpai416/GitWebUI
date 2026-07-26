@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api, AuthError, setRequestRepoRoot } from "../api/client";
+import { openExternal } from "../desktop";
 import type {
   Branch,
   Commit,
@@ -1100,7 +1101,10 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const created = await api.prCreate(input);
       // The PR lives on GitHub — open it so the user lands on the review page.
-      window.open(created.htmlUrl, "_blank", "noopener");
+      // In the desktop app this has to leave the app entirely: a plain
+      // window.open would be caught by the window-open handler anyway, and
+      // without one it would put github.com inside a privileged window.
+      openExternal(created.htmlUrl);
       await refreshRepoData(get, set);
       const warn = created.warnings.length > 0 ? ` — ${created.warnings.join("; ")}` : "";
       raise(set, "notice", `Opened pull request #${created.number}${warn}`);

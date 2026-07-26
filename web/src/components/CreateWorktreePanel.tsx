@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { IconBranch, IconChevronDown, IconClose, IconWorktree } from "./icons";
+import { BrowseButton } from "./BrowseButton";
+import { examplePath } from "../desktop";
 import "./CreateWorktreePanel.css";
 
 /**
@@ -141,18 +143,31 @@ export function CreateWorktreePanel() {
 
         <div className="wtp-field">
           <label htmlFor="wtp-dir">Working directory</label>
-          <input
-            id="wtp-dir"
-            value={dir}
-            spellCheck={false}
-            placeholder={placeholderDir()}
-            onChange={(e) => {
-              setDir(e.target.value);
-              setDirEdited(true);
-            }}
-            onKeyDown={(e) => e.key === "Enter" && !busy && submit()}
-            disabled={busy}
-          />
+          <div className="dir-row">
+            <input
+              id="wtp-dir"
+              value={dir}
+              spellCheck={false}
+              placeholder={placeholderDir()}
+              onChange={(e) => {
+                setDir(e.target.value);
+                setDirEdited(true);
+              }}
+              onKeyDown={(e) => e.key === "Enter" && !busy && submit()}
+              disabled={busy}
+            />
+            <BrowseButton
+              title="Working directory"
+              defaultPath={dir}
+              disabled={busy}
+              onPick={(picked) => {
+                setDir(picked);
+                // Choosing a folder counts as editing it, so the default path
+                // stops overwriting the choice when the branch name changes.
+                setDirEdited(true);
+              }}
+            />
+          </div>
         </div>
 
         {error && <div className="wtp-error">{error}</div>}
@@ -177,7 +192,5 @@ function defaultWorktreePath(repoRoot: string, branch: string): string {
 }
 
 function placeholderDir(): string {
-  return navigator.userAgent.includes("Win")
-    ? "D:\\path\\to\\worktree"
-    : "/path/to/worktree";
+  return examplePath("projects", "my-repo.worktrees", "feature");
 }

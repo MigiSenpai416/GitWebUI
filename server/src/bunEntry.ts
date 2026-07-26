@@ -5,6 +5,7 @@ import { createApp } from "./app.js";
 import { serveEmbedded } from "./embeddedServe.js";
 import { resolvePort, resolveHost, wantsHelp, HELP_TEXT } from "./args.js";
 import { installProcessGuards } from "./safety.js";
+import { listenOrExit } from "./listen.js";
 
 if (wantsHelp()) {
   console.log(HELP_TEXT);
@@ -25,7 +26,4 @@ try {
 
 const app = createApp({ serveStatic: serveEmbedded });
 
-app.listen(port, host, () => {
-  const shown = host === "0.0.0.0" ? "localhost" : host;
-  console.log(`[gitwebui] server listening on http://${shown}:${port}`);
-});
+listenOrExit(app, port, host);

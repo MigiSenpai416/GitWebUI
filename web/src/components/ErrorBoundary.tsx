@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { reload } from "../desktop";
 import "./ErrorBoundary.css";
 
 interface Props {
@@ -38,7 +39,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <button className="eb-btn" onClick={() => this.setState({ error: null })}>
               Try again
             </button>
-            <button className="eb-btn eb-btn-primary" onClick={() => window.location.reload()}>
+            <button className="eb-btn eb-btn-primary" onClick={() => reload()}>
               Reload
             </button>
           </div>

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { gitPath } from "./gitPath.js";
 
 const MAX_BUFFER = 256 * 1024 * 1024; // 256 MiB — large diffs / full-file (-U1000000) output
 
@@ -31,11 +32,15 @@ export interface GitOptions {
  *
  * `encoding: "buffer"` is used and decoded as UTF-8 so we never lose bytes on
  * binary-ish output; callers that need raw bytes should use runGitBuffer.
+ *
+ * The executable comes from `gitPath()` rather than a literal `"git"`: a
+ * desktop app launched from the Dock or Explorer may not have git on its PATH
+ * even though the user does. It resolves to `"git"` unless something pinned it.
  */
 export function runGit(cwd: string, args: string[], opts: GitOptions = {}): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     execFile(
-      "git",
+      gitPath(),
       args,
       {
         cwd,

@@ -6,9 +6,8 @@ import {
 } from "node:crypto";
 import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import { Router, type Request, type Response, type NextFunction } from "express";
-import { CONFIG_DIR } from "./config.js";
+import { configPath, ensureConfigDir } from "./config.js";
 
 /**
  * WebUI access control. A single shared password gates the whole app; a
@@ -21,9 +20,10 @@ import { CONFIG_DIR } from "./config.js";
  * back a token that is otherwise valid until it expires.
  */
 
-const AUTH_FILE = path.join(CONFIG_DIR, "auth.json");
-const REVOKED_FILE = path.join(CONFIG_DIR, "revoked-sessions.json");
+const authFile = () => configPath("auth.json");
+const revokedFile = () => configPath("revoked-sessions.json");
 const COOKIE_NAME = "gwui_session";
+const DESKTOP_COOKIE_NAME = "gwui_desktop";
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
 const MIN_PASSWORD_LEN = 6;
@@ -60,7 +60,7 @@ function isMissingFile(e: unknown): boolean {
 async function read(): Promise<AuthConfig | null> {
   if (loaded) return cache;
   try {
-    const raw = await fs.readFile(AUTH_FILE, "utf8");
+    const raw = await fs.readFile(authFile(), "utf8");
     const parsed = JSON.parse(raw) as Partial<AuthConfig>;
     if (parsed.passwordHash && parsed.salt && parsed.secret) {
       cache = { passwordHash: parsed.passwordHash, salt: parsed.salt, secret: parsed.secret };
@@ -93,13 +93,13 @@ function markUnreadable(why: string): void {
   warnedUnreadable = true;
   console.error(
     `[gitwebui] cannot read the stored password (${why}). Sign-in is disabled until ` +
-      `${AUTH_FILE} is repaired or removed; removing it lets a new password be set.`,
+      `${authFile()} is repaired or removed; removing it lets a new password be set.`,
   );
 }
 
 async function write(cfg: AuthConfig): Promise<void> {
-  await fs.mkdir(CONFIG_DIR, { recursive: true });
-  await fs.writeFile(AUTH_FILE, JSON.stringify(cfg, null, 2), "utf8");
+  await ensureConfigDir();
+  await fs.writeFile(authFile(), JSON.stringify(cfg, null, 2), "utf8");
   cache = cfg;
   unreadable = false;
   loaded = true;
@@ -182,7 +182,7 @@ function loadRevoked(): Promise<Map<string, number>> {
     revokedLoad = (async () => {
       const map = new Map<string, number>();
       try {
-        const raw = JSON.parse(await fs.readFile(REVOKED_FILE, "utf8")) as Record<string, number>;
+        const raw = JSON.parse(await fs.readFile(revokedFile(), "utf8")) as Record<string, number>;
         const now = Date.now();
         for (const [jti, exp] of Object.entries(raw)) {
           if (typeof exp === "number" && exp > now) map.set(jti, exp);
@@ -205,8 +205,8 @@ function loadRevoked(): Promise<Map<string, number>> {
 async function persistRevoked(map: Map<string, number>): Promise<void> {
   const snapshot = Object.fromEntries(map);
   const write = revokedWrites.then(async () => {
-    await fs.mkdir(CONFIG_DIR, { recursive: true });
-    await fs.writeFile(REVOKED_FILE, JSON.stringify(snapshot, null, 2), "utf8");
+    await ensureConfigDir();
+    await fs.writeFile(revokedFile(), JSON.stringify(snapshot, null, 2), "utf8");
   });
   revokedWrites = write.catch(() => undefined);
   await write;
@@ -324,8 +324,55 @@ function clearSessionCookie(res: Response): void {
   res.append("Set-Cookie", `${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
 }
 
+/**
+ * Desktop mode. The Electron main process mints a random token, plants it as a
+ * cookie in its own window's session, and hands the same value here — so the
+ * one client that was handed it is let in and nothing else is, without the
+ * user ever meeting a password screen for an app running on their own machine.
+ *
+ * It replaces the password gate rather than sitting alongside it. The desktop
+ * server listens on loopback, and a loopback port is reachable by every other
+ * process on the machine: if signing in still worked, a local browser could
+ * find the port, see an install with no password set, and set one — claiming
+ * an app that isn't theirs. So while a desktop token is set, `setup` and
+ * `login` are closed and this cookie is the only way in.
+ */
+let desktopToken: string | null = null;
+
+/** Switch to (or, with `null`, out of) desktop mode. */
+export function setDesktopToken(token: string | null): void {
+  desktopToken = token === null || token === "" ? null : token;
+}
+
+export function isDesktopMode(): boolean {
+  return desktopToken !== null;
+}
+
+/** Constant-time compare of two arbitrary strings. */
+function safeEqualString(a: string, b: string): boolean {
+  const ba = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ba.length !== bb.length) return false;
+  return timingSafeEqual(ba, bb);
+}
+
+function hasDesktopCookie(req: Request): boolean {
+  if (desktopToken === null) return false;
+  const presented = readCookie(req, DESKTOP_COOKIE_NAME);
+  return presented !== undefined && safeEqualString(presented, desktopToken);
+}
+
 async function isAuthenticated(req: Request): Promise<boolean> {
+  if (desktopToken !== null) return hasDesktopCookie(req);
   return verifyToken(readCookie(req, COOKIE_NAME));
+}
+
+/** The 403 both password routes return while the app owns this server. */
+function desktopModeRefusal(): Error & { status: number } {
+  return Object.assign(
+    new Error("This server belongs to the GitWebUI desktop app and has no password to set."),
+    { status: 403 },
+  );
 }
 
 function badRequest(message: string): Error & { status: number } {
@@ -402,12 +449,22 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 export const authRouter = Router();
 
 authRouter.get("/status", (req, res, next) => {
+  // In desktop mode there is no password to configure, so the window is told
+  // the gate is settled — which is what makes the login screen never render.
+  if (desktopToken !== null) {
+    res.json({ configured: true, authenticated: hasDesktopCookie(req) });
+    return;
+  }
   Promise.all([isConfigured(), isAuthenticated(req)])
     .then(([configured, authenticated]) => res.json({ configured, authenticated }))
     .catch(next);
 });
 
 authRouter.post("/setup", (req, res, next) => {
+  if (desktopToken !== null) {
+    next(desktopModeRefusal());
+    return;
+  }
   const password = String(req.body?.password ?? "");
   const remember = Boolean(req.body?.remember);
   setupPassword(password)
@@ -420,6 +477,10 @@ authRouter.post("/setup", (req, res, next) => {
 });
 
 authRouter.post("/login", (req, res, next) => {
+  if (desktopToken !== null) {
+    next(desktopModeRefusal());
+    return;
+  }
   const who = clientKey(req);
   const wait = beginAttempt(who);
   if (wait > 0) {
@@ -444,6 +505,13 @@ authRouter.post("/login", (req, res, next) => {
 });
 
 authRouter.post("/logout", (req, res, next) => {
+  // Nothing to sign out of in desktop mode — the window's token is the app's,
+  // not a session the user established. Reported as success so the caller has
+  // no branch to take; the UI hides the control anyway.
+  if (desktopToken !== null) {
+    res.json({ ok: true });
+    return;
+  }
   // Retire the token as well as clearing the cookie: the cookie is only the
   // browser's copy, and a token that has been read off the wire or off a shared
   // machine would otherwise stay good until it expired.

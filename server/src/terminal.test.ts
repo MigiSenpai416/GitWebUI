@@ -3,7 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { buildScript, detectShells, pickShell, runCommand, type RunEvent } from "./terminal.js";
+import {
+  buildScript,
+  detectShells,
+  killAllCommands,
+  pickShell,
+  runCommand,
+  runningCommandCount,
+  type RunEvent,
+} from "./terminal.js";
 
 const DIR = path.join(os.tmpdir(), `gitwebui-term-${randomBytes(6).toString("hex")}`);
 
@@ -152,6 +160,65 @@ describe("runCommand", () => {
     expect(exit.killed).toBe(true);
     expect(exit.code).not.toBe(0);
   }, 20000);
+});
+
+describe("the register of running commands", () => {
+  it("is empty once a command has finished", async () => {
+    await run("echo done");
+    expect(runningCommandCount()).toBe(0);
+  });
+
+  it("stops everything still running", async () => {
+    // What quitting the desktop app relies on. A command is a child of the
+    // process the user just closed, and without this it would carry on with
+    // nothing left reading its output.
+    const shell = pickShell();
+    const sleep =
+      shell.kind === "powershell" || shell.kind === "pwsh" ? "Start-Sleep -Seconds 30" : "sleep 30";
+    const a = runCommand({ command: sleep, cwd: DIR, shell }, () => {});
+    const b = runCommand({ command: sleep, cwd: DIR, shell }, () => {});
+    // Give both a moment to actually spawn; kill() is a no-op before that.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(runningCommandCount()).toBe(2);
+
+    killAllCommands();
+    await Promise.all([a.done, b.done]);
+    expect(runningCommandCount()).toBe(0);
+  }, 30000);
+});
+
+// Windows has no process groups in this sense and goes through `taskkill /T`,
+// which the test above already covers.
+describe.skipIf(process.platform === "win32")("killing a command on POSIX", () => {
+  it("takes the whole process tree, not just the shell", async () => {
+    // The reason the shell is spawned detached. Killing it alone leaves
+    // whatever it started — a build, an ssh, this sleep — running with nothing
+    // reading its output and no way left to stop it.
+    const events: RunEvent[] = [];
+    const handle = runCommand(
+      { command: 'sleep 30 & echo "GRANDCHILD:$!"; sleep 30', cwd: DIR, shell: pickShell() },
+      (e) => events.push(e),
+    );
+
+    // Wait for the shell to report the background job's pid.
+    let pid = 0;
+    for (let i = 0; i < 60 && pid === 0; i++) {
+      const text = events.filter((e) => e.t === "out").map((e) => e.d).join("");
+      const match = /GRANDCHILD:(\d+)/.exec(text);
+      if (match) pid = Number(match[1]);
+      else await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(pid).toBeGreaterThan(0);
+    // Signal 0 tests for existence without sending anything.
+    expect(() => process.kill(pid, 0)).not.toThrow();
+
+    handle.kill();
+    await handle.done;
+    // The kill is asynchronous at the OS level; give it a moment to land.
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(() => process.kill(pid, 0)).toThrow();
+  }, 30000);
 });
 
 // PowerShell reports failure differently from every other shell here, and reads

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { localRef, useStore } from "../state/store";
+import { writeClipboard } from "../desktop";
 import type { Branch, RemoteBranch, Worktree } from "../types";
 import { buildTree, type TreeNode } from "./fileTree";
 import {
@@ -99,7 +100,7 @@ export function Sidebar() {
 
   const copyPath = async (path: string) => {
     try {
-      await navigator.clipboard.writeText(path);
+      await writeClipboard(path);
       setNotice("Copied the worktree path.");
     } catch {
       setNotice("Couldn't access the clipboard.");

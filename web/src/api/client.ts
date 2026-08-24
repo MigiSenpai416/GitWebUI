@@ -10,6 +10,8 @@ import type {
   GitHubRepo,
   GitHubStatus,
   GitHubUser,
+  HeadFileTree,
+  HistoryDeleteResult,
   IdentityInfo,
   MergeState,
   PrContext,
@@ -243,6 +245,12 @@ export const api = {
     req<StatusResult>("/api/discard", { method: "POST", body: JSON.stringify({ paths }) }),
   deleteFile: (path: string) =>
     req<StatusResult>("/api/file/delete", { method: "POST", body: JSON.stringify({ path }) }),
+  historyFiles: () => req<HeadFileTree>("/api/history-files"),
+  deleteFromHistory: (path: string, expectedHead: string, confirmation: string) =>
+    req<HistoryDeleteResult>("/api/history-files/delete", {
+      method: "POST",
+      body: JSON.stringify({ path, expectedHead, confirmation }),
+    }),
   reveal: (path: string) =>
     req<{ ok: true }>("/api/reveal", { method: "POST", body: JSON.stringify({ path }) }),
 

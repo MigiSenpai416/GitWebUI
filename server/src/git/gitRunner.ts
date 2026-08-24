@@ -23,6 +23,8 @@ export interface GitResult {
 export interface GitOptions {
   /** Extra environment variables merged over the parent process env. */
   env?: NodeJS.ProcessEnv;
+  /** Optional stdin for commands such as `git update-ref --stdin`. */
+  input?: string | Buffer;
 }
 
 /**
@@ -39,7 +41,7 @@ export interface GitOptions {
  */
 export function runGit(cwd: string, args: string[], opts: GitOptions = {}): Promise<GitResult> {
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       gitPath(),
       args,
       {
@@ -69,6 +71,7 @@ export function runGit(cwd: string, args: string[], opts: GitOptions = {}): Prom
         resolve({ stdout: out, stderr: errOut });
       },
     );
+    if (opts.input !== undefined) child.stdin?.end(opts.input);
   });
 }
 

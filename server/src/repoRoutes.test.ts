@@ -85,3 +85,30 @@ describe("POST /commit", () => {
     });
   });
 });
+
+describe("history rewrite mutation reservations", () => {
+  it("releases unmatched mutations and exempts the trailing-slash delete route", async () => {
+    const opened = registerRepo(await openRepo(TMP));
+    const unmatched = await fetch(base + "/api/not-a-route", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
+      body: "{}",
+    });
+    expect(unmatched.status).toBe(404);
+
+    const head = (await runGit(TMP, ["rev-parse", "HEAD"])).stdout.trim();
+    const deletion = await fetch(base + "/api/history-files/delete/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
+      body: JSON.stringify({
+        path: "does-not-exist.txt",
+        expectedHead: head,
+        confirmation: "does-not-exist.txt",
+      }),
+    });
+    expect(deletion.status).toBe(409);
+    await expect(deletion.json()).resolves.toMatchObject({
+      error: expect.stringContaining("no longer exists at HEAD"),
+    });
+  });
+});

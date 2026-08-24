@@ -84,14 +84,31 @@ import {
 } from "./session.js";
 import { getRecent, addRecent } from "./config.js";
 import { GitError } from "./git/gitRunner.js";
+import {
+  beginRepoMutation,
+  deletePathFromHistory,
+  getHeadFileTree,
+  isHistoryRewriteActive,
+} from "./git/historyFiles.js";
 import { detectShells, pickShell, runCommand } from "./terminal.js";
 
 export const api = Router();
+const mutationRelease = Symbol("repoMutationRelease");
+type MutationRequest = Request & { [mutationRelease]?: () => void };
+type MutationStateRequest = MutationRequest & { mutationHandlerActive?: boolean };
 
 // Wrap async handlers so rejections reach the error middleware.
 function h(fn: (req: Request, res: Response) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
-    fn(req, res).catch(next);
+    const mutationReq = req as MutationStateRequest;
+    mutationReq.mutationHandlerActive = true;
+    fn(req, res)
+      .catch(next)
+      .finally(() => {
+        mutationReq.mutationHandlerActive = false;
+        mutationReq[mutationRelease]?.();
+        delete mutationReq[mutationRelease];
+      });
   };
 }
 
@@ -107,6 +124,39 @@ api.use((req: Request, _res: Response, next: NextFunction) => {
     .then((info) => registerRepo(info))
     .catch(() => undefined) // leave unregistered → requireRepo throws a clean 409
     .finally(next);
+});
+
+// History rewriting temporarily replaces every ref. Keep all other app-driven
+// mutations (including terminal commands) out of that transaction window.
+api.use((req: Request, res: Response, next: NextFunction) => {
+  const root = requestedRoot(req);
+  const normalizedPath = req.path.replace(/\/+$/, "") || "/";
+  const isHistoryDelete = normalizedPath === "/history-files/delete";
+  if (
+    root &&
+    req.method !== "GET" &&
+    !isHistoryDelete &&
+    isHistoryRewriteActive(root)
+  ) {
+    res.status(409).json({ error: "A history rewrite is running for this repository" });
+    return;
+  }
+  if (root && req.method !== "GET" && !isHistoryDelete) {
+    // Reserve synchronously, before a handler's first await. This closes the
+    // window where an admitted terminal/remote request could begin mutating
+    // after a history rewrite had already passed preflight.
+    const release = beginRepoMutation(root);
+    const mutationReq = req as MutationStateRequest;
+    mutationReq[mutationRelease] = release;
+    const releaseUnclaimed = () => {
+      if (mutationReq.mutationHandlerActive) return;
+      mutationReq[mutationRelease]?.();
+      delete mutationReq[mutationRelease];
+    };
+    res.once("finish", releaseUnclaimed);
+    res.once("close", releaseUnclaimed);
+  }
+  next();
 });
 
 api.get("/repo/current", h(async (req, res) => {
@@ -348,6 +398,26 @@ api.post("/file/delete", h(async (req, res) => {
   }
   await deleteFile(root, path);
   res.json(await getStatus(root));
+}));
+
+// ---- File Manager / history rewrite ----
+
+api.get("/history-files", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  res.json(await getHeadFileTree(root));
+}));
+
+api.post("/history-files/delete", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const target = String(req.body?.path ?? "");
+  const expectedHead = String(req.body?.expectedHead ?? "");
+  const confirmation = String(req.body?.confirmation ?? "");
+  const result = await deletePathFromHistory(root, {
+    path: target,
+    expectedHead,
+    confirmation,
+  });
+  res.json({ ...result, repo: await refreshSession(root) });
 }));
 
 api.post("/reveal", h(async (req, res) => {

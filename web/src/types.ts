@@ -32,6 +32,32 @@ export interface StatusResult {
   unstaged: FileChange[];
 }
 
+export type HeadEntryKind = "file" | "symlink" | "submodule";
+
+/** A file-like entry tracked by the tree at the repository's current HEAD. */
+export interface HeadFileEntry {
+  path: string;
+  mode: string;
+  kind: HeadEntryKind;
+  size: number | null;
+}
+
+export interface HeadFileTree {
+  head: string | null;
+  entries: HeadFileEntry[];
+}
+
+export interface HistoryDeleteResult {
+  path: string;
+  head: string;
+  backupPath: string;
+  worktreeBackupPath: string;
+  indexBackupPath: string;
+  rewrittenRefs: number;
+  warnings: string[];
+  repo: RepoInfo | null;
+}
+
 export interface CommitFile {
   path: string;
   status: ChangeStatus;

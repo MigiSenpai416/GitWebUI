@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "../state/store";
 import { isDesktop } from "../desktop";
 import { BranchMenu } from "./BranchMenu";
 import { ActionsMenu } from "./ActionsMenu";
+import { FileManager } from "./FileManager";
 import {
   IconActions,
   IconBranch,
   IconCaretDown,
+  IconFolder,
   IconPop,
   IconPull,
   IconPush,
@@ -34,8 +36,14 @@ export function Toolbar() {
   const terminalOpen = useStore((s) => s.terminalOpen);
   const toggleTerminal = useStore((s) => s.toggleTerminal);
   const status = useStore((s) => s.status);
+  const opening = useStore((s) => s.opening);
   const [branchOpen, setBranchOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [fileManagerOpen, setFileManagerOpen] = useState(false);
+
+  useEffect(() => {
+    if (opening) setFileManagerOpen(false);
+  }, [opening]);
 
   if (!repo) return null;
 
@@ -137,6 +145,15 @@ export function Toolbar() {
       </div>
 
       <div className="tb-right">
+        <ToolButton
+          label="File Manager"
+          onClick={() => setFileManagerOpen(true)}
+          disabled={opening}
+          active={fileManagerOpen}
+          title="Browse the files tracked at HEAD"
+        >
+          <IconFolder />
+        </ToolButton>
         <div className="tb-menu-anchor">
           <ToolButton label="Actions" onClick={() => setActionsOpen((v) => !v)}>
             <IconActions />
@@ -154,6 +171,10 @@ export function Toolbar() {
           </ToolButton>
         )}
       </div>
+      <FileManager
+        open={fileManagerOpen && !opening}
+        onClose={() => setFileManagerOpen(false)}
+      />
     </div>
   );
 }

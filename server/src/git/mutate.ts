@@ -2,11 +2,25 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { runGit } from "./gitRunner.js";
 import { headHash } from "./repo.js";
+import { getStatus } from "./status.js";
+
+/** Treat a status path as a filename, never as a wildcard pathspec. */
+function literalPathspecs(paths: Iterable<string>): string[] {
+  return [...new Set(paths)].map((filePath) => `:(literal)${filePath}`);
+}
+
+/** Whether a changed file is the requested file or lives below a requested folder. */
+function isRequested(filePath: string, requested: string[]): boolean {
+  return requested.some((raw) => {
+    const candidate = raw.replace(/\/+$/, "");
+    return candidate === "." || filePath === candidate || filePath.startsWith(`${candidate}/`);
+  });
+}
 
 /** Stage one or more paths (handles new, modified, and deleted files). */
 export async function stagePaths(root: string, paths: string[]): Promise<void> {
   if (paths.length === 0) return;
-  await runGit(root, ["add", "-A", "--", ...paths]);
+  await runGit(root, ["add", "-A", "--", ...literalPathspecs(paths)]);
 }
 
 /** Stage every change in the work tree. */
@@ -19,10 +33,25 @@ export async function unstagePaths(root: string, paths: string[]): Promise<void>
   if (paths.length === 0) return;
   const head = await headHash(root);
   if (head) {
-    await runGit(root, ["restore", "--staged", "--", ...paths]);
+    // A staged rename is one logical change but Git stores it as an old-path
+    // deletion plus a new-path addition. The UI displays (and submits) the new
+    // path, so restoring only that path would leave the deletion staged. Include
+    // the source path for requested renames; copies deliberately keep their
+    // source because it was never removed.
+    const requested = new Set(paths);
+    const staged = (await getStatus(root)).staged;
+    const renameSources = staged
+      .filter((file) => file.status === "R" && file.oldPath && requested.has(file.path))
+      .map((file) => file.oldPath!);
+    await runGit(root, [
+      "restore",
+      "--staged",
+      "--",
+      ...literalPathspecs([...paths, ...renameSources]),
+    ]);
   } else {
     // Unborn branch: no HEAD to restore from — remove entries from the index.
-    await runGit(root, ["rm", "--cached", "-r", "--", ...paths]);
+    await runGit(root, ["rm", "--cached", "-r", "--", ...literalPathspecs(paths)]);
   }
 }
 
@@ -49,21 +78,56 @@ export async function discardAll(root: string): Promise<void> {
  */
 export async function discardPaths(root: string, paths: string[]): Promise<void> {
   if (paths.length === 0) return;
+  const status = await getStatus(root);
+  const selected = [...status.staged, ...status.unstaged].filter((file) =>
+    isRequested(file.path, paths),
+  );
+  const changedPaths = new Set(selected.map((file) => file.path));
+  // A displayed rename names only its destination, but discarding it must also
+  // restore the source. Copies intentionally leave their source untouched.
+  for (const file of selected) {
+    if (file.status === "R" && file.oldPath) changedPaths.add(file.oldPath);
+  }
+
   const head = await headHash(root);
   if (head) {
-    // Unstage first so a newly-added file becomes untracked, then restore
-    // tracked files to their HEAD content.
-    await runGit(root, ["reset", "-q", "HEAD", "--", ...paths]).catch(() => {});
-    await runGit(root, ["checkout", "HEAD", "--", ...paths]).catch(() => {});
+    // Restore tracked/index entries atomically. Purely-untracked paths are not
+    // accepted by `git restore`, so leave those for the clean step below. This
+    // avoids one new file making Git reject restoration of every tracked file
+    // in the same folder selection.
+    const restorable = [...changedPaths].filter(
+      (filePath) => !selected.some((file) => file.path === filePath && file.status === "?"),
+    );
+    if (restorable.length > 0) {
+      await runGit(root, [
+        "restore",
+        "--source=HEAD",
+        "--staged",
+        "--worktree",
+        "--",
+        ...literalPathspecs(restorable),
+      ]);
+    }
   } else {
     // Unborn branch: no HEAD to restore from — just drop index entries.
-    await runGit(root, ["rm", "-q", "--cached", "-r", "--ignore-unmatch", "--", ...paths]).catch(
-      () => {},
-    );
+    const stagedPaths = selected.filter((file) => file.staged).map((file) => file.path);
+    if (stagedPaths.length > 0) {
+      await runGit(root, [
+        "rm",
+        "-q",
+        "--cached",
+        "-r",
+        "--ignore-unmatch",
+        "--",
+        ...literalPathspecs(stagedPaths),
+      ]);
+    }
   }
   // Remove untracked files/dirs among the given paths (including files that
   // were just unstaged from an add).
-  await runGit(root, ["clean", "-fd", "--", ...paths]);
+  if (changedPaths.size > 0) {
+    await runGit(root, ["clean", "-fd", "--", ...literalPathspecs(changedPaths)]);
+  }
 }
 
 /** Resolve a repo-relative path to an absolute one, rejecting escapes outside the repo. */

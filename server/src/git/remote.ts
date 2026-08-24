@@ -47,33 +47,51 @@ export async function removeRemote(root: string, name: string): Promise<void> {
  * stored token WITHOUT leaking it into argv history and WITHOUT triggering an
  * interactive credential-manager popup (which would hang the server):
  * - `credential.helper=` clears any configured helper (e.g. GCM) for this call.
- * - `http.extraHeader` supplies Basic auth when a token is present.
+ * - `http.extraHeader` supplies Basic auth only for an HTTPS github.com URL.
  * - GIT_TERMINAL_PROMPT=0 makes auth failures error out instead of prompting.
  */
-export function authArgs(token: string | null): string[] {
+export function authArgs(token: string | null, remoteUrl: string | null): string[] {
   const args = ["-c", "credential.helper="];
-  if (token) {
+  let githubHttps = false;
+  if (remoteUrl) {
+    try {
+      const parsed = new URL(remoteUrl.trim());
+      githubHttps = parsed.protocol === "https:" && parsed.hostname.toLowerCase() === "github.com";
+    } catch {
+      // SSH/scp syntax and local filesystem paths are intentionally token-free.
+    }
+  }
+  if (token && githubHttps) {
     const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
-    args.push("-c", `http.extraHeader=Authorization: Basic ${basic}`);
+    // Scope the header at Git's own URL-matching layer too. Even if a GitHub
+    // request redirects, Git must not carry the credential to another host.
+    args.push("-c", `http.https://github.com/.extraHeader=Authorization: Basic ${basic}`);
   }
   return args;
 }
 
 const AUTH_ENV: NodeJS.ProcessEnv = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" };
 
-/** Turn a raw git auth failure into an actionable message when no token is set. */
-function rethrowRemoteError(e: unknown, token: string | null): never {
+/**
+ * Turn a raw Git credential failure into an actionable remote-auth error.
+ *
+ * A remote authentication failure must be 403, not 401: the web client reserves
+ * 401 for expiry of GitWebUI's own login and responds by discarding that session.
+ */
+export function rethrowRemoteError(e: unknown, token: string | null): never {
   const msg = e instanceof Error ? e.message : String(e);
   const looksAuth =
     /could not read Username|terminal prompts disabled|Authentication failed|Invalid username or password|403 Forbidden/i.test(
       msg,
     );
-  if (looksAuth && !token) {
+  if (looksAuth) {
     throw Object.assign(
       new Error(
-        "Authentication required. Connect a GitHub account (Actions → Connect GitHub account), or use an SSH remote.",
+        token
+          ? "Remote authentication failed. Reconnect your GitHub account, check the remote's credentials, or use an SSH remote."
+          : "Authentication required. Connect a GitHub account (Actions → Connect GitHub account), or use an SSH remote.",
       ),
-      { status: 401 },
+      { status: 403 },
     );
   }
   throw e;
@@ -94,6 +112,70 @@ async function upstreamName(root: string, branch: string): Promise<string | null
   }
 }
 
+async function configValue(root: string, key: string): Promise<string | null> {
+  try {
+    const { stdout } = await runGit(root, ["config", "--get", key]);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve the remote Git itself will use for a push of this tracked branch. */
+async function configuredPushRemote(root: string, branch: string): Promise<string | null> {
+  return (
+    (await configValue(root, `branch.${branch}.pushRemote`)) ??
+    (await configValue(root, "remote.pushDefault")) ??
+    (await configValue(root, `branch.${branch}.remote`))
+  );
+}
+
+/** Resolve a registered remote's effective fetch or push URL. */
+async function remoteUrl(root: string, remote: string | null, push: boolean): Promise<string | null> {
+  if (!remote || remote === ".") return null;
+  try {
+    const { stdout } = await runGit(root, [
+      "remote",
+      "get-url",
+      ...(push ? ["--push"] : []),
+      remote,
+    ]);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Build auth config from the effective URL Git has configured for a remote. */
+export async function authArgsForRemote(
+  root: string,
+  token: string | null,
+  remote: string | null,
+  push: boolean,
+): Promise<string[]> {
+  return authArgs(token, await remoteUrl(root, remote, push));
+}
+
+/**
+ * Pick the remote for a branch's first push. `origin` is Git's conventional
+ * default, but GitWebUI lets users give their sole remote any name. In that
+ * unambiguous case, use it instead of issuing a guaranteed-to-fail push to a
+ * nonexistent `origin`. Multiple non-origin remotes need an explicit upstream;
+ * silently picking one could publish commits to the wrong server.
+ */
+async function initialPushRemote(root: string): Promise<string> {
+  const remotes = await getRemotes(root);
+  if (remotes.some((remote) => remote.name === "origin")) return "origin";
+  if (remotes.length === 1) return remotes[0].name;
+  if (remotes.length === 0) {
+    throw Object.assign(new Error("Add a remote before pushing this branch."), { status: 409 });
+  }
+  throw Object.assign(
+    new Error("This branch has no upstream. Set an upstream before pushing when multiple remotes exist."),
+    { status: 409 },
+  );
+}
+
 /** A push rejected because the remote has work the local branch lacks. */
 function isNonFastForward(msg: string): boolean {
   return /\[rejected\]|non-fast-forward|fetch first|tip of your (current )?branch is behind|Updates were rejected/i.test(
@@ -108,6 +190,9 @@ export interface PushResult {
   rejected?: boolean;
   /** The upstream short name (e.g. "origin/main") when known. */
   upstream?: string | null;
+  /** Exact first-push destination, returned when an untracked branch is rejected. */
+  remote?: string;
+  remoteBranch?: string;
 }
 
 /**
@@ -127,29 +212,38 @@ const FORCE_FLAG: Record<PushForce, string> = {
 };
 
 /**
- * Push the current branch. If it has no upstream, set one on `origin`. A normal
+ * Push the current branch. If it has no upstream, set one on `origin` when it
+ * exists, or on the sole configured remote. A normal
  * push rejected as non-fast-forward — for ANY reason the local and remote tips
  * have diverged (an amended/rebased/reset local branch, or a remote that gained
  * commits) — resolves to `{ rejected: true }` rather than throwing, so the
  * caller can offer Pull or one of the two force modes (see `PushForce`). A
  * lease push that trips its own safety check surfaces a clear "pull first (or
- * force)" error rather than a raw git message. Requires an `origin` remote;
- * HTTPS remotes use the stored token.
+ * force)" error rather than a raw git message. HTTPS github.com remotes use the
+ * stored token; other hosts never receive it.
  */
 export async function push(root: string, opts: { force?: PushForce } = {}): Promise<PushResult> {
   const token = await getToken();
   const branch = await currentBranch(root);
   const upstream = await upstreamName(root, branch);
-  const args = [...authArgs(token), "push"];
+  const initialRemote = upstream ? null : await initialPushRemote(root);
+  const pushRemote = initialRemote ?? (await configuredPushRemote(root, branch));
+  const args = [...(await authArgsForRemote(root, token, pushRemote, true)), "push"];
   if (opts.force) args.push(FORCE_FLAG[opts.force]);
-  if (!upstream) args.push("--set-upstream", "origin", branch);
+  if (initialRemote) args.push("--set-upstream", initialRemote, branch);
   try {
     const { stderr } = await runGit(root, args, { env: AUTH_ENV });
     return { branch, output: stderr.trim() };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (!opts.force && isNonFastForward(msg)) {
-      return { branch, output: msg, rejected: true, upstream };
+      return {
+        branch,
+        output: msg,
+        rejected: true,
+        upstream,
+        ...(initialRemote ? { remote: initialRemote, remoteBranch: branch } : {}),
+      };
     }
     // A force-with-lease that fails on "stale info" means the remote gained
     // commits we never fetched — the protection working as intended. Bare force
@@ -181,7 +275,17 @@ export async function deleteRemoteBranch(
   }
   const token = await getToken();
   try {
-    await runGit(root, [...authArgs(token), "push", remote, "--delete", branch], { env: AUTH_ENV });
+    await runGit(
+      root,
+      [
+        ...(await authArgsForRemote(root, token, remote, true)),
+        "push",
+        remote,
+        "--delete",
+        branch,
+      ],
+      { env: AUTH_ENV },
+    );
   } catch (e) {
     rethrowRemoteError(e, token);
   }
@@ -191,10 +295,45 @@ export interface PullResult {
   output: string;
 }
 
-/** Pull (fetch + merge) the current branch's upstream. */
-export async function pull(root: string): Promise<PullResult> {
+/** Pull (fetch + merge) the upstream, or an exact remote/ref after a rejected first push. */
+export async function pull(
+  root: string,
+  target: { remote: string; branch: string } | null = null,
+): Promise<PullResult> {
   const token = await getToken();
-  const args = [...authArgs(token), "-c", "core.editor=true", "pull", "--no-edit"];
+  if (target) {
+    if (
+      !target.remote ||
+      !target.branch ||
+      target.remote.startsWith("-") ||
+      target.branch.startsWith("-")
+    ) {
+      throw Object.assign(new Error("Invalid pull target"), { status: 400 });
+    }
+    if ((await currentBranch(root)) !== target.branch) {
+      throw Object.assign(
+        new Error(`The checked-out branch changed before pull; switch back to ${target.branch} and retry.`),
+        { status: 409 },
+      );
+    }
+    if (!(await getRemotes(root)).some((remote) => remote.name === target.remote)) {
+      throw Object.assign(new Error(`Remote ${target.remote} no longer exists.`), { status: 409 });
+    }
+  }
+  const branch = await currentBranch(root);
+  const pullRemote = target?.remote ?? (await configValue(root, `branch.${branch}.remote`));
+  // Pull is deliberately fetch + merge throughout GitWebUI. Make that explicit
+  // so a host-level `pull.rebase=true` does not silently rewrite local commits,
+  // and newer Git versions do not reject divergent pulls when no policy is set.
+  const args = [
+    ...(await authArgsForRemote(root, token, pullRemote, false)),
+    "-c",
+    "core.editor=true",
+    "pull",
+    "--no-rebase",
+    "--no-edit",
+  ];
+  if (target) args.push(target.remote, target.branch);
   try {
     const { stdout, stderr } = await runGit(root, args, { env: AUTH_ENV });
     return { output: (stdout + stderr).trim() };
@@ -219,7 +358,7 @@ export async function cloneRepo(parentDir: string, url: string): Promise<RepoInf
   const token = await getToken();
   const target = path.join(parentDir, repoNameFromUrl(url));
   try {
-    await runGit(parentDir, [...authArgs(token), "clone", url, target], { env: AUTH_ENV });
+    await runGit(parentDir, [...authArgs(token, url), "clone", url, target], { env: AUTH_ENV });
   } catch (e) {
     rethrowRemoteError(e, token);
   }
@@ -250,9 +389,11 @@ export async function createGitHubRemote(
   });
   await addRemote(root, opts.remoteName, repo.cloneUrl);
   const branch = await currentBranch(root);
-  await runGit(root, [...authArgs(token), "push", "--set-upstream", opts.remoteName, branch], {
-    env: AUTH_ENV,
-  });
+  await runGit(
+    root,
+    [...authArgs(token, repo.cloneUrl), "push", "--set-upstream", opts.remoteName, branch],
+    { env: AUTH_ENV },
+  );
   return { repo, remotes: await getRemotes(root) };
 }
 
@@ -299,7 +440,7 @@ export async function createGitHubRepoNew(opts: {
   try {
     await runGit(
       info.root,
-      [...authArgs(token), "push", "--set-upstream", "origin", info.branch],
+      [...authArgs(token, created.cloneUrl), "push", "--set-upstream", "origin", info.branch],
       { env: AUTH_ENV },
     );
   } catch (e) {

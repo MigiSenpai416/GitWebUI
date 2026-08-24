@@ -49,6 +49,11 @@ const INACTIVE: MergeState = {
   message: "",
 };
 
+/** Treat a conflicted path as a filename, never as a wildcard pathspec. */
+function literalPathspec(relPath: string): string {
+  return `:(literal)${relPath}`;
+}
+
 async function pathExists(p: string): Promise<boolean> {
   try {
     await fs.access(p);
@@ -207,13 +212,13 @@ export async function writeResolution(
 ): Promise<void> {
   const abs = resolveInRepo(root, relPath);
   await fs.writeFile(abs, content, "utf8");
-  if (resolved) await runGit(root, ["add", "--", relPath]);
+  if (resolved) await runGit(root, ["add", "--", literalPathspec(relPath)]);
 }
 
 /** Mark paths resolved by staging their current working-tree content. */
 export async function markResolved(root: string, paths: string[]): Promise<void> {
   if (paths.length === 0) return;
-  await runGit(root, ["add", "--", ...paths]);
+  await runGit(root, ["add", "--", ...paths.map(literalPathspec)]);
 }
 
 /** Abort the in-progress operation, restoring the pre-operation state. */

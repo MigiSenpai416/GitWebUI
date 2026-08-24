@@ -119,7 +119,17 @@ export async function getRemoteBranches(root: string): Promise<RemoteBranch[]> {
 
 /** Switch the working tree to an existing local branch. */
 export async function checkoutBranch(root: string, name: string): Promise<void> {
+  // `git checkout` also accepts state-changing options such as `--detach`.
+  // This endpoint is specifically for branch names, so never let an API value
+  // be reinterpreted as a checkout option.
+  assertBranchArgument(name);
   await runGit(root, ["checkout", name]);
+}
+
+function assertBranchArgument(name: string): void {
+  if (!name || name.startsWith("-")) {
+    throw Object.assign(new Error("Invalid branch name"), { status: 400 });
+  }
 }
 
 /** True if a local branch named `name` already exists. */
@@ -167,10 +177,15 @@ export async function checkoutCommit(root: string, hash: string): Promise<void> 
 
 /** Create a new branch at `hash` and check it out. */
 export async function createBranchAt(root: string, name: string, hash: string): Promise<void> {
+  assertBranchArgument(name);
+  if (!hash || hash.startsWith("-")) {
+    throw Object.assign(new Error("Invalid commit"), { status: 400 });
+  }
   await runGit(root, ["checkout", "-b", name, hash]);
 }
 
 /** Force-delete a local branch (git branch -D). Cannot delete the current one. */
 export async function deleteBranch(root: string, name: string): Promise<void> {
+  assertBranchArgument(name);
   await runGit(root, ["branch", "-D", name]);
 }

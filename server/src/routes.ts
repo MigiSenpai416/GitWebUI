@@ -111,7 +111,11 @@ api.use((req: Request, _res: Response, next: NextFunction) => {
 
 api.get("/repo/current", h(async (req, res) => {
   const root = requestedRoot(req);
-  res.json({ repo: root ? getRepoByRoot(root) ?? null : null });
+  // The registry is a routing cache, not an authoritative view of Git. A
+  // terminal command or another Git client can move HEAD without going through
+  // one of our mutation routes, so a repository refresh must re-read both the
+  // checked-out branch and its tip instead of returning the cached RepoInfo.
+  res.json({ repo: root ? await refreshSession(root) : null });
 }));
 
 api.get("/repo/recent", h(async (_req, res) => {
@@ -441,7 +445,11 @@ api.post("/commit", h(async (req, res) => {
   const identity = await resolveCommitIdentity();
   const hash = await commit(root, { title, description, amend, identity });
   const status = await getStatus(root);
-  res.json({ hash, status });
+  // A first commit moves an unborn repository from head=null to a real HEAD;
+  // amend moves HEAD as well. Keep the registry authoritative before the client
+  // reloads /commits, whose unborn-repo fast path reads this metadata.
+  const repo = await refreshSession(root);
+  res.json({ hash, status, repo });
 }));
 
 // ---- Commit identity ----
@@ -829,15 +837,22 @@ api.post("/push", h(async (req, res) => {
 
 api.post("/pull", h(async (req, res) => {
   const root = requireRepoRoot(req);
+  const remote = String(req.body?.remote ?? "").trim();
+  const branch = String(req.body?.branch ?? "").trim();
+  if (Boolean(remote) !== Boolean(branch)) {
+    res.status(400).json({ error: "Both a remote and branch are required for a targeted pull" });
+    return;
+  }
   let output = "";
   try {
-    output = (await pull(root)).output;
+    output = (await pull(root, remote && branch ? { remote, branch } : null)).output;
   } catch (e) {
     // A merge conflict from the pull isn't fatal — report it as merge state.
     if (!(await isConflicted(root))) throw e;
   }
-  await refreshSession(root);
+  const repo = await refreshSession(root);
   res.json({
+    repo,
     output,
     merge: await getMergeState(root),
     status: await getStatus(root),

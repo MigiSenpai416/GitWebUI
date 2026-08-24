@@ -268,7 +268,7 @@ export const api = {
       body: JSON.stringify({ paths }),
     }),
   commit: (title: string, description: string, amend: boolean) =>
-    req<{ hash: string; status: StatusResult }>("/api/commit", {
+    req<{ hash: string; status: StatusResult; repo: RepoInfo | null }>("/api/commit", {
       method: "POST",
       body: JSON.stringify({ title, description, amend }),
     }),
@@ -330,12 +330,14 @@ export const api = {
       output: string;
       rejected?: boolean;
       upstream?: string | null;
+      remote?: string;
+      remoteBranch?: string;
       branches: Branch[];
     }>("/api/push", { method: "POST", body: JSON.stringify({ force: force ?? false }) }),
-  pull: () =>
-    req<{ output: string; merge: MergeState; status: StatusResult }>("/api/pull", {
+  pull: (remote?: string, branch?: string) =>
+    req<{ repo: RepoInfo | null; output: string; merge: MergeState; status: StatusResult }>("/api/pull", {
       method: "POST",
-      body: "{}",
+      body: JSON.stringify({ remote, branch }),
     }),
 
   // Checkout a commit (detached HEAD) / cherry-pick

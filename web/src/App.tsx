@@ -122,12 +122,12 @@ export function App() {
                   ) : mergeActive ? (
                     <>
                       <ConflictPanel />
-                      <CommitBox />
+                      <CommitBox key={repo.root} />
                     </>
                   ) : (
                     <>
                       <ChangesPanel />
-                      <CommitBox />
+                      <CommitBox key={repo.root} />
                     </>
                   )}
                 </div>

@@ -6,9 +6,7 @@ import "./BranchMenu.css";
 export function ActionsMenu({ onClose }: { onClose: () => void }) {
   const repo = useStore((s) => s.repo);
   const closeRepo = useStore((s) => s.closeRepo);
-  const refreshStatus = useStore((s) => s.refreshStatus);
-  const loadCommits = useStore((s) => s.loadCommits);
-  const loadBranches = useStore((s) => s.loadBranches);
+  const refreshAll = useStore((s) => s.refreshAll);
   const openGitHubDialog = useStore((s) => s.openGitHubDialog);
   const openIdentityDialog = useStore((s) => s.openIdentityDialog);
   const openPullRequest = useStore((s) => s.openPullRequest);
@@ -29,9 +27,7 @@ export function ActionsMenu({ onClose }: { onClose: () => void }) {
   }, [onClose]);
 
   const refresh = () => {
-    refreshStatus();
-    loadCommits(true);
-    loadBranches();
+    void refreshAll();
     onClose();
   };
 

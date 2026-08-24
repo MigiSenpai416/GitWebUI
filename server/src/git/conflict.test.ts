@@ -15,6 +15,7 @@ import {
 } from "./conflict.js";
 import { checkoutCommit } from "./branches.js";
 import { currentBranch } from "./repo.js";
+import { getStatus } from "./status.js";
 
 async function revParse(ref: string): Promise<string> {
   return (await runGit(ROOT, ["rev-parse", ref])).stdout.trim();
@@ -108,6 +109,32 @@ describe("merge conflict state", () => {
     const state = await getMergeState(ROOT);
     expect(state.active).toBe(true);
     expect(state.conflicted).toHaveLength(0);
+  });
+
+  it("stages only the literal conflict filename when it contains pathspec metacharacters", async () => {
+    await fs.mkdir(ROOT, { recursive: true });
+    await runGit(ROOT, ["init", "-b", "main"]);
+    await runGit(ROOT, ["config", "user.email", "t@example.com"]);
+    await runGit(ROOT, ["config", "user.name", "Test"]);
+    for (const name of ["[ab].txt", "a.txt", "b.txt"]) await write(name, "base\n");
+    await runGit(ROOT, ["add", "-A"]);
+    await runGit(ROOT, ["commit", "-m", "base"]);
+
+    await runGit(ROOT, ["checkout", "-b", "feature"]);
+    await write("[ab].txt", "theirs\n");
+    await runGit(ROOT, ["commit", "-am", "feature edit"]);
+    await runGit(ROOT, ["checkout", "main"]);
+    await write("[ab].txt", "ours\n");
+    await runGit(ROOT, ["commit", "-am", "main edit"]);
+    await write("a.txt", "unrelated a\n");
+    await write("b.txt", "unrelated b\n");
+
+    await mergeBranch(ROOT, "feature");
+    await writeResolution(ROOT, "[ab].txt", "resolved\n", true);
+
+    const status = await getStatus(ROOT);
+    expect(status.staged.map((file) => file.path)).toEqual(["[ab].txt"]);
+    expect(status.unstaged.map((file) => file.path)).toEqual(["a.txt", "b.txt"]);
   });
 
   it("aborts a conflicted merge back to a clean state", async () => {

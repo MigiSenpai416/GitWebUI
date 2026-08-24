@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { BusyLabel, IconChevron, IconCommit, IconPush, IconSparkle } from "./icons";
 import "./CommitBox.css";
@@ -22,10 +22,24 @@ export function CommitBox() {
   const preAmendDraft = useRef<{ title: string; description: string } | null>(null);
 
   // The commit amend would rewrite: the one at HEAD.
-  const headCommit =
-    commits.find((c) => c.refs.some((r) => r.isHead)) ??
-    (repo?.head ? commits.find((c) => c.hash === repo.head) : undefined) ??
-    null;
+  // Match the repository metadata exactly: during a checkout the previous
+  // commit list can remain rendered until the refreshed list arrives, and its
+  // old isHead decoration must not be offered as the new branch's amend target.
+  const headCommit = repo?.head ? commits.find((c) => c.hash === repo.head) ?? null : null;
+
+  // An amend draft belongs to the exact HEAD it was loaded from. If checkout,
+  // pull, reset, or another operation moves HEAD, leave amend mode and restore
+  // the ordinary draft rather than offering to rewrite a different commit with
+  // the stale message. App keys this component by repo root, so changing repos
+  // resets every local draft synchronously as well.
+  useEffect(() => {
+    if (!amend) return;
+    const draft = preAmendDraft.current;
+    preAmendDraft.current = null;
+    setAmend(false);
+    setTitle(draft?.title ?? "");
+    setDescription(draft?.description ?? "");
+  }, [repo?.branch, repo?.head]);
 
   const stagedCount = status.staged.length;
   const canCommit = (stagedCount > 0 || amend) && title.trim().length > 0 && !committing;
@@ -85,7 +99,12 @@ export function CommitBox() {
       </div>
 
       <label className="amend-row">
-        <input type="checkbox" checked={amend} onChange={(e) => toggleAmend(e.target.checked)} />
+        <input
+          type="checkbox"
+          checked={amend}
+          disabled={!headCommit || committing}
+          onChange={(e) => toggleAmend(e.target.checked)}
+        />
         Amend previous commit
       </label>
 

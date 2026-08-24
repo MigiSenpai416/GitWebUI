@@ -29,6 +29,11 @@ export type DiffSource = "unstaged" | "staged" | "commit";
 // Effectively-infinite context so git emits the whole file as a single hunk.
 const FULL_CONTEXT = "-U1000000";
 
+/** Treat a status path as a filename, never as a wildcard pathspec. */
+function literalPathspec(path: string): string {
+  return `:(literal)${path}`;
+}
+
 /**
  * Parse a unified diff (produced with a huge -U context) into ordered rows that
  * cover the entire file. `del` rows precede their paired `add` rows, exactly as
@@ -105,14 +110,15 @@ function stripPrefix(p: string): string {
 }
 
 function diffArgs(source: DiffSource, hash: string | undefined, path: string): string[] {
+  const pathspec = literalPathspec(path);
   switch (source) {
     case "unstaged":
-      return ["diff", "--no-color", FULL_CONTEXT, "--", path];
+      return ["diff", "--no-color", FULL_CONTEXT, "--", pathspec];
     case "staged":
-      return ["diff", "--cached", "--no-color", FULL_CONTEXT, "--", path];
+      return ["diff", "--cached", "--no-color", FULL_CONTEXT, "--", pathspec];
     case "commit":
       if (!hash) throw new Error("commit diff requires a hash");
-      return ["show", "--no-color", "--first-parent", FULL_CONTEXT, "--format=", hash, "--", path];
+      return ["show", "--no-color", "--first-parent", FULL_CONTEXT, "--format=", hash, "--", pathspec];
   }
 }
 
@@ -152,7 +158,7 @@ export async function getDiff(
 
 async function isUntracked(root: string, path: string): Promise<boolean> {
   try {
-    await runGit(root, ["ls-files", "--error-unmatch", "--", path]);
+    await runGit(root, ["ls-files", "--error-unmatch", "--", literalPathspec(path)]);
     return false; // tracked
   } catch {
     return true;

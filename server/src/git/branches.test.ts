@@ -4,7 +4,13 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { runGit } from "./gitRunner.js";
-import { checkoutRemoteBranch, getBranches } from "./branches.js";
+import {
+  checkoutBranch,
+  checkoutRemoteBranch,
+  createBranchAt,
+  deleteBranch,
+  getBranches,
+} from "./branches.js";
 import { currentBranch } from "./repo.js";
 
 const BASE = path.join(os.tmpdir(), `gitwebui-branches-${randomBytes(6).toString("hex")}`);
@@ -74,10 +80,54 @@ describe("checkoutRemoteBranch", () => {
     expect(features).toHaveLength(1);
   });
 
+  it("preserves the real upstream when a same-named local branch already exists", async () => {
+    await setupRemote();
+    await runGit(WORK, ["branch", "--no-track", "feature", "main"]);
+
+    await checkoutRemoteBranch(WORK, "origin/feature", "feature");
+
+    expect(await currentBranch(WORK)).toBe("feature");
+    const feature = (await getBranches(WORK)).find((b) => b.name === "feature");
+    expect(feature?.upstream).toBeNull();
+  });
+
   it("rejects branch names that look like flags", async () => {
     await setupRemote();
     await expect(checkoutRemoteBranch(WORK, "-x", "feature")).rejects.toMatchObject({
       status: 400,
     });
+  });
+});
+
+describe("local branch lifecycle", () => {
+  it("rejects checkout options without changing the current branch", async () => {
+    await setupRemote();
+
+    await expect(checkoutBranch(WORK, "--detach")).rejects.toMatchObject({ status: 400 });
+    expect(await currentBranch(WORK)).toBe("main");
+  });
+
+  it("creates a branch at the requested commit, checks it out, and deletes it after switching away", async () => {
+    await setupRemote();
+    const base = (await runGit(WORK, ["rev-parse", "HEAD"])).stdout.trim();
+    await write(WORK, "later.txt", "main-only\n");
+    await runGit(WORK, ["add", "--", "later.txt"]);
+    await runGit(WORK, ["commit", "-m", "later main work"]);
+    const mainTip = (await runGit(WORK, ["rev-parse", "HEAD"])).stdout.trim();
+
+    await createBranchAt(WORK, "topic/core-work", base);
+
+    expect(await currentBranch(WORK)).toBe("topic/core-work");
+    expect((await runGit(WORK, ["rev-parse", "HEAD"])).stdout.trim()).toBe(base);
+    expect((await getBranches(WORK)).find((b) => b.name === "topic/core-work")?.current).toBe(
+      true,
+    );
+
+    await checkoutBranch(WORK, "main");
+    expect((await runGit(WORK, ["rev-parse", "HEAD"])).stdout.trim()).toBe(mainTip);
+    await deleteBranch(WORK, "topic/core-work");
+
+    expect((await getBranches(WORK)).map((b) => b.name)).not.toContain("topic/core-work");
+    expect(await currentBranch(WORK)).toBe("main");
   });
 });

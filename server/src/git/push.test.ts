@@ -4,7 +4,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { runGit } from "./gitRunner.js";
-import { push, deleteRemoteBranch } from "./remote.js";
+import { push, pull, deleteRemoteBranch, authArgsForRemote } from "./remote.js";
 import { getRemoteBranches } from "./branches.js";
 
 const BASE = path.join(os.tmpdir(), `gitwebui-push-${randomBytes(6).toString("hex")}`);
@@ -80,6 +80,98 @@ beforeEach(async () => {
 afterAll(() => fs.rm(BASE, { recursive: true, force: true }));
 
 describe("push", () => {
+  it("derives token use from a remote's distinct fetch and push URLs", async () => {
+    await fs.mkdir(WORK, { recursive: true });
+    await runGit(WORK, ["init", "-b", "main"]);
+    await runGit(WORK, ["remote", "add", "origin", "https://github.com/me/repo.git"]);
+    await runGit(WORK, [
+      "remote",
+      "set-url",
+      "--push",
+      "origin",
+      "https://github.com.evil.example/steal.git",
+    ]);
+
+    const fetchArgs = await authArgsForRemote(WORK, "secret-token", "origin", false);
+    const pushArgs = await authArgsForRemote(WORK, "secret-token", "origin", true);
+
+    expect(
+      fetchArgs.some((arg) =>
+        arg.startsWith("http.https://github.com/.extraHeader=Authorization:"),
+      ),
+    ).toBe(true);
+    expect(pushArgs).toEqual(["-c", "credential.helper="]);
+    const scopedHeader = fetchArgs[3];
+    expect(
+      (await runGit(WORK, [
+        "-c",
+        scopedHeader,
+        "config",
+        "--get-urlmatch",
+        "http.extraHeader",
+        "https://github.com/me/repo.git",
+      ])).stdout.trim(),
+    ).toMatch(/^Authorization: Basic /);
+    await expect(
+      runGit(WORK, [
+        "-c",
+        scopedHeader,
+        "config",
+        "--get-urlmatch",
+        "http.extraHeader",
+        "https://github.com.evil.example/steal.git",
+      ]),
+    ).rejects.toThrow();
+
+    await runGit(WORK, ["remote", "set-url", "origin", "https://gitlab.com/me/repo.git"]);
+    expect(await authArgsForRemote(WORK, "secret-token", "origin", false)).toEqual([
+      "-c",
+      "credential.helper=",
+    ]);
+  });
+
+  it("uses the only configured remote for a branch's first push when origin does not exist", async () => {
+    await fs.mkdir(BASE, { recursive: true });
+    await runGit(BASE, ["init", "--bare", "company.git"]);
+    await fs.mkdir(WORK, { recursive: true });
+    await runGit(WORK, ["init", "-b", "main"]);
+    await runGit(WORK, ["config", "user.email", "t@example.com"]);
+    await runGit(WORK, ["config", "user.name", "Test"]);
+    await fs.writeFile(path.join(WORK, "a.txt"), "one\n", "utf8");
+    await runGit(WORK, ["add", "-A"]);
+    await runGit(WORK, ["commit", "-m", "first"]);
+    await runGit(WORK, ["remote", "add", "company", path.join(BASE, "company.git")]);
+
+    const res = await push(WORK);
+
+    expect(res.rejected).toBeUndefined();
+    expect(await revParse(path.join(BASE, "company.git"), "main")).toBe(
+      await revParse(WORK, "HEAD"),
+    );
+    expect((await runGit(WORK, ["rev-parse", "--abbrev-ref", "main@{upstream}"])).stdout.trim()).toBe(
+      "company/main",
+    );
+  });
+
+  it("does not guess a destination when a new branch has multiple non-origin remotes", async () => {
+    await fs.mkdir(BASE, { recursive: true });
+    await runGit(BASE, ["init", "--bare", "one.git"]);
+    await runGit(BASE, ["init", "--bare", "two.git"]);
+    await fs.mkdir(WORK, { recursive: true });
+    await runGit(WORK, ["init", "-b", "main"]);
+    await runGit(WORK, ["config", "user.email", "t@example.com"]);
+    await runGit(WORK, ["config", "user.name", "Test"]);
+    await fs.writeFile(path.join(WORK, "a.txt"), "one\n", "utf8");
+    await runGit(WORK, ["add", "-A"]);
+    await runGit(WORK, ["commit", "-m", "first"]);
+    await runGit(WORK, ["remote", "add", "one", path.join(BASE, "one.git")]);
+    await runGit(WORK, ["remote", "add", "two", path.join(BASE, "two.git")]);
+
+    await expect(push(WORK)).rejects.toMatchObject({ status: 409 });
+    await expect(revParse(path.join(BASE, "one.git"), "main")).rejects.toThrow();
+    await expect(revParse(path.join(BASE, "two.git"), "main")).rejects.toThrow();
+  });
+
   it("reports a non-fast-forward rejection instead of throwing", async () => {
     await setupAmended();
     const res = await push(WORK);
@@ -137,6 +229,79 @@ describe("push", () => {
     const res = await push(WORK);
     expect(res.rejected).toBeUndefined();
     expect(await revParse(ORIGIN, "main")).toBe(await revParse(WORK, "HEAD"));
+  });
+});
+
+describe("pull", () => {
+  it("merges divergent work even when the host config requests rebase", async () => {
+    await fs.mkdir(BASE, { recursive: true });
+    await runGit(BASE, ["init", "--bare", "origin.git"]);
+    await fs.mkdir(WORK, { recursive: true });
+    await runGit(WORK, ["init", "-b", "main"]);
+    await runGit(WORK, ["config", "user.email", "t@example.com"]);
+    await runGit(WORK, ["config", "user.name", "Test"]);
+    await fs.writeFile(path.join(WORK, "base.txt"), "base\n", "utf8");
+    await runGit(WORK, ["add", "-A"]);
+    await runGit(WORK, ["commit", "-m", "base"]);
+    await runGit(WORK, ["remote", "add", "origin", ORIGIN]);
+    await runGit(WORK, ["push", "-u", "origin", "main"]);
+
+    const other = path.join(BASE, "other");
+    await runGit(BASE, ["clone", ORIGIN, "other"]);
+    await runGit(other, ["config", "user.email", "o@example.com"]);
+    await runGit(other, ["config", "user.name", "Other"]);
+    await fs.writeFile(path.join(other, "theirs.txt"), "theirs\n", "utf8");
+    await runGit(other, ["add", "-A"]);
+    await runGit(other, ["commit", "-m", "theirs"]);
+    await runGit(other, ["push", "origin", "main"]);
+
+    await fs.writeFile(path.join(WORK, "mine.txt"), "mine\n", "utf8");
+    await runGit(WORK, ["add", "-A"]);
+    await runGit(WORK, ["commit", "-m", "mine"]);
+    const localBefore = await revParse(WORK, "HEAD");
+    const remoteBefore = await revParse(ORIGIN, "main");
+    await runGit(WORK, ["config", "pull.rebase", "true"]);
+
+    await pull(WORK);
+
+    const parents = (await runGit(WORK, ["rev-list", "--parents", "-n", "1", "HEAD"]))
+      .stdout.trim().split(" ").slice(1);
+    expect(parents).toEqual([localBefore, remoteBefore]);
+  });
+
+  it("returns and pulls the exact first-push target after an untracked branch is rejected", async () => {
+    const { theirHead } = await setupRemoteAdvanced();
+    await runGit(WORK, ["branch", "--unset-upstream"]);
+
+    const rejected = await push(WORK);
+
+    expect(rejected).toMatchObject({
+      rejected: true,
+      branch: "main",
+      upstream: null,
+      remote: "origin",
+      remoteBranch: "main",
+    });
+    await pull(WORK, { remote: rejected.remote!, branch: rejected.remoteBranch! });
+    await expect(runGit(WORK, ["rev-parse", "main@{upstream}"])).rejects.toThrow();
+    await runGit(WORK, ["merge-base", "--is-ancestor", theirHead, "HEAD"]);
+
+    const pushed = await push(WORK);
+    expect(pushed.rejected).toBeUndefined();
+    expect((await runGit(WORK, ["rev-parse", "--abbrev-ref", "main@{upstream}"])).stdout.trim()).toBe(
+      "origin/main",
+    );
+    expect(await revParse(ORIGIN, "main")).toBe(await revParse(WORK, "HEAD"));
+  });
+
+  it("refuses a stale targeted pull after the checked-out branch changes", async () => {
+    await setupAmended();
+    await runGit(WORK, ["checkout", "-b", "other"]);
+
+    await expect(pull(WORK, { remote: "origin", branch: "main" })).rejects.toMatchObject({
+      status: 409,
+    });
+    expect(await revParse(WORK, "HEAD")).toBe(await revParse(WORK, "other"));
   });
 });
 

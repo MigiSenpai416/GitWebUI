@@ -379,7 +379,7 @@ interface AppState {
     remoteName: string;
   }) => Promise<string>;
   push: () => Promise<void>;
-  pull: () => Promise<void>;
+  pull: (remote?: string, branch?: string) => Promise<void>;
 
   openPullRequest: (branch?: string) => void;
   closePullRequest: () => void;
@@ -471,6 +471,10 @@ const EMPTY_STATUS: StatusResult = { staged: [], unstaged: [] };
 let confirmResolver: ((value: string | null) => void) | null = null;
 
 const initialTabs = readTabs();
+// Identifies the newest asynchronous tab switch. Opening a repository can take
+// long enough for the user to choose another tab; an older response must never
+// hydrate over the newer selection.
+let tabSelectionGeneration = 0;
 
 export const useStore = create<AppState>((set, get) => ({
   authState: "loading",
@@ -613,47 +617,68 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async openRepo(path: string) {
+    const generation = ++tabSelectionGeneration;
     set({ opening: true });
     try {
       const { repo } = await api.openRepo(path);
+      if (generation !== tabSelectionGeneration) return;
       await adoptRepo(get, set, repo);
       await get().loadRecent();
     } catch (e) {
-      reportError(set, e);
+      if (generation === tabSelectionGeneration) reportError(set, e);
     } finally {
-      set({ opening: false });
+      if (generation === tabSelectionGeneration) set({ opening: false });
     }
   },
 
   async cloneRepo(dir: string, url: string) {
     // Errors propagate so the Clone dialog can show them inline.
-    const { repo } = await api.cloneRepo(dir, url);
-    await adoptRepo(get, set, repo);
-    await get().loadRecent();
+    const generation = ++tabSelectionGeneration;
+    set({ opening: true });
+    try {
+      const { repo } = await api.cloneRepo(dir, url);
+      if (generation === tabSelectionGeneration) await adoptRepo(get, set, repo);
+      await get().loadRecent();
+    } finally {
+      if (generation === tabSelectionGeneration) set({ opening: false });
+    }
   },
 
   async createRepo(dir: string, name: string, branch: string) {
     // Errors propagate so the Create dialog can show them inline.
-    const { repo } = await api.createRepo(dir, name, branch);
-    await adoptRepo(get, set, repo);
-    await get().loadRecent();
+    const generation = ++tabSelectionGeneration;
+    set({ opening: true });
+    try {
+      const { repo } = await api.createRepo(dir, name, branch);
+      if (generation === tabSelectionGeneration) await adoptRepo(get, set, repo);
+      await get().loadRecent();
+    } finally {
+      if (generation === tabSelectionGeneration) set({ opening: false });
+    }
   },
 
   async createGitHubRepoNew(opts) {
     // Errors propagate so the Create dialog can show them inline.
-    const { created, repo } = await api.createGitHubRepoNew(opts);
-    if (repo) {
-      await adoptRepo(get, set, repo);
-    } else {
-      raise(set, "notice", `Created ${created.fullName} on GitHub.`);
+    const generation = ++tabSelectionGeneration;
+    set({ opening: true });
+    try {
+      const { created, repo } = await api.createGitHubRepoNew(opts);
+      if (repo && generation === tabSelectionGeneration) {
+        await adoptRepo(get, set, repo);
+      } else if (!repo) {
+        raise(set, "notice", `Created ${created.fullName} on GitHub.`);
+      }
+      await get().loadRecent();
+    } finally {
+      if (generation === tabSelectionGeneration) set({ opening: false });
     }
-    await get().loadRecent();
   },
 
   newTab() {
+    ++tabSelectionGeneration;
     const t = pickerTab();
     const tabs = [...get().tabs, t];
-    set({ tabs, activeTabId: t.id });
+    set({ tabs, activeTabId: t.id, opening: false });
     persistTabs(tabs, t.id);
     showPicker(set);
   },
@@ -661,9 +686,11 @@ export const useStore = create<AppState>((set, get) => ({
   async selectTab(id: string) {
     const tab = get().tabs.find((t) => t.id === id);
     if (!tab) return;
+    const generation = ++tabSelectionGeneration;
     set({ activeTabId: id });
     if (!tab.root) {
       persistTabs(get().tabs, id);
+      set({ opening: false });
       showPicker(set);
       return;
     }
@@ -672,6 +699,10 @@ export const useStore = create<AppState>((set, get) => ({
       // Re-open on the backend: idempotent, and re-registers the repo after a
       // server restart so data requests for this tab keep working.
       const { repo } = await api.openRepo(tab.root);
+      // A later tab click won while this repository was opening. Applying this
+      // stale response would show one tab as active while targeting another
+      // repo with every subsequent API request.
+      if (generation !== tabSelectionGeneration || get().activeTabId !== id) return;
       const tabs = get().tabs.map((t) =>
         t.id === id ? { ...t, branch: repo.branch, name: basename(repo.root) } : t,
       );
@@ -679,9 +710,9 @@ export const useStore = create<AppState>((set, get) => ({
       persistTabs(tabs, id);
       await hydrateRepo(get, set, repo);
     } catch (e) {
-      reportError(set, e);
+      if (generation === tabSelectionGeneration) reportError(set, e);
     } finally {
-      set({ opening: false });
+      if (generation === tabSelectionGeneration) set({ opening: false });
     }
   },
 
@@ -719,31 +750,35 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Turn the active tab back into an empty picker ("Open a different repository").
   closeRepo() {
+    ++tabSelectionGeneration;
     const state = get();
     const active = state.tabs.find((t) => t.id === state.activeTabId);
     if (active?.root) api.closeRepo(active.root).catch(() => undefined);
     const tabs = state.tabs.map((t) =>
       t.id === state.activeTabId ? { ...t, root: null, name: "New Tab", branch: "" } : t,
     );
-    set({ tabs });
+    set({ tabs, opening: false });
     persistTabs(tabs, state.activeTabId);
     showPicker(set);
   },
 
   async loadCommits(reset: boolean) {
     if (get().loadingCommits) return;
+    const root = get().repo?.root;
+    if (!root) return;
     const skip = reset ? 0 : get().commits.length;
     set({ loadingCommits: true });
     try {
       const { commits, hasMore } = await api.commits(skip, PAGE, get().visibleRefs);
+      if (get().repo?.root !== root) return;
       set((s) => ({
         commits: reset ? commits : [...s.commits, ...commits],
         hasMore,
       }));
     } catch (e) {
-      reportError(set, e);
+      if (get().repo?.root === root) reportError(set, e);
     } finally {
-      set({ loadingCommits: false });
+      if (get().repo?.root === root) set({ loadingCommits: false });
     }
   },
 
@@ -799,8 +834,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async loadBranches() {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const { branches } = await api.branches();
+      if (get().repo?.root !== root) return;
       set({ branches });
       // Drop any visible LOCAL refs whose branch no longer exists (e.g. deleted
       // elsewhere); leave remote refs to loadRemoteBranches.
@@ -818,8 +856,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async loadRemoteBranches() {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const { branches } = await api.remoteBranches();
+      if (get().repo?.root !== root) return;
       set({ remoteBranches: branches });
       // Drop any visible REMOTE refs whose branch no longer exists on the remote.
       // Local refs (refs/heads/…) are left untouched — loadBranches prunes those.
@@ -845,8 +886,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async checkout(branch: string) {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const { repo } = await api.checkout(branch);
+      if (!isActiveRepo(get, root)) return;
       set({
         repo,
         selectedCommitHash: null,
@@ -854,27 +898,43 @@ export const useStore = create<AppState>((set, get) => ({
         selectedFile: null,
       });
       syncActiveTab(get, set, repo);
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, root);
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async checkoutRemote(remote: string, local: string) {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const { repo } = await api.checkoutRemote(remote, local);
+      if (!isActiveRepo(get, root)) return;
       set({ repo, selectedCommitHash: null, commitFiles: [], selectedFile: null });
       syncActiveTab(get, set, repo);
-      await refreshRepoData(get, set);
-      raise(set, "notice", `Checked out ${local} (tracking ${remote}).`);
+      await refreshRepoData(get, set, root);
+      if (!isActiveRepo(get, root)) return;
+      // A same-named local branch may already exist. In that case the server
+      // deliberately checks out the local branch without rewriting its
+      // upstream, so report the refreshed branch's real tracking state rather
+      // than claiming it tracks the remote row the user clicked.
+      const upstream = get().branches.find((b) => b.name === local)?.upstream;
+      raise(
+        set,
+        "notice",
+        upstream ? `Checked out ${local} (tracking ${upstream}).` : `Checked out ${local}.`,
+      );
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async deleteBranch(name: string) {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const { branches } = await api.deleteBranch(name);
+      if (!isActiveRepo(get, root)) return;
       set({ branches });
       // If the branch's commits were shown in the graph, stop requesting its now
       // non-existent ref (a bad revision would break the log query).
@@ -882,40 +942,47 @@ export const useStore = create<AppState>((set, get) => ({
       if (get().visibleRefs.includes(ref)) {
         const next = get().visibleRefs.filter((r) => r !== ref);
         set({ visibleRefs: next });
-        writeVisibleFor(get().repo?.root ?? "", next);
+        writeVisibleFor(root, next);
       }
       // A deleted branch's ref badge should disappear from the graph.
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, root);
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async deleteRemoteBranch(remote: string, branch: string) {
     if (get().remoteBusy) return;
+    const root = get().repo?.root;
+    if (!root) return;
     set({ remoteBusy: true, busyAction: "remote" });
     try {
       const { branches } = await api.deleteRemoteBranch(remote, branch);
+      if (!isActiveRepo(get, root)) return;
       set({ remoteBranches: branches });
       // Its commits can no longer be requested from the log — drop the ref.
       const ref = `refs/remotes/${remote}/${branch}`;
       if (get().visibleRefs.includes(ref)) {
         const next = get().visibleRefs.filter((r) => r !== ref);
         set({ visibleRefs: next });
-        writeVisibleFor(get().repo?.root ?? "", next);
+        writeVisibleFor(root, next);
       }
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, root);
+      if (!isActiveRepo(get, root)) return;
       raise(set, "notice", `Deleted ${remote}/${branch} on the remote.`);
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     } finally {
       set({ remoteBusy: false, busyAction: null });
     }
   },
 
   async loadWorktrees() {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const { worktrees } = await api.worktrees();
+      if (get().repo?.root !== root) return;
       set({ worktrees });
     } catch {
       /* non-fatal */
@@ -997,8 +1064,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async loadRemotes() {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const { remotes } = await api.remotes();
+      if (get().repo?.root !== root) return;
       set({ remotes });
     } catch {
       /* non-fatal */
@@ -1040,20 +1110,29 @@ export const useStore = create<AppState>((set, get) => ({
     await runPush(get, set, null);
   },
 
-  async pull() {
+  async pull(remote?: string, branch?: string) {
     if (get().remoteBusy) return;
+    const root = get().repo?.root;
+    const startingBranch = get().repo?.branch;
+    if (!root || !startingBranch) return;
     set({ remoteBusy: true, busyAction: "pull" });
     try {
-      const { merge, status } = await api.pull();
+      const { repo, merge, status } = await api.pull(remote, branch);
+      if (!isActiveTarget(get, root, startingBranch)) return;
+      if (repo) {
+        set({ repo });
+        syncActiveTab(get, set, repo);
+      }
       applyMerge(get, set, merge, status);
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, root);
+      if (!isActiveTarget(get, root, startingBranch)) return;
       if (merge.active) {
         set({ selectedCommitHash: null, selectedFile: null });
       } else {
         raise(set, "notice", "Pulled latest changes.");
       }
     } catch (e) {
-      reportError(set, e);
+      if (isActiveTarget(get, root, startingBranch)) reportError(set, e);
     } finally {
       set({ remoteBusy: false, busyAction: null });
     }
@@ -1067,6 +1146,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async ensureBranchPushed(branch: string) {
+    const root = get().repo?.root;
+    if (!root) return { ok: false, reason: "The repository is no longer active." };
     const pushed = (name: string): boolean => {
       const b = get().branches.find((x) => x.name === name);
       return Boolean(b && b.upstream && !b.upstreamGone && b.ahead === 0);
@@ -1089,7 +1170,13 @@ export const useStore = create<AppState>((set, get) => ({
       { label: "Cancel", value: "cancel", kind: "neutral" },
     ]);
     if (choice !== "push") return { ok: false };
+    if (!isActiveTarget(get, root, branch)) {
+      return { ok: false, reason: "The repository or branch changed before the push started." };
+    }
     await get().push();
+    if (!isActiveTarget(get, root, branch)) {
+      return { ok: false, reason: "The repository or branch changed while pushing." };
+    }
     return pushed(branch)
       ? { ok: true }
       : { ok: false, reason: `Couldn't push "${branch}" — resolve the push first, then try again.` };
@@ -1115,8 +1202,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async loadMergeState() {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const { merge } = await api.mergeState();
+      if (get().repo?.root !== root) return;
       applyMerge(get, set, merge);
     } catch {
       /* non-fatal */
@@ -1124,14 +1214,18 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async mergeBranch(name: string) {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const { repo, merge, status } = await api.merge(name);
+      if (!isActiveRepo(get, root)) return;
       if (repo) {
         set({ repo });
         syncActiveTab(get, set, repo);
       }
       applyMerge(get, set, merge, status);
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, root);
+      if (!isActiveRepo(get, root)) return;
       if (merge.active) {
         // Conflicts — jump to the WIP/conflict view so the resolver is reachable.
         set({ selectedCommitHash: null, selectedFile: null });
@@ -1139,37 +1233,45 @@ export const useStore = create<AppState>((set, get) => ({
         raise(set, "notice", `Merged ${name} into ${get().repo?.branch ?? "the current branch"}.`);
       }
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async checkoutCommit(hash: string) {
+    const root = get().repo?.root;
+    if (!root) return;
     set({ commitMenu: null });
     try {
       const { repo, merge, status } = await api.checkoutCommit(hash);
+      if (!isActiveRepo(get, root)) return;
       if (repo) {
         set({ repo });
         syncActiveTab(get, set, repo);
       }
       set({ selectedCommitHash: null, commitFiles: [], selectedFile: null });
       applyMerge(get, set, merge, status);
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, root);
+      if (!isActiveRepo(get, root)) return;
       raise(set, "notice", `Checked out ${hash.slice(0, 7)} (detached HEAD).`);
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async cherryPick(hash: string, noCommit: boolean) {
+    const root = get().repo?.root;
+    if (!root) return;
     set({ commitMenu: null });
     try {
       const { repo, merge, status } = await api.cherryPick(hash, noCommit);
+      if (!isActiveRepo(get, root)) return;
       if (repo) {
         set({ repo });
         syncActiveTab(get, set, repo);
       }
       applyMerge(get, set, merge, status);
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, root);
+      if (!isActiveRepo(get, root)) return;
       if (merge.active) {
         set({ selectedCommitHash: null, selectedFile: null });
       } else if (noCommit) {
@@ -1179,23 +1281,27 @@ export const useStore = create<AppState>((set, get) => ({
         raise(set, "notice", `Cherry-picked ${hash.slice(0, 7)}.`);
       }
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async abortMerge() {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const { repo, merge, status } = await api.abortMerge();
+      if (!isActiveRepo(get, root)) return;
       if (repo) {
         set({ repo });
         syncActiveTab(get, set, repo);
       }
       set({ mergeSeen: [], conflictPath: null, conflictData: null });
       applyMerge(get, set, merge, status);
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, root);
+      if (!isActiveRepo(get, root)) return;
       raise(set, "notice", "Aborted — restored the pre-merge state.");
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
@@ -1232,8 +1338,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async loadStashes() {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const { stashes } = await api.stashes();
+      if (get().repo?.root !== root) return;
       set({ stashes });
       // The open stash may have just been popped, dropped, or left behind by a
       // repo switch — one guard here covers every way it can go.
@@ -1447,114 +1556,160 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async createBranchAt(name: string, hash: string) {
+    const root = get().repo?.root;
+    if (!root) return;
     set({ branchDialogHash: null, commitMenu: null });
     try {
       const { repo } = await api.createBranch(name, hash);
+      if (!isActiveRepo(get, root)) return;
       set({ repo });
       syncActiveTab(get, set, repo);
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, root);
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async resetToCommit(hash: string, mode: ResetMode) {
+    const root = get().repo?.root;
+    if (!root) return;
     set({ commitMenu: null });
     try {
       const { repo } = await api.reset(hash, mode);
+      if (!isActiveRepo(get, root)) return;
       set({ repo, selectedCommitHash: null, commitFiles: [], selectedFile: null });
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, root);
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async revertCommit(hash: string) {
+    const root = get().repo?.root;
+    if (!root) return;
     set({ commitMenu: null });
     try {
       const { repo, merge, status } = await api.revert(hash);
+      if (!isActiveRepo(get, root)) return;
       if (repo) set({ repo });
       set({ selectedCommitHash: null, commitFiles: [], selectedFile: null });
       applyMerge(get, set, merge, status);
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, root);
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async refreshStatus() {
+    const root = get().repo?.root;
+    if (!root) return;
     set({ loadingStatus: true });
     try {
       const status = await api.status();
+      if (get().repo?.root !== root) return;
       set({ status });
     } catch (e) {
-      reportError(set, e);
+      if (get().repo?.root === root) reportError(set, e);
     } finally {
-      set({ loadingStatus: false });
+      if (get().repo?.root === root) set({ loadingStatus: false });
     }
   },
 
   async refreshAll() {
-    if (!get().repo || get().opening) return;
-    await refreshRepoData(get, set);
+    const root = get().repo?.root;
+    if (!root || get().opening) return;
+    try {
+      // Git may have been changed by the built-in terminal or another client.
+      // Refresh the branch/HEAD metadata before the derived lists so the tab
+      // label and active repository stay in sync with the data below them.
+      const { repo } = await api.currentRepo();
+      // A rapid tab switch can finish while this request is in flight. Never
+      // apply the previous repository's response to the newly active tab.
+      if (!repo || get().repo?.root !== root) return;
+      set({ repo });
+      syncActiveTab(get, set, repo);
+    } catch (e) {
+      if (isActiveRepo(get, root)) reportError(set, e);
+      return;
+    }
+    await refreshRepoData(get, set, root);
   },
 
   async stage(paths: string[]) {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const status = await api.stage(paths);
+      if (!isActiveRepo(get, root)) return;
       set({ status });
-      syncSelectedAfterStage(get, set, paths, true);
+      syncSelectedWithStatus(get, set, status);
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async stageAll() {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const status = await api.stageAll();
+      if (!isActiveRepo(get, root)) return;
       set({ status });
+      syncSelectedWithStatus(get, set, status);
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async unstage(paths: string[]) {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const status = await api.unstage(paths);
+      if (!isActiveRepo(get, root)) return;
       set({ status });
-      syncSelectedAfterStage(get, set, paths, false);
+      syncSelectedWithStatus(get, set, status);
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async discardAll() {
+    const root = get().repo?.root;
+    if (!root) return;
     try {
       const status = await api.discardAll();
+      if (!isActiveRepo(get, root)) return;
       set({ status, selectedFile: null });
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async discardPaths(paths: string[]) {
+    const root = get().repo?.root;
+    if (!root) return;
     set({ changesMenu: null });
     try {
       const status = await api.discardPaths(paths);
+      if (!isActiveRepo(get, root)) return;
       set({ status, selectedFile: null });
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
   async deleteFile(path: string) {
+    const root = get().repo?.root;
+    if (!root) return;
     set({ changesMenu: null });
     try {
       const status = await api.deleteFile(path);
+      if (!isActiveRepo(get, root)) return;
       set({ status, selectedFile: null });
       raise(set, "notice", `Deleted ${path}.`);
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
     }
   },
 
@@ -1575,13 +1730,17 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async commit(title: string, description: string, amend: boolean) {
+    const root = get().repo?.root;
+    if (!root) return;
     set({ committing: true });
     try {
-      await api.commit(title, description, amend);
-      set({ selectedFile: null });
-      await refreshRepoData(get, set);
+      const { repo, status } = await api.commit(title, description, amend);
+      if (!isActiveRepo(get, root)) return;
+      set({ ...(repo ? { repo } : {}), status, selectedFile: null });
+      if (repo) syncActiveTab(get, set, repo);
+      await refreshRepoData(get, set, root);
     } catch (e) {
-      reportError(set, e);
+      if (isActiveRepo(get, root)) reportError(set, e);
       throw e;
     } finally {
       set({ committing: false });
@@ -1620,6 +1779,15 @@ export const useStore = create<AppState>((set, get) => ({
 type StoreGet = () => AppState;
 type StoreSet = (partial: Partial<AppState> | ((s: AppState) => Partial<AppState>)) => void;
 
+function isActiveRepo(get: StoreGet, root: string): boolean {
+  return get().repo?.root === root;
+}
+
+function isActiveTarget(get: StoreGet, root: string, branch: string): boolean {
+  const repo = get().repo;
+  return repo?.root === root && repo.branch === branch;
+}
+
 /**
  * Re-sync every piece of repo data that a mutation could have changed: commits,
  * status, local/remote branches, remotes, stashes, merge state, and worktrees.
@@ -1628,20 +1796,31 @@ type StoreSet = (partial: Partial<AppState> | ((s: AppState) => Partial<AppState
  * preserves scroll (reloads only as many commits as are paged in) and doesn't
  * disturb the current selection. Read-only/selection actions skip it.
  */
-async function refreshRepoData(get: StoreGet, set: StoreSet): Promise<void> {
-  if (!get().repo) return;
+async function refreshRepoData(
+  get: StoreGet,
+  set: StoreSet,
+  expectedRoot = get().repo?.root,
+): Promise<void> {
+  if (!expectedRoot || !isActiveRepo(get, expectedRoot)) return;
   // Bump the tick first so an open diff refetches alongside the lists.
   set({ refreshTick: get().refreshTick + 1 });
   // Refresh remote branches first so any deleted refs are pruned from the
   // visible set before we query the log with them.
   await get().loadRemoteBranches();
+  // A tab switch while the first refresh was in flight changes the API's
+  // request target. Stop here instead of issuing the rest against another repo.
+  if (!isActiveRepo(get, expectedRoot)) return;
   // Reload as many commits as are currently paged in, so a deep scroll position
   // survives the refresh (server caps the page at 1000).
   const count = Math.min(1000, Math.max(PAGE, get().commits.length));
   const commitsPromise = api
     .commits(0, count, get().visibleRefs)
-    .then(({ commits, hasMore }) => set({ commits, hasMore }))
-    .catch((e) => reportError(set, e));
+    .then(({ commits, hasMore }) => {
+      if (isActiveRepo(get, expectedRoot)) set({ commits, hasMore });
+    })
+    .catch((e) => {
+      if (isActiveRepo(get, expectedRoot)) reportError(set, e);
+    });
   await Promise.all([
     commitsPromise,
     get().refreshStatus(),
@@ -1655,30 +1834,61 @@ async function refreshRepoData(get: StoreGet, set: StoreSet): Promise<void> {
 
 const FORCE_PUSH_SKIP_KEY = "gwui.skipForcePushConfirm";
 
+interface PushBinding {
+  root: string;
+  branch: string;
+}
+
 /**
  * Push the current branch, handling a non-fast-forward rejection like GitKraken:
  * whenever the local and remote tips have diverged (amend, rebase, reset, or a
  * remote that moved), offer Pull (to integrate the remote's work) or one of the
  * two confirmed force modes — see `promptRejectedPush`.
  */
-async function runPush(get: StoreGet, set: StoreSet, force: PushForce | null): Promise<void> {
+async function runPush(
+  get: StoreGet,
+  set: StoreSet,
+  force: PushForce | null,
+  expected?: PushBinding,
+): Promise<void> {
+  const current = get().repo;
+  const binding: PushBinding | null = expected ?? (
+    current ? { root: current.root, branch: current.branch } : null
+  );
+  if (!binding || !isActiveTarget(get, binding.root, binding.branch)) return;
   set({ remoteBusy: true, busyAction: "push" });
-  let rejected: { branch: string; upstream: string | null } | null = null;
+  let rejected: {
+    root: string;
+    branch: string;
+    upstream: string | null;
+    remote?: string;
+    remoteBranch?: string;
+  } | null = null;
   try {
     const res = await api.push(force);
+    if (!isActiveTarget(get, binding.root, binding.branch)) return;
     if (res.rejected && !force) {
-      rejected = { branch: res.branch, upstream: res.upstream ?? null };
+      rejected = {
+        root: binding.root,
+        branch: res.branch,
+        upstream: res.upstream ?? null,
+        remote: res.remote,
+        remoteBranch: res.remoteBranch,
+      };
     } else {
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, binding.root);
+      if (!isActiveTarget(get, binding.root, binding.branch)) return;
       raise(set, "notice", force ? `Force-pushed ${res.branch}.` : `Pushed ${res.branch}.`);
     }
   } catch (e) {
-    reportError(set, e);
+    if (isActiveTarget(get, binding.root, binding.branch)) reportError(set, e);
   } finally {
     set({ remoteBusy: false, busyAction: null });
   }
   // Prompt only after clearing remoteBusy so the follow-up Pull/Force can run.
-  if (rejected) await promptRejectedPush(get, set, rejected);
+  if (rejected && isActiveTarget(get, rejected.root, rejected.branch)) {
+    await promptRejectedPush(get, set, rejected);
+  }
 }
 
 /**
@@ -1691,7 +1901,13 @@ async function runPush(get: StoreGet, set: StoreSet, force: PushForce | null): P
 async function promptRejectedPush(
   get: StoreGet,
   set: StoreSet,
-  rejected: { branch: string; upstream: string | null },
+  rejected: {
+    root: string;
+    branch: string;
+    upstream: string | null;
+    remote?: string;
+    remoteBranch?: string;
+  },
 ): Promise<void> {
   const target = rejected.upstream ? `'refs/remotes/${rejected.upstream}'` : "the remote";
   const choice = await get().requestChoice(
@@ -1703,10 +1919,16 @@ async function promptRejectedPush(
       { label: "Cancel", value: "cancel", kind: "neutral" },
     ],
   );
+  // The confirmation belongs to the exact repo/branch whose push was rejected.
+  // Switching tabs or branches while it is open must cancel every follow-up.
+  if (!isActiveTarget(get, rejected.root, rejected.branch)) return;
   if (choice === "pull") {
-    await get().pull();
+    await get().pull(rejected.remote, rejected.remoteBranch);
   } else if (choice === "lease" || choice === "force") {
-    if (await confirmForcePush(get, choice)) await runPush(get, set, choice);
+    if (await confirmForcePush(get, choice)) {
+      if (!isActiveTarget(get, rejected.root, rejected.branch)) return;
+      await runPush(get, set, choice, { root: rejected.root, branch: rejected.branch });
+    }
   }
 }
 
@@ -1773,6 +1995,8 @@ function showPicker(set: StoreSet): void {
     mergeSeen: [],
     conflictPath: null,
     conflictData: null,
+    loadingCommits: false,
+    loadingStatus: false,
   });
 }
 
@@ -1800,10 +2024,13 @@ async function hydrateRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promis
     mergeSeen: [],
     conflictPath: null,
     conflictData: null,
+    loadingCommits: false,
+    loadingStatus: false,
   });
   // Load the ref lists first so we can resolve the default visible set and query
   // the log with valid refs.
   await Promise.all([get().loadRemoteBranches(), get().loadBranches()]);
+  if (get().repo?.root !== info.root) return;
   set({ visibleRefs: resolveVisibleRefs(get(), info.root) });
   writeVisibleFor(info.root, get().visibleRefs);
   await Promise.all([
@@ -1903,21 +2130,35 @@ function syncActiveTab(get: StoreGet, set: StoreSet, info: RepoInfo): void {
   persistTabs(tabs, get().activeTabId);
 }
 
-/** When a viewed working-file is staged/unstaged, flip its source so the viewer follows it. */
-function syncSelectedAfterStage(
+/** Keep an open working-file diff attached to its fresh status entry after staging changes. */
+function syncSelectedWithStatus(
   get: () => AppState,
   set: (partial: Partial<AppState>) => void,
-  paths: string[],
-  nowStaged: boolean,
-) {
+  status: StatusResult,
+): void {
   const sel = get().selectedFile;
   if (!sel || sel.source === "commit") return;
-  if (!paths.includes(sel.path)) return;
+  const preferred = sel.source === "staged" ? status.staged : status.unstaged;
+  const other = sel.source === "staged" ? status.unstaged : status.staged;
+  const fresh =
+    preferred.find((file) => file.path === sel.path) ??
+    other.find((file) => file.path === sel.path) ??
+    preferred.find((file) => file.oldPath === sel.path) ??
+    other.find((file) => file.oldPath === sel.path);
+  if (!fresh) {
+    // Staging can consolidate an old deletion + new addition into a rename; an
+    // external edit can also remove the selected entry while the request runs.
+    set({ selectedFile: null });
+    return;
+  }
   set({
     selectedFile: {
       ...sel,
-      source: nowStaged ? "staged" : "unstaged",
-      staged: nowStaged,
+      path: fresh.path,
+      oldPath: fresh.oldPath,
+      source: fresh.staged ? "staged" : "unstaged",
+      staged: fresh.staged,
+      status: fresh.status,
     },
   });
 }

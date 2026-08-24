@@ -50,6 +50,7 @@ test.describe.serial("File Manager history deletion", () => {
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText("private", { exact: true }).last()).toBeVisible();
     await expect(dialog.getByText("keep.txt", { exact: true })).toBeVisible();
+    await expect(dialog.locator('.fm-row[title="keep.txt"] .fm-file-glyph svg')).toBeVisible();
 
     await dialog.getByText("private", { exact: true }).last().dblclick();
     await expect(dialog.getByText("secret.txt", { exact: true })).toBeVisible();

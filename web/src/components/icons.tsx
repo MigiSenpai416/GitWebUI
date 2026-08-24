@@ -159,6 +159,13 @@ export const IconFolder = (p: P) => (
     <path d="M4 7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" />
   </svg>
 );
+export const IconFile = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M7 3.5h6l4 4V20H7a2 2 0 0 1-2-2V5.5a2 2 0 0 1 2-2Z" />
+    <path d="M13 3.5V8h4" />
+    <path d="M8.5 12h5M8.5 15.5h5" />
+  </svg>
+);
 export const IconPencil = (p: P) => (
   <svg {...base({ width: 14, height: 14, ...p })}>
     <path d="M14 4 20 10 9 21H3v-6Z" />

@@ -7,6 +7,7 @@ import type { HeadEntryKind, HeadFileEntry, HistoryDeleteResult } from "../types
 import {
   IconChevron,
   IconChevronDown,
+  IconFile,
   IconFolder,
   IconRefresh,
   IconSearch,
@@ -660,7 +661,13 @@ function typeLabel(kind: BrowserKind): string {
 }
 
 function FileGlyph({ kind }: { kind: HeadEntryKind }) {
-  return <span className="fm-file-glyph">{kind === "symlink" ? "↗" : kind === "submodule" ? "◇" : ""}</span>;
+  return (
+    <span className="fm-file-glyph" aria-hidden="true">
+      <IconFile />
+      {kind === "symlink" && <span className="fm-file-badge">↗</span>}
+      {kind === "submodule" && <span className="fm-file-badge">◇</span>}
+    </span>
+  );
 }
 
 function basename(value: string): string {

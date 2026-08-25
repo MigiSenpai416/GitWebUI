@@ -10,6 +10,7 @@ import {
   diffViewExtensions,
   fileViewExtensions,
   loadLanguage,
+  setSearchHighlights,
 } from "./codeMirrorDiff";
 import { DiffMinimap } from "./DiffMinimap";
 import "./DiffViewer.css";
@@ -27,14 +28,21 @@ export function DiffViewer() {
 
   const [diff, setDiff] = useState<DiffResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeSearchIndex, setActiveSearchIndex] = useState(0);
 
   const hostRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const hunkIndex = useRef<number>(-1);
   const prevSelKey = useRef<string>("");
   const buildSig = useRef<string>("");
   const [buildTick, setBuildTick] = useState(0);
   const getView = useCallback(() => viewRef.current, []);
+  const selectionKey = selected
+    ? `${selected.source}:${selected.path}:${selected.hash ?? ""}`
+    : "";
 
   // Only working-tree diffs change over time; commit diffs are immutable, so
   // they never refetch (and keep their scroll position) on refresh.
@@ -70,6 +78,26 @@ export function DiffViewer() {
   }, [selected, refreshKey, setError]);
 
   const hunks = useMemo(() => (diff ? computeHunks(diff.rows) : []), [diff]);
+
+  const searchMatchRanges = useMemo(() => {
+    if (!searchOpen || !searchQuery || buildTick === 0 || !diff || diff.binary) return [];
+    const text = viewRef.current?.state.doc.toString();
+    return text == null ? [] : findTextMatchRanges(text, searchQuery);
+  }, [searchOpen, searchQuery, buildTick, diff, viewMode]);
+  const searchMatchCount = searchMatchRanges.length / 2;
+
+  const normalizedSearchIndex =
+    searchMatchCount === 0
+      ? -1
+      : ((activeSearchIndex % searchMatchCount) + searchMatchCount) % searchMatchCount;
+
+  // A search belongs to the open file. Do not carry its query or highlights to
+  // a different selection.
+  useEffect(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+    setActiveSearchIndex(0);
+  }, [selectionKey]);
 
   // Build / rebuild the editor when diff, mode, or language changes.
   useEffect(() => {
@@ -153,6 +181,30 @@ export function DiffViewer() {
     };
   }, []);
 
+  // Keep the match set current and center the active hit. The CodeMirror
+  // plugin decorates the visible subset, and rebuilding the editor reapplies
+  // search to the new document through buildTick.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+
+    const effects = [setSearchHighlights.of({ ranges: searchMatchRanges, activeIndex: normalizedSearchIndex })];
+
+    if (normalizedSearchIndex < 0) {
+      view.dispatch({ effects });
+      return;
+    }
+
+    const activeFrom = searchMatchRanges[normalizedSearchIndex * 2];
+    view.dispatch({
+      selection: { anchor: activeFrom },
+      effects: [
+        ...effects,
+        EditorView.scrollIntoView(activeFrom, { y: "center" }),
+      ],
+    });
+  }, [searchMatchRanges, normalizedSearchIndex, buildTick]);
+
   const gotoHunk = (dir: 1 | -1) => {
     const view = viewRef.current;
     if (!view || hunks.length === 0 || viewMode !== "diff") return;
@@ -170,10 +222,43 @@ export function DiffViewer() {
     }
   };
 
-  // Keyboard: Escape closes, Alt+Down/Up navigates hunks.
+  const openSearch = useCallback(() => {
+    setSearchOpen(true);
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    requestAnimationFrame(() => viewRef.current?.focus());
+  }, []);
+
+  const gotoSearchMatch = (dir: 1 | -1) => {
+    if (searchMatchCount === 0) return;
+    setActiveSearchIndex((index) => {
+      const current = ((index % searchMatchCount) + searchMatchCount) % searchMatchCount;
+      return (current + dir + searchMatchCount) % searchMatchCount;
+    });
+  };
+
+  // Keyboard: Ctrl/Cmd+F searches this file, Escape closes search before the
+  // file, and Alt+Down/Up navigates diff hunks.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeFile();
+      // Higher-level dialogs own keyboard input while they cover the viewer.
+      // Include legacy backdrops that do not expose aria-modal yet.
+      if (document.querySelector('.dialog-backdrop, [aria-modal="true"], [role="alertdialog"]')) {
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        openSearch();
+      } else if (e.key === "Escape" && searchOpen) {
+        e.preventDefault();
+        closeSearch();
+      } else if (e.key === "Escape") closeFile();
       else if (e.altKey && e.key === "ArrowDown") {
         e.preventDefault();
         gotoHunk(1);
@@ -182,10 +267,12 @@ export function DiffViewer() {
         gotoHunk(-1);
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Capture before a modal's document listener can close and unmount it;
+    // otherwise the same Escape could then fall through to this viewer.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hunks, viewMode]);
+  }, [hunks, viewMode, searchOpen, openSearch, closeSearch]);
 
   if (!selected) return null;
 
@@ -242,6 +329,59 @@ export function DiffViewer() {
         </button>
       </div>
 
+      {searchOpen && (
+        <div className="dv-find-row">
+          <div className="dv-find">
+            <input
+              ref={searchInputRef}
+              aria-label="Find in file"
+              placeholder="Find in file"
+              value={searchQuery}
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => {
+                setSearchQuery(e.currentTarget.value);
+                setActiveSearchIndex(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  gotoSearchMatch(e.shiftKey ? -1 : 1);
+                }
+              }}
+            />
+            <span className="dv-find-count" aria-live="polite">
+              {!searchQuery
+                ? ""
+                : searchMatchCount === 0
+                  ? "No results"
+                  : `${normalizedSearchIndex + 1} of ${searchMatchCount}`}
+            </span>
+            <button
+              title="Previous match (Shift+Enter)"
+              aria-label="Previous match"
+              disabled={searchMatchCount === 0}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => gotoSearchMatch(-1)}
+            >
+              ▲
+            </button>
+            <button
+              title="Next match (Enter)"
+              aria-label="Next match"
+              disabled={searchMatchCount === 0}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => gotoSearchMatch(1)}
+            >
+              ▼
+            </button>
+            <button title="Close search (Esc)" aria-label="Close search" onClick={closeSearch}>
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="dv-body">
         {loading && <div className="dv-message">Loading diff…</div>}
         {!loading && diff?.binary && (
@@ -276,4 +416,16 @@ function renderPath(path: string): React.ReactNode {
       <span className="dv-path-name">{name}</span>
     </>
   );
+}
+
+/** Flat literal, case-insensitive match ranges using original-text offsets. */
+export function findTextMatchRanges(text: string, query: string): number[] {
+  if (!query) return [];
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matcher = new RegExp(escaped, "giu");
+  const ranges: number[] = [];
+  for (const match of text.matchAll(matcher)) {
+    ranges.push(match.index, match.index + match[0].length);
+  }
+  return ranges;
 }

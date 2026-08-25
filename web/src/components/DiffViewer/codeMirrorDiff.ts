@@ -1,9 +1,131 @@
-import { EditorView, gutter, GutterMarker, lineNumbers } from "@codemirror/view";
-import { EditorState, StateField, RangeSetBuilder, type Extension } from "@codemirror/state";
+import {
+  EditorView,
+  ViewPlugin,
+  gutter,
+  GutterMarker,
+  lineNumbers,
+  type ViewUpdate,
+} from "@codemirror/view";
+import { EditorState, StateEffect, StateField, RangeSetBuilder, type Extension } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import type { DiffRow } from "../../types";
+
+export interface SearchHighlights {
+  /** Flat, ordered [from, to, from, to, ...] document ranges. */
+  ranges: readonly number[];
+  activeIndex: number;
+}
+
+/** Replaces the file-search highlights currently shown in the editor. */
+export const setSearchHighlights = StateEffect.define<SearchHighlights>();
+
+const searchMatch = Decoration.mark({ class: "cm-file-search-match" });
+const activeSearchMatch = Decoration.mark({ class: "cm-file-search-match cm-file-search-match-active" });
+const noSearchHighlights: SearchHighlights = { ranges: [], activeIndex: -1 };
+const maxVisibleSearchHighlights = 2_000;
+
+const searchHighlightField = StateField.define<SearchHighlights>({
+  create: () => noSearchHighlights,
+  update(value, transaction) {
+    // The viewer is read-only and replaces its entire state when the document
+    // changes. Clearing here also keeps ranges safe if that ever changes.
+    if (transaction.docChanged) value = noSearchHighlights;
+    for (const effect of transaction.effects) {
+      if (effect.is(setSearchHighlights)) value = effect.value;
+    }
+    return value;
+  },
+});
+
+/**
+ * Render highlights only for CodeMirror's drawn viewport. Match offsets remain
+ * available for the full-file count/navigation, without constructing a huge
+ * DecorationSet for every occurrence in a generated or minified file.
+ */
+const searchHighlightPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = visibleSearchDecorations(view);
+    }
+
+    update(update: ViewUpdate) {
+      const searchChanged = update.transactions.some((transaction) =>
+        transaction.effects.some((effect) => effect.is(setSearchHighlights)),
+      );
+      if (searchChanged || update.docChanged || update.viewportChanged) {
+        this.decorations = visibleSearchDecorations(update.view);
+      }
+    }
+  },
+  { decorations: (plugin) => plugin.decorations },
+);
+
+function visibleSearchDecorations(view: EditorView): DecorationSet {
+  const { ranges, activeIndex } = view.state.field(searchHighlightField);
+  if (ranges.length === 0) return Decoration.none;
+
+  const builder = new RangeSetBuilder<Decoration>();
+  const count = Math.floor(ranges.length / 2);
+  const visibleIndexes: number[] = [];
+
+  for (const visible of view.visibleRanges) {
+    let index = firstMatchEndingAfter(ranges, visible.from, count);
+    while (index < count && visibleIndexes.length < maxVisibleSearchHighlights) {
+      const from = ranges[index * 2];
+      if (from >= visible.to) break;
+      if (visibleIndexes.at(-1) !== index) visibleIndexes.push(index);
+      index++;
+    }
+    if (visibleIndexes.length >= maxVisibleSearchHighlights) break;
+  }
+
+  // Always show the active result, even when a single huge/minified line has
+  // more visible matches than the non-active decoration budget.
+  if (
+    activeIndex >= 0 &&
+    activeIndex < count &&
+    matchIntersectsVisibleRange(ranges, activeIndex, view.visibleRanges) &&
+    !visibleIndexes.includes(activeIndex)
+  ) {
+    visibleIndexes.push(activeIndex);
+    visibleIndexes.sort((a, b) => a - b);
+  }
+
+  for (const index of visibleIndexes) {
+    builder.add(
+      ranges[index * 2],
+      ranges[index * 2 + 1],
+      index === activeIndex ? activeSearchMatch : searchMatch,
+    );
+  }
+
+  return builder.finish();
+}
+
+function matchIntersectsVisibleRange(
+  ranges: readonly number[],
+  index: number,
+  visibleRanges: readonly { from: number; to: number }[],
+): boolean {
+  const from = ranges[index * 2];
+  const to = ranges[index * 2 + 1];
+  return visibleRanges.some((visible) => to > visible.from && from < visible.to);
+}
+
+function firstMatchEndingAfter(ranges: readonly number[], position: number, count: number): number {
+  let low = 0;
+  let high = count;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (ranges[middle * 2 + 1] <= position) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
 
 /** Lazily import the CodeMirror language for a coarse language id. */
 export async function loadLanguage(lang: string): Promise<Extension | null> {
@@ -181,5 +303,7 @@ export function baseExtensions(): Extension[] {
     editorTheme,
     syntaxHighlighting(diffHighlightStyle),
     EditorView.lineWrapping,
+    searchHighlightField,
+    searchHighlightPlugin,
   ];
 }

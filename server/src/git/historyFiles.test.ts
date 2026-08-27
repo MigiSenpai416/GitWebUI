@@ -38,6 +38,17 @@ async function commitAll(message: string): Promise<string> {
   return (await runGit(ROOT, ["rev-parse", "HEAD"])).stdout.trim();
 }
 
+async function hashObject(content: string): Promise<string> {
+  return (await runGit(ROOT, ["hash-object", "-w", "--stdin"], { input: content })).stdout.trim();
+}
+
+async function makeTree(entries: Array<{ mode: string; type: string; oid: string; name: string }>) {
+  const input = Buffer.from(
+    `${entries.map((entry) => `${entry.mode} ${entry.type} ${entry.oid}\t${entry.name}`).join("\0")}\0`,
+  );
+  return (await runGit(ROOT, ["mktree", "-z"], { input })).stdout.trim();
+}
+
 describe("HEAD file tree", () => {
   it("returns an empty, usable result for an unborn repository", async () => {
     await expect(getHeadFileTree(ROOT)).resolves.toEqual({ head: null, entries: [] });
@@ -82,9 +93,18 @@ describe("deletePathFromHistory", () => {
     await fs.writeFile(path.join(ROOT, target), "secret one\n");
     const oldHead = await commitAll("add secret");
     await runGit(ROOT, ["tag", "-a", "secret-tag", "-m", "tag before rewrite"]);
+    await runGit(ROOT, ["tag", "-a", "nested-secret-tag", "-m", "nested tag", "secret-tag"]);
     await runGit(ROOT, ["branch", "side"]);
     await runGit(ROOT, ["update-ref", "refs/remotes/origin/main", oldHead]);
     await runGit(ROOT, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+    await runGit(ROOT, [
+      "update-ref",
+      "--create-reflog",
+      "-m",
+      "custom recovery route",
+      "refs/custom/name@part",
+      oldHead,
+    ]);
     await runGit(ROOT, ["fetch", ".", "HEAD"]);
     await fs.writeFile(path.join(ROOT, target), "secret stashed\n");
     await runGit(ROOT, ["stash", "push", "-m", "secret stash"]);
@@ -123,6 +143,10 @@ describe("deletePathFromHistory", () => {
     ).toBe("");
     expect((await runGit(ROOT, ["for-each-ref", "--format=%(refname)", "refs/original"])).stdout.trim()).toBe("");
     expect((await runGit(ROOT, ["symbolic-ref", "refs/remotes/origin/HEAD"])).stdout.trim()).toBe("refs/remotes/origin/main");
+    expect((await runGit(ROOT, ["cat-file", "-t", "nested-secret-tag"])).stdout.trim()).toBe("tag");
+    expect(
+      (await runGit(ROOT, ["reflog", "show", "--format=%H", "refs/custom/name@part"])).stdout.trim(),
+    ).toBe("");
     await expect(fs.access(path.join(ROOT, ".git", "FETCH_HEAD"))).rejects.toThrow();
     expect((await runGit(ROOT, ["stash", "list", "--format=%gs"])).stdout.trim()).toContain("secret stash");
     await expect(getStashes(ROOT)).resolves.toEqual([
@@ -247,6 +271,94 @@ describe("deletePathFromHistory", () => {
 
     expect((await runGit(ROOT, ["log", "-1", "--format=%B"])).stdout).toContain(referenced);
   }, 30_000);
+
+  it("preserves unrelated Windows-incompatible historical paths in the isolated mirror", async () => {
+    const empty = await hashObject("");
+    const secret = await hashObject("secret\n");
+    const keep = await hashObject("keep\n");
+    const invalidTree = await makeTree([{ mode: "100644", type: "blob", oid: empty, name: ">" }]);
+    const sdkTree = await makeTree([{ mode: "100644", type: "blob", oid: secret, name: "x" }]);
+    const originalTree = await makeTree([
+      { mode: "040000", type: "tree", oid: invalidTree, name: "codex-cli" },
+      { mode: "100644", type: "blob", oid: keep, name: "keep.txt" },
+      { mode: "040000", type: "tree", oid: sdkTree, name: "sdk" },
+    ]);
+    const original = (
+      await runGit(ROOT, ["commit-tree", originalTree], { input: "historical invalid path\n" })
+    ).stdout.trim();
+    const currentTree = await makeTree([
+      { mode: "100644", type: "blob", oid: keep, name: "keep.txt" },
+      { mode: "040000", type: "tree", oid: sdkTree, name: "sdk" },
+    ]);
+    const head = (
+      await runGit(ROOT, ["commit-tree", currentTree, "-p", original], {
+        input: "remove invalid path\n",
+      })
+    ).stdout.trim();
+    await runGit(ROOT, ["update-ref", "refs/heads/main", head]);
+    await runGit(ROOT, ["reset", "--hard", head]);
+    await runGit(ROOT, ["config", "core.protectNTFS", "true"]);
+    await runGit(ROOT, ["config", "core.protectHFS", "true"]);
+
+    await deletePathFromHistory(ROOT, {
+      path: "sdk",
+      expectedHead: head,
+      confirmation: "sdk",
+    });
+
+    expect((await runGit(ROOT, ["log", "--all", "--format=%H", "--", ":(literal)sdk"])).stdout.trim()).toBe("");
+    const rewrittenOriginal = (
+      await runGit(ROOT, ["rev-list", "--reverse", "HEAD"])
+    ).stdout.trim().split(/\r?\n/)[0];
+    expect(
+      (await runGit(ROOT, ["ls-tree", "-r", "--name-only", rewrittenOriginal])).stdout,
+    ).toContain("codex-cli/>");
+    expect((await runGit(ROOT, ["config", "--bool", "core.protectNTFS"])).stdout.trim()).toBe("true");
+    expect((await runGit(ROOT, ["config", "--bool", "core.protectHFS"])).stdout.trim()).toBe("true");
+  }, 30_000);
+
+  it("rewrites hundreds of packed commit refs through one bounded import", async () => {
+    await fs.writeFile(path.join(ROOT, "secret.txt"), "secret\n");
+    await fs.writeFile(path.join(ROOT, "keep.txt"), "keep\n");
+    const head = await commitAll("many refs");
+    const commands = ["start"];
+    for (let index = 0; index < 96; index++) {
+      const suffix = String(index).padStart(3, "0");
+      commands.push(`update refs/heads/load/${suffix} ${head}`);
+      commands.push(`update refs/remotes/origin/load/${suffix} ${head}`);
+    }
+    const longRef = `refs/remotes/origin/${"long-segment-".repeat(8)}tip`;
+    commands.push(`update ${longRef} ${head}`, "prepare", "commit", "");
+    await runGit(ROOT, ["update-ref", "--stdin"], { input: commands.join("\n") });
+    await runGit(ROOT, [
+      "symbolic-ref",
+      "refs/remotes/origin/HEAD",
+      "refs/remotes/origin/load/000",
+    ]);
+    await runGit(ROOT, ["tag", "-a", "load-tag", "-m", "load tag"]);
+    await runGit(ROOT, ["tag", "-a", "nested-load-tag", "-m", "nested load tag", "load-tag"]);
+    await runGit(ROOT, ["pack-refs", "--all"]);
+    const refsBefore = (
+      await runGit(ROOT, ["for-each-ref", "--format=%(refname)"])
+    ).stdout.trim().split(/\r?\n/).length;
+
+    await deletePathFromHistory(ROOT, {
+      path: "secret.txt",
+      expectedHead: head,
+      confirmation: "secret.txt",
+    });
+
+    const refsAfter = (
+      await runGit(ROOT, ["for-each-ref", "--format=%(refname)"])
+    ).stdout.trim().split(/\r?\n/).length;
+    expect(refsAfter).toBe(refsBefore);
+    expect((await runGit(ROOT, ["symbolic-ref", "refs/remotes/origin/HEAD"])).stdout.trim()).toBe(
+      "refs/remotes/origin/load/000",
+    );
+    expect((await runGit(ROOT, ["rev-parse", "--verify", longRef])).stdout.trim()).not.toBe(head);
+    expect((await runGit(ROOT, ["cat-file", "-t", "nested-load-tag"])).stdout.trim()).toBe("tag");
+    expect((await runGit(ROOT, ["log", "--all", "--format=%H", "--", "secret.txt"])).stdout.trim()).toBe("");
+  }, 45_000);
 
   it("fails with installation guidance before creating recovery artifacts", async () => {
     await fs.writeFile(path.join(ROOT, "secret.txt"), "secret\n");
@@ -446,14 +558,17 @@ describe("deletePathFromHistory", () => {
     releaseMutation();
 
     const tree = (await runGit(ROOT, ["rev-parse", "HEAD^{tree}"])).stdout.trim();
-    await runGit(ROOT, ["update-ref", "refs/tags/tree-tip", tree]);
+    await runGit(ROOT, ["tag", "-a", "tree-tip", "-m", "tree tag", tree]);
     await expect(
       deletePathFromHistory(ROOT, {
         path: "secret.txt",
         expectedHead: head,
         confirmation: "secret.txt",
       }),
-    ).rejects.toMatchObject({ status: 409 });
+    ).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining("refs/tags/tree-tip"),
+    });
     await runGit(ROOT, ["update-ref", "-d", "refs/tags/tree-tip"]);
 
     await fs.writeFile(path.join(ROOT, "untracked.txt"), "work\n");

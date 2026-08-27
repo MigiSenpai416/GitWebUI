@@ -138,11 +138,12 @@ export async function deletePathFromHistory(
   let indexTransition: IndexTransition | null = null;
   try {
     await requireFilterRepo(root);
-    const oldHead = await preflight(root, target, input.expectedHead);
+    const preflightResult = await preflight(root, target, input.expectedHead);
+    const oldHead = preflightResult.head;
+    refsBefore = preflightResult.refs;
     fetchHeadBefore = await readPseudoRefFile(root, "FETCH_HEAD");
     origHeadBefore = await readPseudoRefFile(root, "ORIG_HEAD");
     reflogsBefore = await publicReflogSnapshot(root);
-    refsBefore = await refSnapshot(root);
     internalPrefix = `refs/gitwebui-history-rewrite/${process.pid}-${Date.now()}`;
     stashRecovery = await prepareStashRecovery(root, internalPrefix);
     backupPath = await createRecoveryBundle(root, oldHead, internalPrefix);
@@ -164,34 +165,48 @@ export async function deletePathFromHistory(
     // repository workflow below. Preserve empty commits to match the existing
     // File Manager rewrite semantics. Stash refs fail filter-repo's fresh-clone
     // heuristic, so --force is safe and necessary only in this temporary clone.
-    await runGit(mirrorDir, [
-      "filter-repo",
-      "--force",
-      "--partial",
-      "--invert-paths",
-      `--path=${target}`,
-      "--prune-empty=never",
-      "--prune-degenerate=never",
-      "--preserve-commit-hashes",
-      "--preserve-commit-encoding",
-    ]);
+    // Platform filename guards are disabled only while the bare mirror replays
+    // tree objects; no checkout occurs and the live repository stays protected.
+    try {
+      await runGit(mirrorDir, [
+        "-c",
+        "core.protectNTFS=false",
+        "-c",
+        "core.protectHFS=false",
+        "filter-repo",
+        "--force",
+        "--partial",
+        "--invert-paths",
+        `--path=${target}`,
+        "--prune-empty=never",
+        "--prune-degenerate=never",
+        "--preserve-commit-hashes",
+        "--preserve-commit-encoding",
+      ]);
+    } catch (error) {
+      if (error instanceof GitError && /invalid path/i.test(error.message)) {
+        throw httpError(
+          422,
+          `Git could not replay a historical filename in the isolated mirror. No live refs were changed, and GitWebUI did not remove or rename unrelated paths. Retry from Linux/WSL or repair that historical path explicitly. (${errorMessage(error)})`,
+        );
+      }
+      throw error;
+    }
     await migrateStashNotes(mirrorDir, stashRecovery);
 
     // Validate in the isolated mirror before a single ref in the live repo
     // moves, then import its objects and atomically exchange all ref tips.
-    await verifyPathAbsent(mirrorDir, target);
+    const mirrorRefs = await refSnapshot(mirrorDir);
+    await verifyPathAbsent(mirrorDir, target, mirrorRefs);
     await runGit(mirrorDir, ["fsck", "--full", "--no-reflogs"]);
     publishedRefs = await importAndUpdateRefs(
       root,
       mirrorDir,
+      mirrorRefs,
       sourceRefs,
-      internalPrefix,
       reflogsBefore,
     );
-    if (!sameRefSnapshot(publishedRefs, await refSnapshot(root))) {
-      throw httpError(409, "Repository refs changed during the history update; recovery was stopped");
-    }
-    await verifyPathAbsent(root, target);
+    await verifyPathAbsent(root, target, publishedRefs);
     await requireUnchangedIndexAndWorktree(root, oldHead);
 
     const newHead = await verifiedHead(root);
@@ -305,7 +320,16 @@ export function parseLsTree(stdout: string): HeadFileEntry[] {
   return entries;
 }
 
-async function preflight(root: string, target: string, expectedHead: string): Promise<string> {
+interface PreflightResult {
+  head: string;
+  refs: RefState[];
+}
+
+async function preflight(
+  root: string,
+  target: string,
+  expectedHead: string,
+): Promise<PreflightResult> {
   if (!/^[0-9a-fA-F]{40,64}$/.test(expectedHead ?? "")) {
     throw httpError(400, "A valid expected HEAD is required");
   }
@@ -378,25 +402,26 @@ async function preflight(root: string, target: string, expectedHead: string): Pr
     throw httpError(409, "Finish or abort the in-progress Git operation before rewriting history");
   }
 
-  if ((await refNames(root, "refs/replace")).length) {
+  const refs = await refSnapshot(root);
+  if (refs.some((item) => refAtOrBelow(item.ref, "refs/replace"))) {
     throw httpError(409, "Remove Git replacement refs before rewriting history");
   }
-  if ((await originalRefs(root)).length) {
+  if (refs.some((item) => refAtOrBelow(item.ref, "refs/original"))) {
     throw httpError(
       409,
       "This repository already has refs/original backup refs from an earlier rewrite; resolve them first",
     );
   }
-  if ((await refNames(root, "refs/gitwebui-history-rewrite")).length) {
+  if (refs.some((item) => refAtOrBelow(item.ref, "refs/gitwebui-history-rewrite"))) {
     throw httpError(
       409,
       "An interrupted GitWebUI history rewrite left recovery refs; resolve them before retrying",
     );
   }
 
-  await rejectNonCommitRefs(root);
+  rejectNonCommitRefs(refs);
 
-  return head;
+  return { head, refs };
 }
 
 function validateRepoPath(value: string): string {
@@ -503,14 +528,12 @@ async function hasInProgressOperation(root: string): Promise<boolean> {
   return false;
 }
 
-async function rejectNonCommitRefs(root: string): Promise<void> {
-  for (const ref of await refNames(root, "refs")) {
-    try {
-      await runGit(root, ["rev-parse", "--verify", `${ref}^{commit}`]);
-    } catch {
+function rejectNonCommitRefs(refs: RefState[]): void {
+  for (const ref of refs) {
+    if (!refCommitOid(ref)) {
       throw httpError(
         409,
-        `History rewriting is unavailable while ${ref} directly names a tree or blob; remove or convert that ref first`,
+        `History rewriting is unavailable while ${ref.ref} directly names a tree or blob; remove or convert that ref first`,
       );
     }
   }
@@ -682,35 +705,46 @@ interface RefState {
   ref: string;
   oid: string;
   symref: string;
+  objectType: string;
+  peeledOid: string;
+  peeledType: string;
 }
 
-async function refSnapshot(root: string): Promise<RefState[]> {
-  const { stdout } = await runGit(root, [
+async function refSnapshot(root: string, prefix?: string): Promise<RefState[]> {
+  const args = [
     "for-each-ref",
-    "--format=%(refname)%00%(objectname)%00%(symref)",
-  ]);
+    "--format=%(refname)%00%(objectname)%00%(symref)%00%(objecttype)%00%(*objectname)%00%(*objecttype)",
+  ];
+  if (prefix) args.push(prefix);
+  const { stdout } = await runGit(root, args);
   return stdout
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => {
-      const [ref, oid = "", symref = ""] = line.split("\0");
-      return { ref, oid, symref };
+      const [
+        ref,
+        oid = "",
+        symref = "",
+        objectType = "",
+        peeledOid = "",
+        peeledType = "",
+      ] = line.split("\0");
+      return { ref, oid, symref, objectType, peeledOid, peeledType };
     });
+}
+
+function refCommitOid(ref: RefState): string | null {
+  if (ref.objectType === "commit") return ref.oid;
+  if (ref.peeledType === "commit") return ref.peeledOid;
+  return null;
+}
+
+function refAtOrBelow(ref: string, prefix: string): boolean {
+  return ref === prefix || ref.startsWith(`${prefix}/`);
 }
 
 function publicRefs(refs: RefState[], internalPrefix: string): RefState[] {
   return refs.filter((item) => !item.ref.startsWith(`${internalPrefix}/`));
-}
-
-async function originalRefs(root: string): Promise<RefState[]> {
-  const all = await refSnapshot(root);
-  return all
-    .filter((item) => item.ref.startsWith("refs/original/"))
-    .map((item) => ({
-      ref: item.ref.slice("refs/original/".length),
-      oid: item.oid,
-      symref: item.symref,
-    }));
 }
 
 async function restoreRefSnapshot(
@@ -740,7 +774,9 @@ async function restoreRefSnapshot(
   }
   commands.push("prepare", "commit", "");
   try {
-    await runGit(root, ["update-ref", "--stdin"], { input: commands.join("\n") });
+    await runGit(root, ["update-ref", "--no-deref", "--stdin"], {
+      input: commands.join("\n"),
+    });
   } catch {
     return false;
   }
@@ -756,7 +792,9 @@ async function restoreRefSnapshot(
 async function deleteRefs(root: string, refs: string[]): Promise<void> {
   if (!refs.length) return;
   const commands = ["start", ...refs.map((ref) => `delete ${ref}`), "prepare", "commit", ""];
-  await runGit(root, ["update-ref", "--stdin"], { input: commands.join("\n") });
+  await runGit(root, ["update-ref", "--no-deref", "--stdin"], {
+    input: commands.join("\n"),
+  });
 }
 
 async function refNames(root: string, prefix: string): Promise<string[]> {
@@ -767,56 +805,100 @@ async function refNames(root: string, prefix: string): Promise<string[]> {
 async function importAndUpdateRefs(
   root: string,
   mirror: string,
+  rewrittenRefs: RefState[],
   sourceRefs: RefState[],
-  internalPrefix: string,
   expectedReflogs: string,
 ): Promise<RefState[]> {
   const candidate = new Map(
-    (await refSnapshot(mirror))
+    rewrittenRefs
       .filter((item) => !item.ref.startsWith("refs/original/"))
-      .map((item) => [item.ref, item.oid]),
+      .map((item) => [item.ref, item]),
   );
   const liveBeforeImport = await refSnapshot(root);
   if (!sameRefSnapshot(sourceRefs, liveBeforeImport)) {
     throw httpError(409, "Repository refs changed while history was being prepared; nothing was rewritten");
   }
-  const directRefs = sourceRefs.filter((item) => !item.symref);
-  const imports: Array<{ ref: string; oid: string }> = [];
-  for (let index = 0; index < directRefs.length; index++) {
-    const source = directRefs[index];
-    const oid = candidate.get(source.ref);
-    if (!oid) throw new Error(`History rewrite did not produce ${source.ref}`);
-    imports.push({ ref: `${internalPrefix}/import/${String(index).padStart(6, "0")}`, oid });
-  }
-
-  try {
-    for (let start = 0; start < directRefs.length; start += 40) {
-      const args = ["fetch", "--no-tags", "--no-write-fetch-head", mirror];
-      for (let index = start; index < Math.min(directRefs.length, start + 40); index++) {
-        args.push(`+${directRefs[index].ref}:${imports[index].ref}`);
+  for (const source of sourceRefs) {
+    const rewritten = candidate.get(source.ref);
+    if (!rewritten) throw new Error(`History rewrite did not produce ${source.ref}`);
+    if (source.symref) {
+      const target = candidate.get(source.symref);
+      if (!target || rewritten.oid !== target.oid) {
+        throw new Error(`History rewrite did not preserve symbolic ref ${source.ref}`);
       }
-      await runGit(root, args);
     }
-    for (const item of imports) {
-      const imported = await gitText(root, ["rev-parse", "--verify", item.ref]);
-      if (imported !== item.oid) throw new Error(`Failed to import rewritten object ${item.oid}`);
-    }
-
-    await requireReflogsUnchanged(root, expectedReflogs);
-
-    const commands = ["start"];
-    for (let index = 0; index < directRefs.length; index++) {
-      const source = directRefs[index];
-      commands.push(`update ${source.ref} ${imports[index].oid} ${source.oid}`);
-    }
-    commands.push("prepare", "commit", "");
-    await runGit(root, ["update-ref", "--stdin"], { input: commands.join("\n") });
-  } finally {
-    await deleteRefs(root, imports.map((item) => item.ref)).catch(() => undefined);
   }
+  const directRefs = sourceRefs.filter((item) => !item.symref);
+  if (directRefs.length) {
+    // Fetch only objects, with no destination refs. Stdin avoids the Windows
+    // argv limit, and leaving the destination side absent avoids loose-ref
+    // path limits and any temporary namespace that another Git process could
+    // race with.
+    await runGit(
+      root,
+      [
+        "fetch",
+        "--atomic",
+        "--quiet",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--no-recurse-submodules",
+        "--no-auto-maintenance",
+        "--no-write-commit-graph",
+        "--stdin",
+        mirror,
+      ],
+      { input: `${directRefs.map((item) => item.ref).join("\n")}\n` },
+    );
+  }
+
+  const expectedObjects = new Map(
+    directRefs.map((item) => {
+      const rewritten = candidate.get(item.ref)!;
+      return [rewritten.oid, rewritten.objectType];
+    }),
+  );
+  if (expectedObjects.size) {
+    const { stdout } = await runGit(
+      root,
+      ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+      { input: `${[...expectedObjects.keys()].join("\n")}\n` },
+    );
+    const imported = new Map(
+      stdout
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => {
+          const [oid, type = ""] = line.split(" ");
+          return [oid, type];
+        }),
+    );
+    for (const [oid, type] of expectedObjects) {
+      if (imported.get(oid) !== type) {
+        throw new Error(`Failed to import rewritten object ${oid}`);
+      }
+    }
+  }
+
+  if (!sameRefSnapshot(sourceRefs, await refSnapshot(root))) {
+    throw httpError(
+      409,
+      "Repository refs changed while rewritten objects were imported; nothing was rewritten",
+    );
+  }
+
+  await requireReflogsUnchanged(root, expectedReflogs);
+
+  const commands = ["start"];
+  for (const source of directRefs) {
+    commands.push(`update ${source.ref} ${candidate.get(source.ref)!.oid} ${source.oid}`);
+  }
+  commands.push("prepare", "commit", "");
+  await runGit(root, ["update-ref", "--no-deref", "--stdin"], {
+    input: commands.join("\n"),
+  });
   return sourceRefs.map((item) => ({
-    ref: item.ref,
-    oid: candidate.get(item.ref)!,
+    ...candidate.get(item.ref)!,
     symref: item.symref,
   }));
 }
@@ -830,26 +912,40 @@ function sameRefSnapshot(a: RefState[], b: RefState[]): boolean {
   });
 }
 
-async function verifyPathAbsent(root: string, target: string): Promise<void> {
-  const refs = (await refNames(root, "refs")).filter((ref) => !ref.startsWith("refs/original/"));
-  for (const ref of refs) {
-    try {
-      await runGit(root, ["rev-parse", "--verify", `${ref}^{commit}`]);
-    } catch {
-      // A custom ref may directly name a blob or tree. It has no commit history
-      // for a repository path, so there is nothing to verify through git log.
-      continue;
-    }
-    const { stdout } = await runGit(root, [
-      "log",
-      ref,
-      "--format=%H",
-      "--",
-      `:(literal)${target}`,
-    ]);
+async function verifyPathAbsent(
+  root: string,
+  target: string,
+  expectedRefs: RefState[],
+): Promise<void> {
+  const refs = expectedRefs.filter((item) => !item.ref.startsWith("refs/original/"));
+  const commits = [...new Set(refs.map(refCommitOid).filter((oid): oid is string => Boolean(oid)))];
+  if (commits.length) {
+    const { stdout } = await runGit(
+      root,
+      ["rev-list", "--stdin", "--max-count=1", "--no-renames", "--", `:(literal)${target}`],
+      { input: `${commits.join("\n")}\n` },
+    );
     if (stdout.trim()) {
-      throw new Error(`Verification failed: ${target} is still present at ${ref}`);
+      for (const ref of refs) {
+        const oid = refCommitOid(ref);
+        if (!oid) continue;
+        const result = await runGit(root, [
+          "rev-list",
+          "--max-count=1",
+          "--no-renames",
+          oid,
+          "--",
+          `:(literal)${target}`,
+        ]);
+        if (result.stdout.trim()) {
+          throw new Error(`Verification failed: ${target} is still present at ${ref.ref}`);
+        }
+      }
+      throw new Error(`Verification failed: ${target} is still present in reachable history`);
     }
+  }
+  if (!sameRefSnapshot(expectedRefs, await refSnapshot(root))) {
+    throw httpError(409, "Repository refs changed during history verification");
   }
 }
 
@@ -898,16 +994,34 @@ async function expireRecoveryReflogs(root: string): Promise<void> {
   // Preserve the rebuilt stash stack while removing every other local route to
   // the pre-rewrite commits. We cannot use --all because that would erase the
   // stash stack that was explicitly reconstructed with sanitized commits.
-  await runGit(root, ["reflog", "expire", "--expire=now", "HEAD"]);
-  for (const ref of await refNames(root, "refs")) {
-    if (ref === "refs/stash") continue;
-    try {
-      await runGit(root, ["reflog", "exists", ref]);
-    } catch {
-      continue;
-    }
-    await runGit(root, ["reflog", "expire", "--expire=now", ref]);
+  const reflogs = new Set<string>(["HEAD"]);
+  const { stdout } = await runGit(root, ["reflog", "show", "--all", "--format=%gD"]);
+  for (const line of stdout.split(/\r?\n/)) {
+    const marker = line.lastIndexOf("@{");
+    if (marker > 0 && line.endsWith("}")) reflogs.add(line.slice(0, marker));
   }
+  reflogs.delete("refs/stash");
+  for (const batch of argumentBatches([...reflogs], 8_000)) {
+    await runGit(root, ["reflog", "expire", "--expire=now", ...batch]);
+  }
+}
+
+function argumentBatches(values: string[], maxLength: number): string[][] {
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let length = 0;
+  for (const value of values) {
+    const cost = value.length + 3;
+    if (batch.length && length + cost > maxLength) {
+      batches.push(batch);
+      batch = [];
+      length = 0;
+    }
+    batch.push(value);
+    length += cost;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
 }
 
 async function verifyRecoveryReflogsClean(root: string, target: string): Promise<void> {

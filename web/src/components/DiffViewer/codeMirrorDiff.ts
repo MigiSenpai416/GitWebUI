@@ -8,7 +8,8 @@ import {
 } from "@codemirror/view";
 import { EditorState, StateEffect, StateField, RangeSetBuilder, type Extension } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
+import { languages } from "@codemirror/language-data";
 import { tags as t } from "@lezer/highlight";
 import type { DiffRow } from "../../types";
 
@@ -127,29 +128,16 @@ function firstMatchEndingAfter(ranges: readonly number[], position: number, coun
   return low;
 }
 
-/** Lazily import the CodeMirror language for a coarse language id. */
-export async function loadLanguage(lang: string): Promise<Extension | null> {
+/** Lazily load the CodeMirror language matching a file path. */
+export async function loadLanguage(path: string, fallbackLanguage: string): Promise<Extension | null> {
+  const filename = path.split(/[\\/]/).pop() ?? path;
+  const description =
+    LanguageDescription.matchFilename(languages, filename) ??
+    LanguageDescription.matchLanguageName(languages, fallbackLanguage, false);
+  if (!description) return null;
+
   try {
-    switch (lang) {
-      case "javascript":
-        return (await import("@codemirror/lang-javascript")).javascript({ jsx: true });
-      case "typescript":
-        return (await import("@codemirror/lang-javascript")).javascript({ jsx: true, typescript: true });
-      case "cpp":
-        return (await import("@codemirror/lang-cpp")).cpp();
-      case "python":
-        return (await import("@codemirror/lang-python")).python();
-      case "json":
-        return (await import("@codemirror/lang-json")).json();
-      case "markdown":
-        return (await import("@codemirror/lang-markdown")).markdown();
-      case "html":
-        return (await import("@codemirror/lang-html")).html();
-      case "css":
-        return (await import("@codemirror/lang-css")).css();
-      default:
-        return null;
-    }
+    return await description.load();
   } catch {
     return null;
   }
@@ -255,6 +243,7 @@ export const editorTheme = EditorView.theme(
     },
     ".cm-scroller": {
       fontFamily: "var(--font-mono)",
+      fontVariantLigatures: "none",
       lineHeight: "1.5",
       overflow: "auto",
     },

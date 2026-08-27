@@ -105,7 +105,7 @@ export function DiffViewer() {
     let disposed = false;
 
     const build = async () => {
-      const langExt = await loadLanguage(diff.language);
+      const langExt = await loadLanguage(diff.path, diff.language);
       if (disposed || !hostRef.current) return;
 
       const doc =

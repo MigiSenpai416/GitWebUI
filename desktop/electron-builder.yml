@@ -18,9 +18,9 @@ files:
   - package.json
 
 # Nothing needs to sit outside the archive: every process this app spawns —
-# git, the user's shell, taskkill, the file manager — is a system binary found
-# by absolute path, never one we ship. That is also why there are no
-# asarUnpack rules and no extraResources.
+# git, optional git-filter-repo, the user's shell, taskkill, the file manager —
+# is a host tool, never one we ship. That is also why there are no asarUnpack
+# rules and no extraResources.
 asar: true
 
 # There are no native modules (the server's only runtime dependency is
@@ -28,16 +28,16 @@ asar: true
 # rebuild against Electron's ABI.
 npmRebuild: false
 
-# The one thing the machine still needs is git. Said here so it survives into
-# the package metadata rather than living only in the README.
+# Git is required; history deletion additionally needs git-filter-repo. Said
+# here so it survives into the package metadata rather than living only in the
+# README.
 extraMetadata:
-  description: A local, GitKraken-style git client. Requires git on the host.
+  description: A local Git client. Requires git; history deletion requires git-filter-repo.
 
 win:
   icon: build/icon.ico
-  # One standalone executable, no installer. Everything the app needs — Electron,
-  # the Express server, the built UI — is inside it; the only thing it expects to
-  # find on the machine is git.
+  # One standalone executable, no installer. Electron, the Express server and
+  # the built UI are inside it; git and optional git-filter-repo remain host tools.
   target:
     - target: portable
       arch: [x64]

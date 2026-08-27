@@ -42,6 +42,13 @@ export interface HistoryDeleteResult {
 const activeRewrites = new Set<string>();
 const activeMutations = new Map<string, number>();
 
+const FILTER_REPO_INSTALL_ERROR =
+  "Deleting from Git history requires git-filter-repo, but GitWebUI could not run it. " +
+  "Install it on the GitWebUI host (Windows: pipx install git-filter-repo or scoop install git-filter-repo; " +
+  "macOS: brew install git-filter-repo; Linux: use your package manager or pipx), " +
+  "restart GitWebUI, and verify with git filter-repo --version. " +
+  "It requires Git 2.36+ and Python 3.6+. Installation guide: https://github.com/newren/git-filter-repo/blob/main/INSTALL.md";
+
 interface IndexTransition {
   indexPath: string;
   backupPath: string;
@@ -130,6 +137,7 @@ export async function deletePathFromHistory(
   let cleanupIrreversible = false;
   let indexTransition: IndexTransition | null = null;
   try {
+    await requireFilterRepo(root);
     const oldHead = await preflight(root, target, input.expectedHead);
     fetchHeadBefore = await readPseudoRefFile(root, "FETCH_HEAD");
     origHeadBefore = await readPseudoRefFile(root, "ORIG_HEAD");
@@ -150,30 +158,23 @@ export async function deletePathFromHistory(
     mirrorDir = path.join(mirrorParent, "repository.git");
     await runGit(root, ["clone", "--mirror", "--no-hardlinks", root, mirrorDir]);
 
-    // A narrow, index-only filter is the one filter-branch use case we need.
-    // The target is never interpolated into this program: /bin/sh expands it
-    // from an environment variable inside double quotes, and Git treats the
-    // resulting value as a literal pathspec.
-    const indexFilter =
-      'git rm -r --cached --ignore-unmatch -- ":(literal)$GITWEBUI_DELETE_PATH"';
-    await runGit(
-      mirrorDir,
-      [
-        "filter-branch",
-        "--index-filter",
-        indexFilter,
-        "--tag-name-filter",
-        "cat",
-        "--",
-        "--all",
-      ],
-      {
-        env: {
-          FILTER_BRANCH_SQUELCH_WARNING: "1",
-          GITWEBUI_DELETE_PATH: target,
-        },
-      },
-    );
+    // The disposable mirror and outer ref transaction provide the isolation
+    // normally lost with --partial. Partial mode is intentional here: it keeps
+    // remote-tracking ref names stable and leaves cleanup to the guarded live
+    // repository workflow below. Preserve empty commits to match the existing
+    // File Manager rewrite semantics. Stash refs fail filter-repo's fresh-clone
+    // heuristic, so --force is safe and necessary only in this temporary clone.
+    await runGit(mirrorDir, [
+      "filter-repo",
+      "--force",
+      "--partial",
+      "--invert-paths",
+      `--path=${target}`,
+      "--prune-empty=never",
+      "--prune-degenerate=never",
+      "--preserve-commit-hashes",
+      "--preserve-commit-encoding",
+    ]);
     await migrateStashNotes(mirrorDir, stashRecovery);
 
     // Validate in the isolated mirror before a single ref in the live repo
@@ -271,6 +272,20 @@ export async function deletePathFromHistory(
   }
 }
 
+async function requireFilterRepo(root: string): Promise<void> {
+  try {
+    await runGit(root, ["filter-repo", "--version"]);
+  } catch (error) {
+    if (error instanceof GitError && /\bENOENT\b|No such file/i.test(error.message)) {
+      throw httpError(
+        422,
+        `GitWebUI could not run the configured Git executable. Reinstall or locate Git, then retry. (${errorMessage(error)})`,
+      );
+    }
+    throw httpError(422, `${FILTER_REPO_INSTALL_ERROR} (${errorMessage(error)})`);
+  }
+}
+
 export function parseLsTree(stdout: string): HeadFileEntry[] {
   const entries: HeadFileEntry[] = [];
   for (const record of stdout.split("\0")) {
@@ -298,6 +313,13 @@ async function preflight(root: string, target: string, expectedHead: string): Pr
   if (!head) throw httpError(409, "The repository has no commits to rewrite");
   if (head.toLowerCase() !== expectedHead.toLowerCase()) {
     throw httpError(409, "HEAD changed since the File Manager loaded. Refresh it and try again");
+  }
+  const objectFormat = await gitText(root, ["rev-parse", "--show-object-format"]);
+  if (objectFormat !== "sha1") {
+    throw httpError(
+      422,
+      `git-filter-repo does not support this repository's ${objectFormat} object format; only SHA-1 repositories can currently be rewritten. Nothing was rewritten`,
+    );
   }
 
   try {
@@ -815,7 +837,7 @@ async function verifyPathAbsent(root: string, target: string): Promise<void> {
       await runGit(root, ["rev-parse", "--verify", `${ref}^{commit}`]);
     } catch {
       // A custom ref may directly name a blob or tree. It has no commit history
-      // for a repository path and filter-branch intentionally leaves it alone.
+      // for a repository path, so there is nothing to verify through git log.
       continue;
     }
     const { stdout } = await runGit(root, [

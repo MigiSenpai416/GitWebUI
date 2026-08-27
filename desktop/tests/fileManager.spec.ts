@@ -60,6 +60,7 @@ test.describe.serial("File Manager history deletion", () => {
     await window.getByRole("menuitem", { name: "Delete directory from history…" }).click();
     const confirm = window.getByRole("alertdialog", { name: "Confirm history rewrite" });
     await expect(confirm).toBeVisible();
+    await expect(confirm).toContainText("requires git-filter-repo");
     await expect(confirm).toContainText("Unreachable old Git objects may remain until pruning");
     await expect(confirm).toContainText("Non-stash reflogs are cleared");
     await confirm.getByLabel("Type the exact repository path to confirm:").press("Escape");

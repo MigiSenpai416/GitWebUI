@@ -84,8 +84,10 @@ them instead, and nothing in `server/` or `web/` is Windows-specific.
 - **`git` installed.** Everything in the app shells out to it. The desktop app
   looks for it on your `PATH` and in the usual install locations, and offers to
   be pointed at it if it can't find one.
+- **`git-filter-repo` for File Manager history deletion.** This optional feature
+  also requires Python; all other GitWebUI features work without it.
 - To build from source: Node.js 20+ (developed on 24) and npm 10+. The desktop
-  app itself bundles its own Node, so installing it needs nothing but `git`.
+  app itself bundles its own Node.
 
 ## Getting started (development)
 
@@ -111,7 +113,8 @@ npm run dist         # → release/desktop/GitWebUI-0.1.0.exe
 
 One standalone executable, about 90 MB. There is no installer: copy it wherever
 you like and run it. Electron, the Express server and the built UI are all
-inside it, and the only thing it expects to find on the machine is `git`.
+inside it. The host needs `git`; File Manager history deletion additionally
+needs `git-filter-repo` and Python.
 
 Running it unpacks to `%LOCALAPPDATA%\Temp\GitWebUI`, so the first launch is a
 little slower than the ones after it. Your settings do not live there — they go
@@ -196,6 +199,26 @@ By default the server runs whatever `git` is on its `PATH`. Set
 service started with a minimal environment, or several git installations on one
 machine.
 
+### Deleting files from Git history
+
+The File Manager's history-deletion action requires
+[`git-filter-repo`](https://github.com/newren/git-filter-repo). The rest of
+GitWebUI does not require it. Install the tool, restart GitWebUI, and confirm
+that it is available in the app's environment:
+
+```bash
+git filter-repo --version
+```
+
+The recommended cross-platform installation is `pipx install git-filter-repo`;
+`uv tool install git-filter-repo` is also supported. Windows users can use
+`scoop install git-filter-repo`, and macOS users can use
+`brew install git-filter-repo`. The tool requires Git 2.36 or newer and Python
+3.6 or newer. Its current rewrite engine supports SHA-1 repositories only;
+GitWebUI rejects SHA-256 repositories before creating recovery artifacts. See the
+[`git-filter-repo` installation guide](https://github.com/newren/git-filter-repo/blob/main/INSTALL.md)
+for platform-specific help.
+
 ### First run & authentication
 
 On the first visit you'll be asked to **set a password**; every later visit asks
@@ -250,8 +273,9 @@ is optional; it's only needed for authenticated HTTPS actions.
 ### Standalone binaries
 
 Build self-contained executables that run without Node installed on the target
-(the machine still needs `git`). Requires **[Bun](https://bun.sh)** on the build
-machine; it cross-compiles both targets from either OS:
+(the machine still needs `git`, plus `git-filter-repo` and Python for history
+deletion). Requires **[Bun](https://bun.sh)** on the build machine; it
+cross-compiles both targets from either OS:
 
 ```bash
 npm run build:exe            # builds the web UI, embeds it, emits both binaries

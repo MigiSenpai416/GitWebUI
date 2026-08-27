@@ -11,6 +11,7 @@ import {
   parseLsTree,
 } from "./historyFiles.js";
 import { runGit } from "./gitRunner.js";
+import { gitPath, hasGitPathOverride, resolveGitPath, setGitPath } from "./gitPath.js";
 import { getStashes, setStashNote } from "./stash.js";
 
 const BASE = path.join(os.tmpdir(), `gitwebui-history-files-${randomBytes(6).toString("hex")}`);
@@ -213,6 +214,142 @@ describe("deletePathFromHistory", () => {
     await expect(fs.access(path.join(ROOT, "private"))).rejects.toThrow();
   }, 30_000);
 
+  it("removes a path that begins with an option-like dash", async () => {
+    const target = "--help";
+    await fs.writeFile(path.join(ROOT, target), "secret\n");
+    await fs.writeFile(path.join(ROOT, "keep.txt"), "keep\n");
+    const head = await commitAll("option-like path");
+
+    await deletePathFromHistory(ROOT, {
+      path: target,
+      expectedHead: head,
+      confirmation: target,
+    });
+
+    expect(
+      (await runGit(ROOT, ["log", "--all", "--format=%H", "--", `:(literal)${target}`])).stdout.trim(),
+    ).toBe("");
+    expect((await runGit(ROOT, ["show", "HEAD:keep.txt"])).stdout).toContain("keep");
+  }, 30_000);
+
+  it("does not rewrite old commit hashes mentioned in commit messages", async () => {
+    await fs.writeFile(path.join(ROOT, "secret.txt"), "secret\n");
+    await fs.writeFile(path.join(ROOT, "keep.txt"), "one\n");
+    const referenced = await commitAll("secret");
+    await fs.writeFile(path.join(ROOT, "keep.txt"), "two\n");
+    const head = await commitAll(`keep references ${referenced}`);
+
+    await deletePathFromHistory(ROOT, {
+      path: "secret.txt",
+      expectedHead: head,
+      confirmation: "secret.txt",
+    });
+
+    expect((await runGit(ROOT, ["log", "-1", "--format=%B"])).stdout).toContain(referenced);
+  }, 30_000);
+
+  it("fails with installation guidance before creating recovery artifacts", async () => {
+    await fs.writeFile(path.join(ROOT, "secret.txt"), "secret\n");
+    const head = await commitAll("secret");
+    const emptyPath = path.join(BASE, "empty-path");
+    await fs.mkdir(emptyPath);
+    const previousGitPath = gitPath();
+    const previousGitPathOverride = hasGitPathOverride();
+    const previousPath = process.env.PATH;
+    const previousExecPath = process.env.GIT_EXEC_PATH;
+    const executable = path.isAbsolute(previousGitPath)
+      ? previousGitPath
+      : await resolveGitPath();
+    if (!executable) throw new Error("The history rewrite test requires git");
+
+    try {
+      setGitPath(executable);
+      process.env.PATH = emptyPath;
+      process.env.GIT_EXEC_PATH = emptyPath;
+      await expect(
+        deletePathFromHistory(ROOT, {
+          path: "secret.txt",
+          expectedHead: head,
+          confirmation: "secret.txt",
+        }),
+      ).rejects.toMatchObject({
+        status: 422,
+        message: expect.stringContaining("pipx install git-filter-repo"),
+      });
+      await expect(
+        deletePathFromHistory(ROOT, {
+          path: "secret.txt",
+          expectedHead: head,
+          confirmation: "secret.txt",
+        }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("git filter-repo --version"),
+      });
+      await expect(fs.readdir(path.join(CONFIG, "history-backups"))).rejects.toThrow();
+    } finally {
+      setGitPath(previousGitPathOverride ? previousGitPath : null);
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousExecPath === undefined) delete process.env.GIT_EXEC_PATH;
+      else process.env.GIT_EXEC_PATH = previousExecPath;
+    }
+    expect((await runGit(ROOT, ["rev-parse", "HEAD"])).stdout.trim()).toBe(head);
+    expect(await fs.readFile(path.join(ROOT, "secret.txt"), "utf8")).toBe("secret\n");
+    expect(
+      (await runGit(ROOT, ["for-each-ref", "--format=%(refname)", "refs/gitwebui-history-rewrite"])).stdout.trim(),
+    ).toBe("");
+  });
+
+  it("rejects SHA-256 repositories before creating recovery artifacts", async () => {
+    const sha256Root = path.join(BASE, "sha256");
+    await fs.mkdir(sha256Root);
+    await runGit(sha256Root, ["init", "--object-format=sha256", "-b", "main"]);
+    await runGit(sha256Root, ["config", "user.name", "History Tester"]);
+    await runGit(sha256Root, ["config", "user.email", "history@example.com"]);
+    await fs.writeFile(path.join(sha256Root, "secret.txt"), "secret\n");
+    await runGit(sha256Root, ["add", "-A"]);
+    await runGit(sha256Root, ["commit", "-m", "secret"]);
+    const head = (await runGit(sha256Root, ["rev-parse", "HEAD"])).stdout.trim();
+
+    await expect(
+      deletePathFromHistory(sha256Root, {
+        path: "secret.txt",
+        expectedHead: head,
+        confirmation: "secret.txt",
+      }),
+    ).rejects.toMatchObject({
+      status: 422,
+      message: expect.stringContaining("SHA-1 repositories"),
+    });
+    expect((await runGit(sha256Root, ["rev-parse", "HEAD"])).stdout.trim()).toBe(head);
+    expect(await fs.readFile(path.join(sha256Root, "secret.txt"), "utf8")).toBe("secret\n");
+    await expect(fs.readdir(path.join(CONFIG, "history-backups"))).rejects.toThrow();
+  });
+
+  it("distinguishes a missing Git executable from missing git-filter-repo", async () => {
+    await fs.writeFile(path.join(ROOT, "secret.txt"), "secret\n");
+    const head = await commitAll("secret");
+    const previousGitPath = gitPath();
+    const previousGitPathOverride = hasGitPathOverride();
+
+    try {
+      setGitPath(path.join(BASE, "missing-git"));
+      await expect(
+        deletePathFromHistory(ROOT, {
+          path: "secret.txt",
+          expectedHead: head,
+          confirmation: "secret.txt",
+        }),
+      ).rejects.toMatchObject({
+        status: 422,
+        message: expect.stringContaining("configured Git executable"),
+      });
+    } finally {
+      setGitPath(previousGitPathOverride ? previousGitPath : null);
+    }
+    await expect(fs.readdir(path.join(CONFIG, "history-backups"))).rejects.toThrow();
+  });
+
   it.skipIf(process.platform !== "win32")(
     "rejects case-colliding retained paths before moving the Windows worktree entry",
     async () => {
@@ -339,5 +476,5 @@ describe("deletePathFromHistory", () => {
       }),
     ).rejects.toMatchObject({ status: 409 });
     expect((await runGit(ROOT, ["rev-parse", "HEAD"])).stdout.trim()).toBe(head);
-  });
+  }, 30_000);
 });

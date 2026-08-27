@@ -458,6 +458,7 @@ export function FileManager({ open, onClose }: Props) {
               </p>
               <ul>
                 <li>All local branches, tags, remote-tracking refs, and stashes are rewritten.</li>
+                <li>This operation requires <code>git-filter-repo</code> to be installed and currently supports SHA-1 repositories only.</li>
                 <li>Commit IDs change; published refs will require a coordinated force-push.</li>
                 <li>Remote repositories and other clones are not changed automatically.</li>
                 <li>Earlier names from renames are not inferred; only this exact path is removed.</li>

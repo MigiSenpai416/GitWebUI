@@ -87,6 +87,7 @@ import { GitError } from "./git/gitRunner.js";
 import {
   beginRepoMutation,
   deletePathFromHistory,
+  getHeadFileContent,
   getHeadFileTree,
   isHistoryRewriteActive,
 } from "./git/historyFiles.js";
@@ -405,6 +406,13 @@ api.post("/file/delete", h(async (req, res) => {
 api.get("/history-files", h(async (req, res) => {
   const root = requireRepoRoot(req);
   res.json(await getHeadFileTree(root));
+}));
+
+api.get("/history-files/content", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const path = String(req.query.path ?? "");
+  const head = String(req.query.head ?? "");
+  res.json(await getHeadFileContent(root, path, head));
 }));
 
 api.post("/history-files/delete", h(async (req, res) => {

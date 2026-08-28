@@ -7,6 +7,7 @@ import { setConfigDir } from "../config.js";
 import {
   beginRepoMutation,
   deletePathFromHistory,
+  getHeadFileContent,
   getHeadFileTree,
   parseLsTree,
 } from "./historyFiles.js";
@@ -83,6 +84,76 @@ describe("HEAD file tree", () => {
       { path: "vendor/lib", mode: "160000", kind: "submodule", size: null },
       { path: "file.txt", mode: "100644", kind: "file", size: 12 },
     ]);
+  });
+});
+
+describe("HEAD file content", () => {
+  it("reads the exact snapshot rather than the working-tree file", async () => {
+    const target = "odd [x] '$file.txt";
+    await fs.writeFile(path.join(ROOT, target), "committed\n");
+    const head = await commitAll("file");
+    await fs.writeFile(path.join(ROOT, target), "working tree\n");
+
+    await expect(getHeadFileContent(ROOT, target, head)).resolves.toMatchObject({
+      path: target,
+      head,
+      content: "committed\n",
+      binary: false,
+      tooLarge: false,
+    });
+  });
+
+  it("reads Git tree paths that are not valid Windows working-tree paths", async () => {
+    const target = "folder\\file.txt";
+    const blob = await hashObject("tree-only\n");
+    const tree = await makeTree([{ mode: "100644", type: "blob", oid: blob, name: target }]);
+    const head = (await runGit(ROOT, ["commit-tree", tree, "-m", "tree-only file"])).stdout.trim();
+    await runGit(ROOT, ["update-ref", "refs/heads/main", head]);
+
+    await expect(getHeadFileTree(ROOT)).resolves.toMatchObject({
+      head,
+      entries: [{ path: target }],
+    });
+    await expect(getHeadFileContent(ROOT, target, head)).resolves.toMatchObject({
+      path: target,
+      content: "tree-only\n",
+      binary: false,
+      tooLarge: false,
+    });
+  });
+
+  it("reads a small current blob without generating its large parent diff", async () => {
+    const target = "large-parent.txt";
+    await fs.writeFile(path.join(ROOT, target), Buffer.alloc(10 * 1024 * 1024 + 1, 0x61));
+    const largeHead = await commitAll("large file");
+    await fs.writeFile(path.join(ROOT, target), "small now\n");
+    const smallHead = await commitAll("small file");
+
+    await expect(getHeadFileContent(ROOT, target, largeHead)).resolves.toMatchObject({
+      content: null,
+      binary: false,
+      tooLarge: true,
+      size: 10 * 1024 * 1024 + 1,
+    });
+    await expect(getHeadFileContent(ROOT, target, smallHead)).resolves.toMatchObject({
+      content: "small now\n",
+      binary: false,
+      tooLarge: false,
+      size: 10,
+    });
+  });
+
+  it("reports binary blobs without sending their content", async () => {
+    const target = "binary.bin";
+    await fs.writeFile(path.join(ROOT, target), Buffer.from([0x00, 0x01, 0x02]));
+    const head = await commitAll("binary file");
+
+    await expect(getHeadFileContent(ROOT, target, head)).resolves.toMatchObject({
+      content: null,
+      binary: true,
+      tooLarge: false,
+      size: 3,
+    });
   });
 });
 

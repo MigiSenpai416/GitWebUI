@@ -10,6 +10,7 @@ import type {
   GitHubRepo,
   GitHubStatus,
   GitHubUser,
+  HeadFileContent,
   HeadFileTree,
   HistoryDeleteResult,
   IdentityInfo,
@@ -246,6 +247,10 @@ export const api = {
   deleteFile: (path: string) =>
     req<StatusResult>("/api/file/delete", { method: "POST", body: JSON.stringify({ path }) }),
   historyFiles: () => req<HeadFileTree>("/api/history-files"),
+  historyFileContent: (path: string, head: string) => {
+    const params = new URLSearchParams({ path, head });
+    return req<HeadFileContent>(`/api/history-files/content?${params.toString()}`);
+  },
   deleteFromHistory: (path: string, expectedHead: string, confirmation: string) =>
     req<HistoryDeleteResult>("/api/history-files/delete", {
       method: "POST",

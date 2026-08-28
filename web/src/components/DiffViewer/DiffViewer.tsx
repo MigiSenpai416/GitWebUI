@@ -9,6 +9,7 @@ import {
   computeHunks,
   diffViewExtensions,
   fileViewExtensions,
+  findTextMatchRanges,
   loadLanguage,
   setSearchHighlights,
 } from "./codeMirrorDiff";
@@ -416,16 +417,4 @@ function renderPath(path: string): React.ReactNode {
       <span className="dv-path-name">{name}</span>
     </>
   );
-}
-
-/** Flat literal, case-insensitive match ranges using original-text offsets. */
-export function findTextMatchRanges(text: string, query: string): number[] {
-  if (!query) return [];
-  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const matcher = new RegExp(escaped, "giu");
-  const ranges: number[] = [];
-  for (const match of text.matchAll(matcher)) {
-    ranges.push(match.index, match.index + match[0].length);
-  }
-  return ranges;
 }

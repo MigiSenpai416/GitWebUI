@@ -23,6 +23,15 @@ export interface HeadFileTree {
   entries: HeadFileEntry[];
 }
 
+export interface HeadFileContent {
+  path: string;
+  head: string;
+  content: string | null;
+  binary: boolean;
+  tooLarge: boolean;
+  size: number;
+}
+
 export interface HistoryDeleteInput {
   path: string;
   expectedHead: string;
@@ -41,6 +50,7 @@ export interface HistoryDeleteResult {
 
 const activeRewrites = new Set<string>();
 const activeMutations = new Map<string, number>();
+const MAX_HEAD_FILE_PREVIEW_BYTES = 10 * 1024 * 1024;
 
 const FILTER_REPO_INSTALL_ERROR =
   "Deleting from Git history requires git-filter-repo, but GitWebUI could not run it. " +
@@ -92,6 +102,56 @@ export async function getHeadFileTree(root: string): Promise<HeadFileTree> {
     head,
   ]);
   return { head, entries: parseLsTree(stdout) };
+}
+
+/** Read one file blob from the exact HEAD snapshot shown by the File Manager. */
+export async function getHeadFileContent(
+  root: string,
+  value: string,
+  expectedHead: string,
+): Promise<HeadFileContent> {
+  const target = validateGitTreePath(value);
+  if (!/^[0-9a-fA-F]{40,64}$/.test(expectedHead)) {
+    throw httpError(400, "A valid HEAD is required");
+  }
+
+  let head: string;
+  try {
+    head = await gitText(root, ["rev-parse", "--verify", `${expectedHead}^{commit}`]);
+  } catch {
+    throw httpError(409, "The File Manager HEAD snapshot is no longer available. Refresh it and try again");
+  }
+  if (head.toLowerCase() !== expectedHead.toLowerCase()) {
+    throw httpError(400, "A full HEAD commit ID is required");
+  }
+
+  const { stdout } = await runGit(root, [
+    "ls-tree",
+    "-r",
+    "-z",
+    "-l",
+    "--full-tree",
+    head,
+  ]);
+  const entry = parseLsTreeRecords(stdout).find((candidate) => candidate.path === target);
+  if (!entry) throw httpError(409, `The path does not exist at the File Manager HEAD: ${target}`);
+  if (entry.kind === "submodule" || entry.size == null) {
+    throw httpError(422, "Git submodules do not have file content to preview");
+  }
+  if (entry.size > MAX_HEAD_FILE_PREVIEW_BYTES) {
+    return { path: target, head, content: null, binary: false, tooLarge: true, size: entry.size };
+  }
+
+  const content = (await runGit(root, ["cat-file", "blob", entry.oid])).stdout;
+  const binary = content.slice(0, 8000).includes(String.fromCharCode(0));
+  return {
+    path: target,
+    head,
+    content: binary ? null : content,
+    binary,
+    tooLarge: false,
+    size: entry.size,
+  };
 }
 
 /**
@@ -302,17 +362,22 @@ async function requireFilterRepo(root: string): Promise<void> {
 }
 
 export function parseLsTree(stdout: string): HeadFileEntry[] {
-  const entries: HeadFileEntry[] = [];
+  return parseLsTreeRecords(stdout).map(({ oid: _oid, ...entry }) => entry);
+}
+
+function parseLsTreeRecords(stdout: string): Array<HeadFileEntry & { oid: string }> {
+  const entries: Array<HeadFileEntry & { oid: string }> = [];
   for (const record of stdout.split("\0")) {
     if (!record) continue;
     const tab = record.indexOf("\t");
     if (tab < 0) continue;
     const meta = record.slice(0, tab).trim().split(/\s+/);
-    const [mode, type, , rawSize] = meta;
-    if (!mode || !type) continue;
+    const [mode, type, oid, rawSize] = meta;
+    if (!mode || !type || !oid) continue;
     entries.push({
       path: record.slice(tab + 1),
       mode,
+      oid,
       kind: mode === "120000" ? "symlink" : type === "commit" ? "submodule" : "file",
       size: rawSize && /^\d+$/.test(rawSize) ? Number(rawSize) : null,
     });
@@ -440,6 +505,14 @@ function validateRepoPath(value: string): string {
   const parts = target.split("/");
   if (parts.some((part) => !part || part === "." || part === "..")) {
     throw httpError(400, "Invalid repository path");
+  }
+  return target;
+}
+
+function validateGitTreePath(value: string): string {
+  const target = String(value ?? "");
+  if (!target || target.includes("\0")) {
+    throw httpError(400, "A valid Git tree path is required");
   }
   return target;
 }

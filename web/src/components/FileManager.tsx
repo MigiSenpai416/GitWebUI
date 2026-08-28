@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { writeClipboard } from "../desktop";
 import { useStore } from "../state/store";
 import type { HeadEntryKind, HeadFileEntry, HistoryDeleteResult } from "../types";
+import { FileManagerPreview } from "./FileManagerPreview";
 import {
   IconChevron,
   IconChevronDown,
@@ -49,6 +50,7 @@ export function FileManager({ open, onClose }: Props) {
   const [error, setError] = useState("");
   const [currentPath, setCurrentPath] = useState("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -104,6 +106,18 @@ export function FileManager({ open, onClose }: Props) {
     }, 0);
   }, []);
 
+  const closePreview = useCallback(() => {
+    const path = previewPath;
+    setPreviewPath(null);
+    setError("");
+    window.setTimeout(() => {
+      const row = Array.from(rowsRef.current?.querySelectorAll<HTMLButtonElement>(".fm-row") ?? [])
+        .find((candidate) => candidate.title === path);
+      if (row) row.focus();
+      else dialogRef.current?.focus();
+    }, 0);
+  }, [previewPath]);
+
   const load = async () => {
     if (!repo) return;
     const requestRoot = repo.root;
@@ -123,6 +137,7 @@ export function FileManager({ open, onClose }: Props) {
       const dirs = directoryPaths(tree.entries);
       if (currentPath && !dirs.has(currentPath)) setCurrentPath("");
       if (selectedPath && !paths.has(selectedPath) && !dirs.has(selectedPath)) setSelectedPath(null);
+      if (previewPath && !paths.has(previewPath)) setPreviewPath(null);
     } catch (cause) {
       if (generation === loadGeneration.current && useStore.getState().repo?.root === requestRoot) {
         setError(messageOf(cause));
@@ -141,6 +156,7 @@ export function FileManager({ open, onClose }: Props) {
     setEntries([]);
     setCurrentPath("");
     setSelectedPath(null);
+    setPreviewPath(null);
     setQuery("");
     setExpanded(new Set([""]));
     setMenu(null);
@@ -174,6 +190,8 @@ export function FileManager({ open, onClose }: Props) {
         closeConfirmation();
       } else if (menu) {
         dismissMenu();
+      } else if (previewPath) {
+        closePreview();
       } else {
         onClose();
       }
@@ -208,7 +226,7 @@ export function FileManager({ open, onClose }: Props) {
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("keydown", trapFocus);
     };
-  }, [closeConfirmation, deleting, dismissMenu, menu, onClose, open, pendingDelete]);
+  }, [closeConfirmation, closePreview, deleting, dismissMenu, menu, onClose, open, pendingDelete, previewPath]);
 
   useEffect(() => {
     if (!menu) return;
@@ -226,8 +244,22 @@ export function FileManager({ open, onClose }: Props) {
     if (node.kind !== "directory") return;
     setCurrentPath(node.path);
     setSelectedPath(node.path);
+    setPreviewPath(null);
     setQuery("");
     setExpanded((before) => withAncestors(before, node.path));
+  };
+
+  const openNode = (node: BrowserNode) => {
+    if (node.kind === "directory") {
+      navigate(node);
+      return;
+    }
+    if (node.kind === "submodule" || !head) return;
+    setSelectedPath(node.path);
+    setPreviewPath(node.path);
+    setMenu(null);
+    menuInvoker.current = null;
+    setError("");
   };
 
   const openMenu = (event: React.MouseEvent, node: BrowserNode) => {
@@ -336,7 +368,10 @@ export function FileManager({ open, onClose }: Props) {
             <IconSearch />
             <input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPreviewPath(null);
+              }}
               placeholder="Search tracked files"
               aria-label="Search tracked files"
             />
@@ -373,7 +408,15 @@ export function FileManager({ open, onClose }: Props) {
             />
           </aside>
 
-          <main className="fm-list" onContextMenu={(e) => e.preventDefault()}>
+          {previewPath && head ? (
+            <FileManagerPreview
+              path={previewPath}
+              head={head}
+              shortcutsBlocked={!!menu || !!pendingDelete}
+              onClose={closePreview}
+              onError={setError}
+            />
+          ) : <main className="fm-list" onContextMenu={(e) => e.preventDefault()}>
             <div className="fm-columns">
               <span>Name</span>
               <span>Type</span>
@@ -394,7 +437,8 @@ export function FileManager({ open, onClose }: Props) {
                         key={`${node.kind}:${node.path}`}
                         style={{ transform: `translateY(${virtualRow.start}px)` }}
                         onClick={() => setSelectedPath(node.path)}
-                        onDoubleClick={() => navigate(node)}
+                        onDoubleClick={() => openNode(node)}
+                        onKeyDown={(event) => event.key === "Enter" && openNode(node)}
                         onContextMenu={(event) => openMenu(event, node)}
                         title={node.path}
                       >
@@ -417,10 +461,10 @@ export function FileManager({ open, onClose }: Props) {
                   ? `Showing first ${shown.length} of ${searchResult.total} matches — refine the search`
                   : selected
                     ? selected.path || repoName
-                    : "Right-click a file or folder for actions"}
+                    : "Double-click to open; right-click for actions"}
               </span>
             </footer>
-          </main>
+          </main>}
         </div>
 
         {menu && (
@@ -436,6 +480,11 @@ export function FileManager({ open, onClose }: Props) {
             {menu.node.kind === "directory" && (
               <button role="menuitem" onClick={() => { navigate(menu.node); dismissMenu(); }}>
                 <IconFolder /> Open folder
+              </button>
+            )}
+            {(menu.node.kind === "file" || menu.node.kind === "symlink") && (
+              <button role="menuitem" onClick={() => openNode(menu.node)}>
+                <IconFile /> Open file
               </button>
             )}
             <button role="menuitem" onClick={() => void copy(menu.node.path, "Copied repository path.")}>⧉ Copy repository path</button>

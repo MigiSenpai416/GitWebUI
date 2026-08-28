@@ -47,6 +47,15 @@ export interface HeadFileTree {
   entries: HeadFileEntry[];
 }
 
+export interface HeadFileContent {
+  path: string;
+  head: string;
+  content: string | null;
+  binary: boolean;
+  tooLarge: boolean;
+  size: number;
+}
+
 export interface HistoryDeleteResult {
   path: string;
   head: string;

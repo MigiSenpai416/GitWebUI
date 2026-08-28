@@ -13,7 +13,7 @@ test.describe.serial("File Manager history deletion", () => {
   test.beforeAll(async () => {
     repoDir = makeRepo();
     await fs.mkdir(path.join(repoDir, "private"), { recursive: true });
-    await fs.writeFile(path.join(repoDir, "private", "secret.txt"), "sensitive\n");
+    await fs.writeFile(path.join(repoDir, "private", "secret.txt"), "sensitive\nother sensitive\n");
     await fs.writeFile(path.join(repoDir, "keep.txt"), "keep\n");
     execFileSync("git", ["-C", repoDir, "add", "-A"], { stdio: "pipe" });
     execFileSync("git", ["-C", repoDir, "commit", "-m", "tracked files"], { stdio: "pipe" });
@@ -66,6 +66,52 @@ test.describe.serial("File Manager history deletion", () => {
     await confirm.getByLabel("Type the exact repository path to confirm:").press("Escape");
     await expect(confirm).toBeHidden();
     await expect(treeFolder).toBeFocused();
+  });
+
+  test("opens a tracked file at HEAD in the searchable file view", async () => {
+    const dialog = window.getByRole("dialog", { name: "File Manager" });
+    await dialog.getByText("secret.txt", { exact: true }).dblclick();
+
+    await expect(dialog).toBeVisible();
+    const preview = dialog.getByRole("region", { name: "Preview private/secret.txt" });
+    await expect(preview).toBeVisible();
+    await expect(preview.locator(".fm-preview-path")).toContainText("private/secret.txt");
+    await expect(preview.locator(".cm-content")).toContainText("sensitive");
+
+    await window.keyboard.press("Control+f");
+    const search = preview.getByRole("textbox", { name: "Find in file" });
+    await search.fill("sensitive");
+    await expect(preview.locator(".fm-preview-find-count")).toHaveText("1 of 2");
+    await preview.getByRole("button", { name: "Next match" }).click();
+    await expect(search).toBeFocused();
+    await expect(preview.locator(".fm-preview-find-count")).toHaveText("2 of 2");
+
+    const treeFolder = dialog.locator('.fm-tree-name[title="private"]');
+    await treeFolder.click({ button: "right" });
+    await window.getByRole("menuitem", { name: "Delete directory from history…" }).click();
+    const confirm = window.getByRole("alertdialog", { name: "Confirm history rewrite" });
+    const confirmation = confirm.getByLabel("Type the exact repository path to confirm:");
+    await expect(confirmation).toBeFocused();
+    await window.keyboard.press("Control+f");
+    await expect(confirmation).toBeFocused();
+    await window.keyboard.press("Escape");
+    await expect(confirm).toBeHidden();
+    await expect(preview).toBeVisible();
+    await expect(search).toBeVisible();
+    await window.keyboard.press("Escape");
+    await expect(search).toBeHidden();
+    await expect(preview).toBeVisible();
+
+    await preview.getByRole("button", { name: "Close file preview" }).click();
+
+    await expect(preview).toBeHidden();
+    const secret = dialog.locator('.fm-row[title="private/secret.txt"]');
+    await expect(secret).toBeFocused();
+    await secret.press("Enter");
+    await expect(preview).toBeVisible();
+    await window.keyboard.press("Escape");
+    await expect(preview).toBeHidden();
+    await expect(secret).toBeFocused();
   });
 
   test("requires exact typed confirmation and deletes through the UI", async () => {

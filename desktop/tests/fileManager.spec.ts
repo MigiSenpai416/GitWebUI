@@ -9,6 +9,7 @@ test.describe.serial("File Manager history deletion", () => {
   let app: ElectronApplication;
   let window: Page;
   let repoDir = "";
+  let unreachable = "";
 
   test.beforeAll(async () => {
     repoDir = makeRepo();
@@ -29,6 +30,10 @@ test.describe.serial("File Manager history deletion", () => {
     await fs.writeFile(path.join(repoDir, "former"), "current file\n");
     execFileSync("git", ["-C", repoDir, "add", "-A"], { stdio: "pipe" });
     execFileSync("git", ["-C", repoDir, "commit", "-m", "remove historical file"], { stdio: "pipe" });
+    unreachable = execFileSync("git", ["-C", repoDir, "hash-object", "-w", "--stdin"], {
+      input: "unreachable object\n",
+      encoding: "utf8",
+    }).trim();
 
     started = await launchApp();
     app = started.app;
@@ -229,6 +234,9 @@ test.describe.serial("File Manager history deletion", () => {
     await expect(window.locator(".fm-result")).toContainText("Removed 2 selected files from", {
       timeout: 30_000,
     });
+    await expect(
+      window.locator(".toast-notice", { hasText: "Actions → Prune Repo" }),
+    ).toBeVisible();
     await expect(fs.access(path.join(repoDir, "keep.txt"))).rejects.toThrow();
     const backupRoot = path.join(repoDir, ".git", "gitwebui-history-backups");
     const backupDirectories = await fs.readdir(backupRoot);
@@ -279,5 +287,21 @@ test.describe.serial("File Manager history deletion", () => {
       ).trim(),
     ).toBe("");
     expect(await fs.readFile(path.join(repoDir, "shape", "keep.txt"), "utf8")).toBe("current child\n");
+
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await window.getByRole("button", { name: "Actions", exact: true }).click();
+    const prune = window.getByRole("button", { name: "Prune Repo", exact: true });
+    await expect(prune).toHaveAttribute(
+      "title",
+      "Permanently remove unreachable Git objects now. GitWebUI recovery backups are kept.",
+    );
+    await prune.click();
+    await expect(
+      window.locator(".toast-notice", { hasText: "Pruned unreachable Git objects" }),
+    ).toBeVisible({ timeout: 30_000 });
+    expect(() => execFileSync("git", ["-C", repoDir, "cat-file", "-e", unreachable])).toThrow();
+    await expect(
+      fs.readdir(path.join(repoDir, ".git", "gitwebui-history-backups")),
+    ).resolves.not.toHaveLength(0);
   });
 });

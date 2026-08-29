@@ -257,6 +257,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ paths, expectedHead, confirmation, recursive }),
     }),
+  pruneRepo: () => req<{ ok: true }>("/api/repo/prune", { method: "POST", body: "{}" }),
   reveal: (path: string) =>
     req<{ ok: true }>("/api/reveal", { method: "POST", body: JSON.stringify({ path }) }),
 

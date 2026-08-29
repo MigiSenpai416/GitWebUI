@@ -396,8 +396,10 @@ export function FileManager({ open, onClose }: Props) {
       const removedLabel = result.paths.length === 1
         ? result.paths[0]
         : `${result.paths.length} files`;
+      const pruneReminder =
+        " When finished deleting history, use Actions → Prune Repo to remove unreachable Git objects.";
       if (useStore.getState().repo?.root !== requestRoot) {
-        setNotice(`Removed ${removedLabel} from ${basename(requestRoot)} history.`);
+        setNotice(`Removed ${removedLabel} from ${basename(requestRoot)} history.${pruneReminder}`);
         return;
       }
       setLastResult(result);
@@ -407,7 +409,7 @@ export function FileManager({ open, onClose }: Props) {
       setConfirmation("");
       setCurrentPath("");
       setSelectedPath(null);
-      setNotice(`Removed ${removedLabel} from reachable Git history.`);
+      setNotice(`Removed ${removedLabel} from reachable Git history.${pruneReminder}`);
       window.setTimeout(() => dialogRef.current?.focus(), 0);
       await refreshAll();
       await load();

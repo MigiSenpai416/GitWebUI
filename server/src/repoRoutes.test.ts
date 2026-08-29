@@ -6,6 +6,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { api, apiErrorHandler } from "./routes.js";
+import { beginRepoMutation } from "./git/historyFiles.js";
 import { openRepo } from "./git/repo.js";
 import { runGit } from "./git/gitRunner.js";
 import { registerRepo, unregisterRepo } from "./session.js";
@@ -83,6 +84,49 @@ describe("POST /commit", () => {
       commits: [{ hash: result.hash, subject: "first commit", body: "first body" }],
       hasMore: false,
     });
+  });
+});
+
+describe("POST /repo/prune", () => {
+  it("prunes unreachable Git objects, preserves recovery files, and waits for mutations", async () => {
+    const opened = registerRepo(await openRepo(TMP));
+    const unreachable = (
+      await runGit(TMP, ["hash-object", "-w", "--stdin"], { input: "unreachable object\n" })
+    ).stdout.trim();
+    const recoveryFile = path.join(
+      TMP,
+      ".git",
+      "gitwebui-history-backups",
+      "test-recovery",
+      "recovery.bundle",
+    );
+    await fs.mkdir(path.dirname(recoveryFile), { recursive: true });
+    await fs.writeFile(recoveryFile, "keep this recovery file\n");
+
+    const release = beginRepoMutation(opened.root);
+    try {
+      const busy = await fetch(base + "/api/repo/prune", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
+        body: "{}",
+      });
+      expect(busy.status).toBe(409);
+      await expect(busy.json()).resolves.toMatchObject({
+        error: expect.stringContaining("other repository operations"),
+      });
+    } finally {
+      release();
+    }
+
+    const pruned = await fetch(base + "/api/repo/prune", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
+      body: "{}",
+    });
+    expect(pruned.status).toBe(200);
+    await expect(pruned.json()).resolves.toEqual({ ok: true });
+    await expect(runGit(TMP, ["cat-file", "-e", unreachable])).rejects.toThrow();
+    await expect(fs.readFile(recoveryFile, "utf8")).resolves.toBe("keep this recovery file\n");
   });
 });
 

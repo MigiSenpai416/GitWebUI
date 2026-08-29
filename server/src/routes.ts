@@ -89,7 +89,8 @@ import {
   deletePathFromHistory,
   getHeadFileContent,
   getHeadFileTree,
-  isHistoryRewriteActive,
+  isRepoMaintenanceActive,
+  pruneRepository,
 } from "./git/historyFiles.js";
 import { detectShells, pickShell, runCommand } from "./terminal.js";
 
@@ -133,16 +134,18 @@ api.use((req: Request, res: Response, next: NextFunction) => {
   const root = requestedRoot(req);
   const normalizedPath = req.path.replace(/\/+$/, "") || "/";
   const isHistoryDelete = normalizedPath === "/history-files/delete";
+  const isRepoPrune = normalizedPath === "/repo/prune";
+  const isExclusiveMutation = isHistoryDelete || isRepoPrune;
   if (
     root &&
     req.method !== "GET" &&
-    !isHistoryDelete &&
-    isHistoryRewriteActive(root)
+    !isExclusiveMutation &&
+    isRepoMaintenanceActive(root)
   ) {
-    res.status(409).json({ error: "A history rewrite is running for this repository" });
+    res.status(409).json({ error: "Repository maintenance is running for this repository" });
     return;
   }
-  if (root && req.method !== "GET" && !isHistoryDelete) {
+  if (root && req.method !== "GET" && !isExclusiveMutation) {
     // Reserve synchronously, before a handler's first await. This closes the
     // window where an admitted terminal/remote request could begin mutating
     // after a history rewrite had already passed preflight.
@@ -237,6 +240,12 @@ api.post("/repo/clone", h(async (req, res) => {
 api.post("/repo/close", h(async (req, res) => {
   const root = String(req.body?.root ?? "").trim();
   if (root) unregisterRepo(root);
+  res.json({ ok: true });
+}));
+
+api.post("/repo/prune", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  await pruneRepository(root);
   res.json({ ok: true });
 }));
 

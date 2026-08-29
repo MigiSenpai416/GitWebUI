@@ -53,6 +53,7 @@ export interface HistoryDeleteResult {
 }
 
 const activeRewrites = new Set<string>();
+const activePrunes = new Set<string>();
 const activeMutations = new Map<string, number>();
 const MAX_HEAD_FILE_PREVIEW_BYTES = 10 * 1024 * 1024;
 const MAX_HISTORY_DELETE_PATHS = 100;
@@ -72,9 +73,9 @@ interface IndexTransition {
   after: Buffer;
 }
 
-/** Used by the API mutation gate while the ref graph is being replaced. */
-export function isHistoryRewriteActive(root: string): boolean {
-  return activeRewrites.has(root);
+/** Whether an exclusive history rewrite or object prune is running. */
+export function isRepoMaintenanceActive(root: string): boolean {
+  return activeRewrites.has(root) || activePrunes.has(root);
 }
 
 /** Reserve a repository for an ordinary API mutation until its response ends. */
@@ -115,6 +116,25 @@ export async function getHeadFileTree(
     ? await historicalPathsOutsideHead(root, entries)
     : [];
   return { head, entries, historicalPaths };
+}
+
+/** Permanently remove unreachable Git objects without deleting recovery files. */
+export async function pruneRepository(root: string): Promise<void> {
+  if (activeRewrites.has(root)) {
+    throw httpError(409, "A history rewrite is running for this repository");
+  }
+  if (activePrunes.has(root)) {
+    throw httpError(409, "Repository pruning is already running");
+  }
+  if ((activeMutations.get(root) ?? 0) > 0 || runningCommandCount() > 0) {
+    throw httpError(409, "Wait for other repository operations to finish before pruning");
+  }
+  activePrunes.add(root);
+  try {
+    await runGit(root, ["gc", "--prune=now"]);
+  } finally {
+    activePrunes.delete(root);
+  }
 }
 
 interface HistoryDeleteTarget {
@@ -244,6 +264,9 @@ export async function deletePathFromHistory(
 
   if (activeRewrites.has(root)) {
     throw httpError(409, "A history rewrite is already running for this repository");
+  }
+  if (activePrunes.has(root)) {
+    throw httpError(409, "Wait for repository pruning to finish before rewriting history");
   }
   if ((activeMutations.get(root) ?? 0) > 0) {
     throw httpError(409, "Wait for other repository operations to finish before rewriting history");

@@ -39,9 +39,11 @@ interface MenuState {
 }
 
 interface DeleteSelection {
-  node: BrowserNode;
+  nodes: BrowserNode[];
   recursive: boolean;
 }
+
+const MAX_HISTORY_DELETE_PATHS = 100;
 
 interface Props {
   open: boolean;
@@ -64,6 +66,7 @@ export function FileManager({ open, onClose }: Props) {
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [deletePaths, setDeletePaths] = useState<Set<string>>(() => new Set());
   const [pendingDelete, setPendingDelete] = useState<DeleteSelection | null>(null);
   const [confirmation, setConfirmation] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -124,7 +127,7 @@ export function FileManager({ open, onClose }: Props) {
     setPreviewPath(null);
     setError("");
     window.setTimeout(() => {
-      const row = Array.from(rowsRef.current?.querySelectorAll<HTMLButtonElement>(".fm-row") ?? [])
+      const row = Array.from(rowsRef.current?.querySelectorAll<HTMLButtonElement>(".fm-row-main") ?? [])
         .find((candidate) => candidate.title === path);
       if (row) row.focus();
       else dialogRef.current?.focus();
@@ -153,6 +156,7 @@ export function FileManager({ open, onClose }: Props) {
       ];
       const paths = new Set(visiblePaths);
       const dirs = directoryPaths(visiblePaths);
+      setDeletePaths((before) => new Set([...before].filter((item) => paths.has(item))));
       if (currentPath && !dirs.has(currentPath)) setCurrentPath("");
       if (selectedPath && !paths.has(selectedPath) && !dirs.has(selectedPath)) setSelectedPath(null);
       if (previewPath && !paths.has(previewPath)) setPreviewPath(null);
@@ -180,6 +184,7 @@ export function FileManager({ open, onClose }: Props) {
     setQuery("");
     setExpanded(new Set([""]));
     setMenu(null);
+    setDeletePaths(new Set());
     menuInvoker.current = null;
     setPendingDelete(null);
     setConfirmation("");
@@ -306,7 +311,7 @@ export function FileManager({ open, onClose }: Props) {
     const currentTarget = event.currentTarget as HTMLElement;
     menuInvoker.current =
       (event.target as HTMLElement).closest<HTMLElement>("button") ??
-      currentTarget.querySelector<HTMLElement>(".fm-tree-name") ??
+      currentTarget.querySelector<HTMLElement>(".fm-row-main, .fm-tree-name") ??
       currentTarget;
     const rect = currentTarget.getBoundingClientRect();
     const requestedX = event.clientX || rect.left + 20;
@@ -330,10 +335,31 @@ export function FileManager({ open, onClose }: Props) {
 
   const beginDelete = (recursive: boolean) => {
     if (!menu) return;
-    setPendingDelete({ node: menu.node, recursive });
+    setPendingDelete({ nodes: [menu.node], recursive });
     setMenu(null);
     setConfirmation("");
     setError("");
+  };
+
+  const beginSelectedDelete = (event: React.MouseEvent<HTMLButtonElement>) => {
+    const nodes = [...deletePaths]
+      .map((target) => findNode(root, target))
+      .filter((node): node is BrowserNode => !!node && isExactFileEntry(node));
+    if (!nodes.length) return;
+    menuInvoker.current = event.currentTarget;
+    setPendingDelete({ nodes, recursive: false });
+    setConfirmation("");
+    setError("");
+  };
+
+  const toggleDeletePath = (node: BrowserNode) => {
+    if (!isExactFileEntry(node)) return;
+    if (!deletePaths.has(node.path) && deletePaths.size >= MAX_HISTORY_DELETE_PATHS) {
+      setError(`Select at most ${MAX_HISTORY_DELETE_PATHS} files for one history rewrite.`);
+      return;
+    }
+    setError("");
+    setDeletePaths((before) => toggleSet(before, node.path));
   };
 
   const toggleHistorical = () => {
@@ -344,34 +370,44 @@ export function FileManager({ open, onClose }: Props) {
     setPreviewPath(null);
     setExpanded(new Set([""]));
     setMenu(null);
+    if (!enabling) {
+      const headPaths = new Set(entries.map((entry) => entry.path));
+      setDeletePaths((before) => new Set([...before].filter((target) => headPaths.has(target))));
+    }
     menuInvoker.current = null;
     if (enabling) void load(true);
   };
 
   const performDelete = async () => {
-    if (!pendingDelete || !head || confirmation !== pendingDelete.node.path) return;
+    if (!pendingDelete || !head) return;
+    const targetPaths = pendingDelete.nodes.map((node) => node.path);
+    const confirmationTarget = deleteConfirmation(targetPaths);
+    if (confirmation !== confirmationTarget) return;
     const requestRoot = repo.root;
-    const targetPath = pendingDelete.node.path;
     setDeleting(true);
     setError("");
     try {
       const result = await api.deleteFromHistory(
-        targetPath,
+        targetPaths,
         head,
         confirmation,
         pendingDelete.recursive,
       );
+      const removedLabel = result.paths.length === 1
+        ? result.paths[0]
+        : `${result.paths.length} files`;
       if (useStore.getState().repo?.root !== requestRoot) {
-        setNotice(`Removed ${result.path} from ${basename(requestRoot)} history.`);
+        setNotice(`Removed ${removedLabel} from ${basename(requestRoot)} history.`);
         return;
       }
       setLastResult(result);
       setPendingDelete(null);
+      setDeletePaths(new Set());
       menuInvoker.current = null;
       setConfirmation("");
       setCurrentPath("");
       setSelectedPath(null);
-      setNotice(`Removed ${result.path} from reachable Git history.`);
+      setNotice(`Removed ${removedLabel} from reachable Git history.`);
       window.setTimeout(() => dialogRef.current?.focus(), 0);
       await refreshAll();
       await load();
@@ -384,10 +420,13 @@ export function FileManager({ open, onClose }: Props) {
 
   const crumbs = currentPath ? currentPath.split("/") : [];
   const repoName = basename(repo.root);
-  const pendingNode = pendingDelete?.node ?? null;
-  const pendingAtHead = !!pendingDelete && (
-    pendingDelete.recursive ? pendingDelete.node.atHead : !!pendingDelete.node.headKind
-  );
+  const pendingNodes = pendingDelete?.nodes ?? [];
+  const pendingPaths = pendingNodes.map((node) => node.path);
+  const pendingConfirmation = deleteConfirmation(pendingPaths);
+  const pendingAtHeadCount = pendingDelete
+    ? pendingNodes.filter((node) => pendingDelete.recursive ? node.atHead : !!node.headKind).length
+    : 0;
+  const pendingAtHead = pendingAtHeadCount > 0;
 
   return (
     <div className="fm-overlay" onMouseDown={(e) => e.target === e.currentTarget && !deleting && onClose()}>
@@ -433,6 +472,14 @@ export function FileManager({ open, onClose }: Props) {
             History paths
             {historicalPaths.length > 0 && <span>{historicalPaths.length}</span>}
           </button>
+          <button
+            className="fm-delete-selected"
+            onClick={beginSelectedDelete}
+            disabled={deletePaths.size === 0}
+            title="Delete the selected exact file paths from reachable history"
+          >
+            <IconTrash /> Delete selected{deletePaths.size > 0 ? ` (${deletePaths.size})` : ""}…
+          </button>
           <label className="fm-search">
             <IconSearch />
             <input
@@ -454,7 +501,9 @@ export function FileManager({ open, onClose }: Props) {
         {lastResult && (
           <div className="fm-result">
             <span>
-              Removed <code>{lastResult.path}</code> from {lastResult.rewrittenRefs} rewritten ref{lastResult.rewrittenRefs === 1 ? "" : "s"}.
+              Removed {lastResult.paths.length === 1
+                ? <code>{lastResult.paths[0]}</code>
+                : `${lastResult.paths.length} selected files`} from {lastResult.rewrittenRefs} rewritten ref{lastResult.rewrittenRefs === 1 ? "" : "s"}.
               {lastResult.warnings.length > 0 && ` ${lastResult.warnings.join(" ")}`}
             </span>
             <button onClick={() => void copy(lastResult.backupPath, "Copied recovery-bundle path.")}>Copy recovery path</button>
@@ -488,7 +537,8 @@ export function FileManager({ open, onClose }: Props) {
               onError={setError}
             />
           ) : <main className="fm-list" onContextMenu={(e) => e.preventDefault()}>
-            <div className="fm-columns">
+            <div className="fm-columns selecting">
+              <span>Select</span>
               <span>Name</span>
               <span>Type</span>
               <span>Size</span>
@@ -505,23 +555,38 @@ export function FileManager({ open, onClose }: Props) {
                   {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                     const node = shown[virtualRow.index];
                     return (
-                      <button
-                        className={`fm-row${selected?.path === node.path ? " selected" : ""}${node.atHead ? "" : " historical"}`}
+                      <div
+                        className={`fm-row${selected?.path === node.path ? " selected" : ""}${node.atHead ? "" : " historical"}${deletePaths.has(node.path) ? " delete-selected" : ""} selecting`}
                         key={`${node.kind}:${node.path}`}
                         style={{ transform: `translateY(${virtualRow.start}px)` }}
-                        onClick={() => setSelectedPath(node.path)}
-                        onDoubleClick={() => openNode(node)}
-                        onKeyDown={(event) => event.key === "Enter" && openNode(node)}
                         onContextMenu={(event) => openMenu(event, node)}
                         title={node.path}
                       >
-                        <span className={`fm-name fm-${node.kind}`}>
-                          {node.kind === "directory" ? <IconFolder /> : <FileGlyph kind={node.kind} />}
-                          <span>{node.name}</span>
-                        </span>
-                        <span>{typeLabel(node)}</span>
-                        <span>{node.atHead ? (node.kind === "directory" ? `${node.fileCount} items` : formatSize(node.size)) : "History only"}</span>
-                      </button>
+                        <button
+                          className="fm-row-check"
+                          onClick={() => toggleDeletePath(node)}
+                          disabled={!isExactFileEntry(node)}
+                          aria-label={`${deletePaths.has(node.path) ? "Remove" : "Select"} ${node.path} ${deletePaths.has(node.path) ? "from" : "for"} history deletion`}
+                          aria-pressed={deletePaths.has(node.path)}
+                          title={isExactFileEntry(node) ? "Select this exact file path" : "Folders use recursive deletion from their context menu"}
+                        >
+                          {deletePaths.has(node.path) && "✓"}
+                        </button>
+                        <button
+                          className="fm-row-main"
+                          onClick={() => setSelectedPath(node.path)}
+                          onDoubleClick={() => openNode(node)}
+                          onKeyDown={(event) => event.key === "Enter" && openNode(node)}
+                          title={node.path}
+                        >
+                          <span className={`fm-name fm-${node.kind}`}>
+                            {node.kind === "directory" ? <IconFolder /> : <FileGlyph kind={node.kind} />}
+                            <span>{node.name}</span>
+                          </span>
+                          <span>{typeLabel(node)}</span>
+                          <span>{node.atHead ? (node.kind === "directory" ? `${node.fileCount} items` : formatSize(node.size)) : "History only"}</span>
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -582,19 +647,28 @@ export function FileManager({ open, onClose }: Props) {
           </div>
         )}
 
-        {pendingDelete && pendingNode && (
+        {pendingDelete && pendingNodes.length > 0 && (
           <div className="fm-confirm-shade">
             <section className="fm-confirm" ref={confirmRef} role="alertdialog" aria-modal="true" aria-label="Confirm history rewrite" tabIndex={-1}>
               <div className="fm-confirm-title"><IconTrash /> Permanently rewrite Git history?</div>
-              <p>
-                This removes the exact path <code>{pendingNode.path}</code>
-                {pendingDelete.recursive ? " and everything beneath it" : ""} from every reachable local ref.
-              </p>
-              {!pendingAtHead && (
+              {pendingPaths.length === 1 ? (
+                <p>
+                  This removes the exact path <code>{pendingPaths[0]}</code>
+                  {pendingDelete.recursive ? " and everything beneath it" : ""} from every reachable local ref.
+                </p>
+              ) : (
+                <>
+                  <p>This removes these {pendingPaths.length} exact file paths from every reachable local ref:</p>
+                  <div className="fm-confirm-paths">
+                    {pendingPaths.map((target) => <code key={target}>{target}</code>)}
+                  </div>
+                </>
+              )}
+              {pendingAtHeadCount < pendingNodes.length && (
                 <p className="fm-confirm-history-note">
-                  {pendingNode.atHead
-                    ? "The selected file entry is absent from HEAD, but a directory currently occupies the same path."
-                    : "This path is already absent from HEAD, but it still exists in reachable history."}
+                  {pendingNodes.length - pendingAtHeadCount === 1
+                    ? "One selected file entry is already absent from HEAD. Any directory at the same path and its descendants remain untouched."
+                    : `${pendingNodes.length - pendingAtHeadCount} selected file entries are already absent from HEAD. Any directories at the same paths and their descendants remain untouched.`}
                 </p>
               )}
               <ul>
@@ -602,7 +676,7 @@ export function FileManager({ open, onClose }: Props) {
                 <li>This operation requires <code>git-filter-repo</code> to be installed and currently supports SHA-1 repositories only.</li>
                 <li>Commit IDs change; published refs will require a coordinated force-push.</li>
                 <li>Remote repositories and other clones are not changed automatically.</li>
-                <li>Earlier names from renames are not inferred; only this exact path is removed.</li>
+                <li>Earlier names from renames are not inferred; only the selected exact path{pendingPaths.length === 1 ? " is" : "s are"} removed.</li>
                 <li>Cryptographic signatures on rewritten commits and tags will no longer be valid.</li>
                 <li>Non-stash reflogs are cleared, so their ordinary undo/recovery names, messages, timestamps, and ordering are lost.</li>
                 <li>A recovery bundle containing the original history is saved outside the repository before any ref moves.</li>
@@ -618,11 +692,13 @@ export function FileManager({ open, onClose }: Props) {
               </ul>
               {error && <div className="fm-confirm-error" role="alert">{error}</div>}
               <label>
-                Type the exact repository path to confirm:
+                {pendingPaths.length === 1
+                  ? "Type the exact repository path to confirm:"
+                  : `Type ${pendingConfirmation} to confirm:`}
                 <input
                   value={confirmation}
                   onChange={(event) => setConfirmation(event.target.value)}
-                  placeholder={pendingNode.path}
+                  placeholder={pendingConfirmation}
                   autoFocus
                   disabled={deleting}
                   spellCheck={false}
@@ -639,7 +715,7 @@ export function FileManager({ open, onClose }: Props) {
                 <button
                   className="fm-delete"
                   onClick={() => void performDelete()}
-                  disabled={deleting || !head || confirmation !== pendingNode.path}
+                  disabled={deleting || !head || confirmation !== pendingConfirmation}
                 >
                   {deleting ? <><IconSpinner /> Rewriting history…</> : <><IconTrash /> Delete from all history</>}
                 </button>
@@ -848,6 +924,15 @@ function typeLabel(node: BrowserNode): string {
   if (node.kind === "symlink") return "Symbolic link";
   if (node.kind === "submodule") return "Git submodule";
   return "File";
+}
+
+function isExactFileEntry(node: BrowserNode): boolean {
+  return !!node.headKind || node.historicalEntry;
+}
+
+function deleteConfirmation(paths: string[]): string {
+  if (!paths.length) return "";
+  return paths.length === 1 ? paths[0] : `DELETE ${paths.length} FILES`;
 }
 
 function FileGlyph({ kind }: { kind: HeadEntryKind }) {

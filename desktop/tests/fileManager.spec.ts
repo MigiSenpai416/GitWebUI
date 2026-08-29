@@ -63,6 +63,8 @@ test.describe.serial("File Manager history deletion", () => {
     await expect(dialog.getByText("private", { exact: true }).last()).toBeVisible();
     await expect(dialog.getByText("keep.txt", { exact: true })).toBeVisible();
     await expect(dialog.locator('.fm-row[title="keep.txt"] .fm-file-glyph svg')).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Select keep.txt for history deletion" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Delete selected…" })).toBeDisabled();
     await expect(dialog.getByText("removed.txt", { exact: true })).toBeHidden();
 
     await dialog.getByRole("button", { name: /History paths/ }).click();
@@ -94,7 +96,7 @@ test.describe.serial("File Manager history deletion", () => {
     await shape.click({ button: "right" });
     await window.getByRole("menuitem", { name: "Delete file only from history…" }).click();
     await expect(window.getByRole("alertdialog", { name: "Confirm history rewrite" })).toContainText(
-      "a directory currently occupies the same path",
+      "directory at the same path",
     );
     await window.keyboard.press("Escape");
 
@@ -163,16 +165,93 @@ test.describe.serial("File Manager history deletion", () => {
 
     await expect(preview).toBeHidden();
     const secret = dialog.locator('.fm-row[title="private/secret.txt"]');
-    await expect(secret).toBeFocused();
-    await secret.press("Enter");
+    const secretMain = secret.locator(".fm-row-main");
+    await expect(secretMain).toBeFocused();
+    await secretMain.press("Enter");
     await expect(preview).toBeVisible();
     await window.keyboard.press("Escape");
     await expect(preview).toBeHidden();
-    await expect(secret).toBeFocused();
+    await expect(secretMain).toBeFocused();
+  });
+
+  test("selects current and historical-only files for one atomic deletion", async () => {
+    const dialog = window.getByRole("dialog", { name: "File Manager" });
+    await dialog.locator(".fm-breadcrumb button").first().click();
+    await dialog.getByRole("button", { name: "Select keep.txt for history deletion" }).click();
+    await dialog.getByRole("button", { name: "Select former for history deletion" }).click();
+    await expect(dialog.getByRole("button", { name: "Delete selected (2)…" })).toBeEnabled();
+    await dialog.getByRole("button", { name: "Remove former from history deletion" }).click();
+    await expect(dialog.getByRole("button", { name: "Delete selected (1)…" })).toBeEnabled();
+    await dialog.getByRole("button", { name: /History paths/ }).click();
+
+    await expect(dialog.getByRole("button", { name: "Remove keep.txt from history deletion" })).toBeVisible();
+    await dialog.getByRole("button", { name: "Select removed.txt for history deletion" }).click();
+    await dialog.getByRole("button", { name: /History paths/ }).click();
+    await expect(dialog.getByRole("button", { name: "Delete selected (1)…" })).toBeEnabled();
+    await expect(dialog.getByText("removed.txt", { exact: true })).toBeHidden();
+    await dialog.getByRole("button", { name: /History paths/ }).click();
+    await dialog.getByRole("button", { name: "Select removed.txt for history deletion" }).click();
+    const deleteSelected = dialog.getByRole("button", { name: "Delete selected (2)…" });
+    await expect(deleteSelected).toBeEnabled();
+    const originalSize = await app.evaluate(({ BrowserWindow }) => {
+      const target = BrowserWindow.getAllWindows()[0];
+      const size = target.getSize();
+      target.setSize(900, 560);
+      return size;
+    });
+    await deleteSelected.click();
+
+    const confirm = window.getByRole("alertdialog", { name: "Confirm history rewrite" });
+    await expect(confirm.locator(".fm-confirm-paths")).toContainText("removed.txt");
+    await expect(confirm.locator(".fm-confirm-paths")).toContainText("keep.txt");
+    const confirmBox = await confirm.boundingBox();
+    const shadeBox = await window.locator(".fm-confirm-shade").boundingBox();
+    expect(confirmBox).not.toBeNull();
+    expect(shadeBox).not.toBeNull();
+    expect(confirmBox!.y).toBeGreaterThanOrEqual(shadeBox!.y);
+    expect(confirmBox!.y + confirmBox!.height).toBeLessThanOrEqual(shadeBox!.y + shadeBox!.height);
+    await window.keyboard.press("Escape");
+    await expect(confirm).toBeHidden();
+    await expect(deleteSelected).toBeFocused();
+    await app.evaluate(({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0].setSize(size[0], size[1]);
+    }, originalSize);
+    await deleteSelected.click();
+
+    const destructive = confirm.getByRole("button", { name: "Delete from all history" });
+    const field = confirm.getByLabel("Type DELETE 2 FILES to confirm:");
+    await field.fill("DELETE 2 FILE");
+    await expect(destructive).toBeDisabled();
+    await field.fill("DELETE 2 FILES");
+    await expect(destructive).toBeEnabled();
+    await destructive.click();
+
+    await expect(window.locator(".fm-result")).toContainText("Removed 2 selected files from", {
+      timeout: 30_000,
+    });
+    await expect(fs.access(path.join(repoDir, "keep.txt"))).rejects.toThrow();
+    const backupRoot = path.join(repoDir, ".git", "gitwebui-history-backups");
+    const backupDirectories = await fs.readdir(backupRoot);
+    expect(backupDirectories).toHaveLength(1);
+    const worktreeBackup = path.join(backupRoot, backupDirectories[0], "worktree-content");
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(worktreeBackup, "paths.json"), "utf8"),
+    ) as Array<{ target: string; backup: string }>;
+    expect(manifest).toEqual([{ target: "keep.txt", backup: "001" }]);
+    expect(await fs.readFile(path.join(worktreeBackup, manifest[0].backup), "utf8")).toBe("keep\n");
+    expect(
+      execFileSync(
+        "git",
+        ["-C", repoDir, "log", "--all", "--format=%H", "--", "removed.txt", "keep.txt"],
+        { encoding: "utf8" },
+      ).trim(),
+    ).toBe("");
   });
 
   test("requires exact typed confirmation and deletes through the UI", async () => {
-    const secret = window.getByRole("dialog", { name: "File Manager" }).getByText("secret.txt", { exact: true });
+    const dialog = window.getByRole("dialog", { name: "File Manager" });
+    await dialog.getByRole("textbox", { name: "Search all history paths" }).fill("private/secret.txt");
+    const secret = dialog.getByText("secret.txt", { exact: true });
     await secret.click({ button: "right" });
     await window.getByRole("menuitem", { name: "Delete file from history…" }).click();
 
@@ -199,6 +278,6 @@ test.describe.serial("File Manager history deletion", () => {
         { encoding: "utf8" },
       ).trim(),
     ).toBe("");
-    expect(await fs.readFile(path.join(repoDir, "keep.txt"), "utf8")).toBe("keep\n");
+    expect(await fs.readFile(path.join(repoDir, "shape", "keep.txt"), "utf8")).toBe("current child\n");
   });
 });

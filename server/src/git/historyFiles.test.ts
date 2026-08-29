@@ -230,6 +230,41 @@ describe("HEAD file content", () => {
 });
 
 describe("deletePathFromHistory", () => {
+  it("deletes multiple exact file paths in one rewrite across a rename", async () => {
+    await fs.writeFile(path.join(ROOT, "a.txt"), "first version\n");
+    await fs.writeFile(path.join(ROOT, "other.txt"), "other secret\n");
+    await fs.writeFile(path.join(ROOT, "keep.txt"), "keep\n");
+    await commitAll("add files");
+    await fs.writeFile(path.join(ROOT, "a.txt"), "second version\n");
+    await commitAll("edit a");
+    await runGit(ROOT, ["mv", "a.txt", "aaa.txt"]);
+    const head = await commitAll("rename a");
+
+    const result = await deletePathFromHistory(ROOT, {
+      paths: ["a.txt", "aaa.txt", "other.txt"],
+      expectedHead: head,
+      confirmation: "DELETE 3 FILES",
+      recursive: false,
+    });
+
+    expect(result.path).toBe("a.txt");
+    expect(result.paths).toEqual(["a.txt", "aaa.txt", "other.txt"]);
+    expect((await runGit(ROOT, ["log", "--all", "--format=%H", "--", "a.txt", "aaa.txt", "other.txt"])).stdout.trim()).toBe("");
+    expect((await runGit(ROOT, ["show", "HEAD:keep.txt"])).stdout).toBe("keep\n");
+    await expect(fs.access(path.join(ROOT, "aaa.txt"))).rejects.toThrow();
+    await expect(fs.access(path.join(ROOT, "other.txt"))).rejects.toThrow();
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(result.worktreeBackupPath, "paths.json"), "utf8"),
+    ) as Array<{ target: string; backup: string }>;
+    expect(manifest).toEqual([
+      { target: "aaa.txt", backup: "001" },
+      { target: "other.txt", backup: "002" },
+    ]);
+    expect(await fs.readFile(path.join(result.worktreeBackupPath, "001"), "utf8")).toBe("second version\n");
+    expect(await fs.readFile(path.join(result.worktreeBackupPath, "002"), "utf8")).toBe("other secret\n");
+    expect((await getHeadFileTree(ROOT, true)).historicalPaths).toEqual([]);
+  }, 30_000);
+
   it("deletes an exact historical file without removing a current directory at the same path", async () => {
     await fs.writeFile(path.join(ROOT, "shape"), "historical file\n");
     await commitAll("shape is a file");
@@ -239,10 +274,9 @@ describe("deletePathFromHistory", () => {
     const head = await commitAll("shape becomes a directory");
 
     const result = await deletePathFromHistory(ROOT, {
-      path: "shape",
+      paths: ["shape"],
       expectedHead: head,
       confirmation: "shape",
-      recursive: false,
     });
 
     expect(result.worktreeBackupPath).toBe("");
@@ -401,6 +435,27 @@ describe("deletePathFromHistory", () => {
     expect((await runGit(BASE, ["--git-dir", recovered, "show", `${oldHead}:${target}`])).stdout).toContain("secret one");
   }, 30_000);
 
+  it("does not treat an internal Git-notes tree path as retained user history", async () => {
+    await fs.writeFile(path.join(ROOT, "keep.txt"), "keep\n");
+    const annotated = await commitAll("base");
+    await runGit(ROOT, ["notes", "--ref=commits", "add", "-m", "keep this note", annotated]);
+    await fs.writeFile(path.join(ROOT, annotated), "secret\n");
+    const head = await commitAll("user file collides with note path");
+    const notesBefore = (await runGit(ROOT, ["rev-parse", "refs/notes/commits"])).stdout.trim();
+
+    await deletePathFromHistory(ROOT, {
+      path: annotated,
+      expectedHead: head,
+      confirmation: annotated,
+      recursive: false,
+    });
+
+    expect((await runGit(ROOT, ["log", "--exclude=refs/notes/*", "--all", "--format=%H", "--", `:(literal)${annotated}`])).stdout.trim()).toBe("");
+    expect((await runGit(ROOT, ["rev-parse", "refs/notes/commits"])).stdout.trim()).toBe(notesBefore);
+    expect((await runGit(ROOT, ["notes", "--ref=commits", "show", annotated])).stdout).toBe("keep this note\n");
+    expect((await runGit(ROOT, ["show", "HEAD:keep.txt"])).stdout).toBe("keep\n");
+  }, 30_000);
+
   it("preserves a valid empty HEAD and target-only orphan branch instead of deleting refs", async () => {
     await fs.writeFile(path.join(ROOT, "index-before"), "main secret\n");
     const head = await commitAll("main secret only");
@@ -468,9 +523,10 @@ describe("deletePathFromHistory", () => {
     const oldHead = await commitAll("directory becomes a file");
 
     await deletePathFromHistory(ROOT, {
-      path: "private",
+      paths: ["private"],
       expectedHead: oldHead,
       confirmation: "private",
+      recursive: true,
     });
 
     expect((await runGit(ROOT, ["log", "--all", "--format=%H", "--", ":(literal)private"])).stdout.trim()).toBe("");
@@ -703,7 +759,7 @@ describe("deletePathFromHistory", () => {
   });
 
   it.skipIf(process.platform !== "win32")(
-    "rejects case-colliding retained paths before moving the Windows worktree entry",
+    "rejects case-colliding retained and selected paths before moving Windows worktree entries",
     async () => {
       await fs.writeFile(path.join(ROOT, "Foo.txt"), "same content\n");
       await commitAll("case source");
@@ -722,6 +778,16 @@ describe("deletePathFromHistory", () => {
       ).rejects.toMatchObject({ status: 409 });
       expect((await runGit(ROOT, ["rev-parse", "HEAD"])).stdout.trim()).toBe(head);
       expect(await fs.readFile(path.join(ROOT, "Foo.txt"), "utf8")).toBe("same content\n");
+
+      await expect(
+        deletePathFromHistory(ROOT, {
+          paths: ["Foo.txt", "foo.txt"],
+          expectedHead: head,
+          confirmation: "DELETE 2 FILES",
+        }),
+      ).rejects.toMatchObject({ status: 409 });
+      expect((await runGit(ROOT, ["rev-parse", "HEAD"])).stdout.trim()).toBe(head);
+      expect(await fs.readFile(path.join(ROOT, "Foo.txt"), "utf8")).toBe("same content\n");
     },
   );
 
@@ -734,6 +800,30 @@ describe("deletePathFromHistory", () => {
         path: "../secret.txt",
         expectedHead: head,
         confirmation: "../secret.txt",
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      deletePathFromHistory(ROOT, {
+        paths: ["secret.txt", "secret.txt"],
+        expectedHead: head,
+        confirmation: "DELETE 2 FILES",
+        recursive: false,
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      deletePathFromHistory(ROOT, {
+        paths: ["secret.txt", "other.txt"],
+        expectedHead: head,
+        confirmation: "DELETE 2 FILES",
+        recursive: true,
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      deletePathFromHistory(ROOT, {
+        paths: ["secret.txt", "other.txt"],
+        expectedHead: head,
+        confirmation: "secret.txt",
+        recursive: false,
       }),
     ).rejects.toMatchObject({ status: 400 });
     await expect(

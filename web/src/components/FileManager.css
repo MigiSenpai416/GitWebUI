@@ -106,6 +106,10 @@
 .fm-history-toggle:hover { color: var(--text-strong); border-color: var(--border-strong); }
 .fm-history-toggle.active { color: var(--text-strong); background: var(--bg-row-selected); border-color: var(--accent-quiet); }
 .fm-history-toggle span { min-width: 17px; padding: 1px 4px; border-radius: 8px; background: var(--bg-elevated); color: var(--text-faint); font-size: var(--fs-xs); text-align: center; }
+.fm-delete-selected { height: 31px; display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; padding: 0 9px; border: 1px solid #74413f; border-radius: var(--radius); background: rgba(169, 50, 44, 0.15); color: #ffaaa5; font-size: var(--fs-sm); }
+.fm-delete-selected:hover:not(:disabled) { background: rgba(169, 50, 44, 0.28); border-color: #a6534f; color: #ffc1bd; }
+.fm-delete-selected:disabled { opacity: 0.42; cursor: default; }
+.fm-delete-selected svg { width: 14px; height: 14px; }
 
 .fm-breadcrumb {
   flex: 1;
@@ -177,17 +181,26 @@
 .fm-tree-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .fm-list { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg-panel); }
-.fm-columns, .fm-row { display: grid; grid-template-columns: minmax(220px, 1fr) 125px 90px; align-items: center; }
+.fm-columns, .fm-row-main { display: grid; grid-template-columns: minmax(220px, 1fr) 125px 90px; align-items: center; }
+.fm-columns.selecting { grid-template-columns: 32px minmax(220px, 1fr) 125px 90px; }
 .fm-columns { height: 31px; flex-shrink: 0; padding: 0 10px; color: var(--text-faint); font-size: var(--fs-xs); background: var(--bg-toolbar); border-bottom: 1px solid var(--border); }
-.fm-columns span:not(:first-child), .fm-row > span:not(:first-child) { padding-left: 10px; border-left: 1px solid var(--border); }
+.fm-columns:not(.selecting) span:not(:first-child), .fm-columns.selecting span:nth-child(n+3), .fm-row-main > span:not(:first-child) { padding-left: 10px; border-left: 1px solid var(--border); }
 .fm-rows { flex: 1; min-height: 0; overflow: auto; }
 .fm-rows-inner { position: relative; width: 100%; }
-.fm-row { position: absolute; top: 0; left: 0; width: 100%; height: 30px; padding: 0 10px; border: 0; background: transparent; color: var(--text-dim); text-align: left; }
+.fm-row { position: absolute; top: 0; left: 0; width: 100%; height: 30px; display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; padding: 0 10px; color: var(--text-dim); }
+.fm-row.selecting { grid-template-columns: 32px minmax(0, 1fr); }
 .fm-row:hover { background: var(--bg-row-hover); color: var(--text); }
 .fm-row.selected { background: var(--bg-row-selected); color: var(--text-strong); }
+.fm-row.delete-selected { background: rgba(169, 50, 44, 0.2); color: var(--text-strong); }
+.fm-row.delete-selected.selected { background: linear-gradient(rgba(169, 50, 44, 0.2), rgba(169, 50, 44, 0.2)), var(--bg-row-selected); }
 .fm-row.historical { color: var(--text-faint); }
 .fm-row.historical .fm-name { color: var(--text-dim); }
-.fm-row > span { height: 22px; display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-row-main { width: 100%; height: 30px; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; }
+.fm-row-main > span { height: 22px; display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-row-check { width: 20px; height: 20px; display: grid; place-items: center; padding: 0; border: 1px solid var(--border-strong); border-radius: 3px; background: var(--bg-input); color: #ffc1bd; font-size: 13px; font-weight: 700; }
+.fm-row-check:hover:not(:disabled) { border-color: #a6534f; background: rgba(169, 50, 44, 0.22); }
+.fm-row-check[aria-pressed="true"] { border-color: #cf4b44; background: #7f2d29; }
+.fm-row-check:disabled { opacity: 0.18; cursor: default; }
 .fm-name { gap: 8px; color: var(--text); }
 .fm-name > svg { width: 16px; height: 16px; flex-shrink: 0; }
 .fm-directory > svg { color: #72b7d6; }
@@ -258,11 +271,13 @@
 .fm-context small { display: block; margin-top: 3px; padding: 5px 9px 3px; border-top: 1px solid var(--border); font: var(--fs-xs) var(--font-mono); color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .fm-confirm-shade { position: absolute; inset: 0; z-index: 370; display: grid; place-items: center; padding: 24px; background: rgba(4, 8, 12, 0.76); }
-.fm-confirm { width: min(610px, 90%); padding: 20px; background: var(--bg-elevated); border: 1px solid #74413f; border-radius: 8px; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.72); }
+.fm-confirm { width: min(610px, 90%); max-height: calc(100% - 48px); padding: 20px; overflow-y: auto; background: var(--bg-elevated); border: 1px solid #74413f; border-radius: 8px; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.72); }
 .fm-confirm-title { display: flex; align-items: center; gap: 9px; color: #ffaaa5; font-size: 17px; font-weight: 700; }
 .fm-confirm-title svg { width: 19px; height: 19px; }
 .fm-confirm p { margin: 13px 0 8px; color: var(--text); line-height: 1.45; }
 .fm-confirm .fm-confirm-history-note { margin-top: 0; color: #ffbf7b; font-size: var(--fs-sm); }
+.fm-confirm-paths { max-height: 104px; display: flex; flex-direction: column; gap: 3px; margin: 0 0 10px; padding: 7px 9px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); }
+.fm-confirm-paths code { flex-shrink: 0; }
 .fm-confirm code { font-family: var(--font-mono); color: var(--text-strong); word-break: break-all; }
 .fm-confirm ul { margin: 8px 0 16px; padding-left: 22px; color: var(--text-dim); font-size: var(--fs-sm); line-height: 1.55; }
 .fm-confirm label { display: flex; flex-direction: column; gap: 6px; color: var(--text); font-size: var(--fs-sm); }
@@ -282,5 +297,7 @@
   .fm-window { width: 100%; height: 100%; min-width: 0; min-height: 0; }
   .fm-tree { width: 190px; }
   .fm-search { width: 180px; }
-  .fm-columns, .fm-row { grid-template-columns: minmax(170px, 1fr) 105px 72px; }
+  .fm-delete-selected { width: 31px; justify-content: center; padding: 0; font-size: 0; }
+  .fm-columns, .fm-row-main { grid-template-columns: minmax(170px, 1fr) 105px 72px; }
+  .fm-columns.selecting { grid-template-columns: 32px minmax(170px, 1fr) 105px 72px; }
 }

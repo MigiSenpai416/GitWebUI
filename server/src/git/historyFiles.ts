@@ -34,7 +34,8 @@ export interface HeadFileContent {
 }
 
 export interface HistoryDeleteInput {
-  path: string;
+  path?: string;
+  paths?: string[];
   expectedHead: string;
   confirmation: string;
   recursive?: boolean;
@@ -42,6 +43,7 @@ export interface HistoryDeleteInput {
 
 export interface HistoryDeleteResult {
   path: string;
+  paths: string[];
   head: string;
   backupPath: string;
   worktreeBackupPath: string;
@@ -53,6 +55,8 @@ export interface HistoryDeleteResult {
 const activeRewrites = new Set<string>();
 const activeMutations = new Map<string, number>();
 const MAX_HEAD_FILE_PREVIEW_BYTES = 10 * 1024 * 1024;
+const MAX_HISTORY_DELETE_PATHS = 100;
+const MAX_HISTORY_DELETE_PATH_CHARACTERS = 8_000;
 
 const FILTER_REPO_INSTALL_ERROR =
   "Deleting from Git history requires git-filter-repo, but GitWebUI could not run it. " +
@@ -111,6 +115,16 @@ export async function getHeadFileTree(
     ? await historicalPathsOutsideHead(root, entries)
     : [];
   return { head, entries, historicalPaths };
+}
+
+interface HistoryDeleteTarget {
+  path: string;
+  recursive: boolean;
+}
+
+interface QuarantinedPath {
+  target: string;
+  path: string;
 }
 
 async function historicalPathsOutsideHead(
@@ -204,11 +218,10 @@ export async function getHeadFileContent(
 }
 
 /**
- * Remove one exact repository path (or every entry beneath it) from all reachable
- * refs. This is deliberately narrower than an arbitrary filter command: the
- * path is verified against reachable history, passed as one argument, and
- * used as a literal pathspec so punctuation can never become shell/pathspec
- * syntax.
+ * Remove selected exact repository paths (or one directory tree) from all
+ * reachable refs. This is deliberately narrower than an arbitrary filter
+ * command: every path is verified against reachable history and treated as
+ * literal data so punctuation can never become shell/pathspec syntax.
  *
  * A bundle is made before refs move. The rewrite is allowed only in a clean,
  * non-shallow repository with one worktree, because resetting multiple indexes
@@ -218,10 +231,15 @@ export async function deletePathFromHistory(
   root: string,
   input: HistoryDeleteInput,
 ): Promise<HistoryDeleteResult> {
-  const target = validateHistoryPath(input.path);
-  const recursive = input.recursive !== false;
-  if (input.confirmation !== target) {
-    throw httpError(400, "Confirmation must exactly match the repository path");
+  const targets = normalizeHistoryDeleteTargets(input);
+  const confirmationTarget = historyDeleteConfirmation(targets);
+  if (input.confirmation !== confirmationTarget) {
+    throw httpError(
+      400,
+      targets.length === 1
+        ? "Confirmation must exactly match the repository path"
+        : `Confirmation must exactly match ${confirmationTarget}`,
+    );
   }
 
   if (activeRewrites.has(root)) {
@@ -238,7 +256,8 @@ export async function deletePathFromHistory(
   let stashRecovery: StashRecovery[] = [];
   let internalPrefix = "";
   let mirrorDir = "";
-  let quarantinePath = "";
+  let quarantinedPaths: QuarantinedPath[] = [];
+  let worktreeBackupPath = "";
   let workingTreeBackupDirectory = "";
   let fetchHeadBefore: string | null = null;
   let fetchHeadQuarantine = "";
@@ -249,7 +268,7 @@ export async function deletePathFromHistory(
   let indexTransition: IndexTransition | null = null;
   try {
     await requireFilterRepo(root);
-    const preflightResult = await preflight(root, target, input.expectedHead, recursive);
+    const preflightResult = await preflight(root, targets, input.expectedHead);
     const oldHead = preflightResult.head;
     refsBefore = preflightResult.refs;
     fetchHeadBefore = await readPseudoRefFile(root, "FETCH_HEAD");
@@ -288,7 +307,7 @@ export async function deletePathFromHistory(
         "--force",
         "--partial",
         "--invert-paths",
-        recursive ? `--path=${target}` : `--path-regex=\\A${escapePathRegex(target)}\\Z`,
+        ...filterPathArguments(targets),
         "--prune-empty=never",
         "--prune-degenerate=never",
         "--preserve-commit-hashes",
@@ -308,7 +327,7 @@ export async function deletePathFromHistory(
     // Validate in the isolated mirror before a single ref in the live repo
     // moves, then import its objects and atomically exchange all ref tips.
     const mirrorRefs = await refSnapshot(mirrorDir);
-    await verifyPathAbsent(mirrorDir, target, mirrorRefs, recursive);
+    await verifyPathsAbsent(mirrorDir, targets, mirrorRefs);
     await runGit(mirrorDir, ["fsck", "--full", "--no-reflogs"]);
     publishedRefs = await importAndUpdateRefs(
       root,
@@ -317,24 +336,25 @@ export async function deletePathFromHistory(
       sourceRefs,
       reflogsBefore,
     );
-    await verifyPathAbsent(root, target, publishedRefs, recursive);
+    await verifyPathsAbsent(root, targets, publishedRefs);
     await requireUnchangedIndexAndWorktree(root, oldHead);
 
     const newHead = await verifiedHead(root);
     if (!newHead) throw new Error("History rewrite left the current branch without a HEAD");
-    const workingTreeBackup = await quarantineWorkingTreePath(
+    const workingTreeBackup = await quarantineWorkingTreePaths(
       root,
-      target,
+      targets,
       preflightResult.presentAtHead,
     );
-    quarantinePath = workingTreeBackup.path;
+    quarantinedPaths = workingTreeBackup.paths;
+    worktreeBackupPath = workingTreeBackup.path;
     workingTreeBackupDirectory = workingTreeBackup.directory;
-    // Rewriting one path leaves every other entry in the tip tree unchanged.
-    // Update only the index; the selected worktree path was atomically moved
+    // Rewriting selected paths leaves every other entry in the tip tree unchanged.
+    // Update only the index; selected worktree paths were atomically moved
     // to a recovery location, so concurrent edits elsewhere are never erased.
-    indexTransition = await removeTargetFromIndexAtomically(
+    indexTransition = await removeTargetsFromIndexAtomically(
       root,
-      target,
+      targets,
       workingTreeBackupDirectory,
       preflightResult.presentAtHead,
     );
@@ -349,7 +369,7 @@ export async function deletePathFromHistory(
     // are reported as an incomplete cleanup, never as a successful rollback.
     cleanupIrreversible = true;
     await expireRecoveryReflogs(root);
-    await verifyRecoveryReflogsClean(root, target, recursive);
+    await verifyRecoveryReflogsClean(root, targets);
     await requirePseudoRefAbsent(root, "FETCH_HEAD");
     await requirePseudoRefAbsent(root, "ORIG_HEAD");
     await deleteRefs(root, await refNames(root, internalPrefix));
@@ -357,16 +377,19 @@ export async function deletePathFromHistory(
     await deletePseudoRefQuarantine(origHeadQuarantine);
 
     return {
-      path: target,
+      path: targets[0].path,
+      paths: targets.map((target) => target.path),
       head: newHead,
       backupPath,
-      worktreeBackupPath: quarantinePath,
+      worktreeBackupPath,
       indexBackupPath: indexTransition.backupPath,
       rewrittenRefs: countChangedRefs(refsBefore, await refSnapshot(root)),
       warnings: [
-        quarantinePath
+        quarantinedPaths.length
           ? `The removed working-tree content and pre-rewrite index were preserved at ${workingTreeBackupDirectory} so racing edits cannot be lost.`
-          : `The pre-rewrite index was preserved at ${workingTreeBackupDirectory}; the selected path was absent from HEAD, so its current working-tree location was not changed.`,
+          : targets.length === 1
+            ? `The pre-rewrite index was preserved at ${workingTreeBackupDirectory}; the selected path was absent from HEAD, so its current working-tree location was not changed.`
+            : `The pre-rewrite index was preserved at ${workingTreeBackupDirectory}; the selected paths were absent from HEAD, so their current working-tree locations were not changed.`,
         "Unreachable pre-rewrite Git objects may remain until normal pruning; use a verified fresh clone and remove the old repository plus recovery artifacts for a sensitive-data purge.",
         "Non-stash reflogs were cleared; their prior names, messages, timestamps, and ordering are available only indirectly through the recovery bundle's commits.",
       ],
@@ -384,13 +407,13 @@ export async function deletePathFromHistory(
         const indexRestored = indexTransition
           ? await restoreIndexTransition(indexTransition)
           : true;
-        const worktreeRestored = await restoreQuarantinedPath(root, target, quarantinePath);
+        const worktreeRestored = await restoreQuarantinedPaths(root, quarantinedPaths);
         await restorePseudoRefQuarantine(root, "FETCH_HEAD", fetchHeadQuarantine);
         await restorePseudoRefQuarantine(root, "ORIG_HEAD", origHeadQuarantine);
         await rebuildOriginalStashReflog(root, stashRecovery).catch(() => undefined);
         throw httpError(
           500,
-          `History rewrite failed and the original refs were restored.${workingTreeBackupDirectory ? ` Repository-state backup directory: ${workingTreeBackupDirectory}.` : ""}${indexRestored ? "" : " The live index changed again and was not overwritten."}${worktreeRestored ? "" : ` The working-tree copy remains at ${quarantinePath}.`} Recovery bundle: ${backupPath}. ${errorMessage(error)}`,
+          `History rewrite failed and the original refs were restored.${workingTreeBackupDirectory ? ` Repository-state backup directory: ${workingTreeBackupDirectory}.` : ""}${indexRestored ? "" : " The live index changed again and was not overwritten."}${worktreeRestored ? "" : ` Some working-tree copies remain under ${workingTreeBackupDirectory}.`} Recovery bundle: ${backupPath}. ${errorMessage(error)}`,
         );
       }
       throw httpError(
@@ -452,14 +475,13 @@ function parseLsTreeRecords(stdout: string): Array<HeadFileEntry & { oid: string
 interface PreflightResult {
   head: string;
   refs: RefState[];
-  presentAtHead: boolean;
+  presentAtHead: Set<string>;
 }
 
 async function preflight(
   root: string,
-  target: string,
+  targets: HistoryDeleteTarget[],
   expectedHead: string,
-  recursive: boolean,
 ): Promise<PreflightResult> {
   if (!/^[0-9a-fA-F]{40,64}$/.test(expectedHead ?? "")) {
     throw httpError(400, "A valid expected HEAD is required");
@@ -483,14 +505,20 @@ async function preflight(
     throw httpError(409, "Check out a branch before rewriting history; detached HEAD is not supported");
   }
 
-  const presentAtHead = await pathAtHead(root, head, target, recursive);
-  if (!presentAtHead && !(await pathInHistory(root, target, recursive))) {
-    throw httpError(409, `The path no longer exists in reachable history: ${target}`);
+  const presentAtHead = await pathsAtHead(root, head, targets);
+  const absent = targets.filter((target) => !presentAtHead.has(target.path));
+  if (absent.length) {
+    const historicalPaths = await getHistoricalPaths(root);
+    for (const target of absent) {
+      if (!pathExistsInHistory(historicalPaths, target.path, target.recursive)) {
+        throw httpError(409, `The path no longer exists in reachable history: ${target.path}`);
+      }
+    }
   }
-  if (presentAtHead) {
-    validateWorktreePath(target);
-    await rejectFilesystemAliasedSelection(root, head, target);
+  for (const target of targets.filter((item) => presentAtHead.has(item.path))) {
+    validateWorktreePath(target.path);
   }
+  await rejectFilesystemAliasedSelections(root, head, targets, presentAtHead);
 
   if (runningCommandCount() > 0) {
     throw httpError(409, "Wait for running terminal commands to finish before rewriting history");
@@ -561,6 +589,45 @@ async function preflight(
   return { head, refs, presentAtHead };
 }
 
+function normalizeHistoryDeleteTargets(input: HistoryDeleteInput): HistoryDeleteTarget[] {
+  const usesPathArray = input.paths !== undefined;
+  const requested = input.paths ?? [input.path ?? ""];
+  if (!Array.isArray(requested) || requested.length === 0) {
+    throw httpError(400, "At least one repository path is required");
+  }
+  if (requested.length > MAX_HISTORY_DELETE_PATHS) {
+    throw httpError(400, `At most ${MAX_HISTORY_DELETE_PATHS} files can be deleted at once`);
+  }
+  if (requested.length > 1 && input.recursive === true) {
+    throw httpError(400, "Multiple selections must be exact file paths, not recursive directories");
+  }
+  const paths = requested.map(validateHistoryPath);
+  if (new Set(paths).size !== paths.length) {
+    throw httpError(400, "Duplicate repository paths are not allowed");
+  }
+  if (paths.reduce((total, target) => total + target.length, 0) > MAX_HISTORY_DELETE_PATH_CHARACTERS) {
+    throw httpError(400, "The selected repository paths are too long to rewrite safely in one operation");
+  }
+  return paths.map((target) => ({
+    path: target,
+    recursive: paths.length === 1
+      ? usesPathArray ? input.recursive === true : input.recursive !== false
+      : false,
+  }));
+}
+
+function historyDeleteConfirmation(targets: HistoryDeleteTarget[]): string {
+  return targets.length === 1 ? targets[0].path : `DELETE ${targets.length} FILES`;
+}
+
+function filterPathArguments(targets: HistoryDeleteTarget[]): string[] {
+  if (targets.length === 1 && targets[0].recursive) {
+    return [`--path=${targets[0].path}`];
+  }
+  const alternatives = targets.map((target) => escapePathRegex(target.path)).join("|");
+  return [`--path-regex=\\A(?:${alternatives})\\Z`];
+}
+
 function validateHistoryPath(value: string): string {
   const target = String(value ?? "");
   if (!target || target === "." || target === "..") {
@@ -605,18 +672,17 @@ async function verifiedHead(root: string): Promise<string | null> {
   }
 }
 
-async function pathAtHead(
+async function pathsAtHead(
   root: string,
   head: string,
-  target: string,
-  recursive: boolean,
-): Promise<boolean> {
+  targets: HistoryDeleteTarget[],
+): Promise<Set<string>> {
   const { stdout } = await runGit(root, [
     "ls-tree",
     "-z",
     head,
     "--",
-    `:(literal)${target}`,
+    ...targets.map((target) => `:(literal)${target.path}`),
   ]);
   const matches = stdout
     .split("\0")
@@ -628,12 +694,17 @@ async function pathAtHead(
         type: record.slice(0, tab).trim().split(/\s+/)[1] ?? "",
       };
     });
-  const match = matches.find((item) => item.path === target);
-  return !!match && (recursive || match.type !== "tree");
+  return new Set(
+    targets
+      .filter((target) => {
+        const match = matches.find((item) => item.path === target.path);
+        return !!match && (target.recursive || match.type !== "tree");
+      })
+      .map((target) => target.path),
+  );
 }
 
-async function pathInHistory(root: string, target: string, recursive: boolean): Promise<boolean> {
-  const paths = await getHistoricalPaths(root);
+function pathExistsInHistory(paths: string[], target: string, recursive: boolean): boolean {
   return paths.some((item) => item === target || (recursive && item.startsWith(`${target}/`)));
 }
 
@@ -641,26 +712,33 @@ function escapePathRegex(value: string): string {
   return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 }
 
-async function rejectFilesystemAliasedSelection(
+async function rejectFilesystemAliasedSelections(
   root: string,
   head: string,
-  target: string,
+  targets: HistoryDeleteTarget[],
+  presentAtHead: Set<string>,
 ): Promise<void> {
   if (process.platform !== "win32") return;
   const { stdout } = await runGit(root, ["ls-tree", "-r", "-z", "--name-only", head]);
   const paths = stdout.split("\0").filter(Boolean);
-  const selected = paths.filter((item) => item === target || item.startsWith(`${target}/`));
+  const selectedTargets = targets.filter((target) => presentAtHead.has(target.path));
+  const selected = paths.filter((item) => selectedTargets.some(
+    (target) => item === target.path || (target.recursive && item.startsWith(`${target.path}/`)),
+  ));
   const selectedPaths = new Set(selected);
-  const selectedPhysicalPaths = new Set(selected.map(windowsFilesystemPath));
+  const physicalSelections = selected.map(windowsFilesystemPath);
+  const selectedPhysicalPaths = new Set(physicalSelections);
   const retained = paths.filter((item) => !selectedPaths.has(item));
-  const foldedTarget = windowsFilesystemPath(target);
-  const aliases = retained.some((item) => {
-    const folded = windowsFilesystemPath(item);
-    return (
-      folded === foldedTarget ||
-      folded.startsWith(`${foldedTarget}/`) ||
-      selectedPhysicalPaths.has(folded)
-    );
+  const aliases = selectedPhysicalPaths.size !== physicalSelections.length || selectedTargets.some((target) => {
+    const foldedTarget = windowsFilesystemPath(target.path);
+    return retained.some((item) => {
+      const folded = windowsFilesystemPath(item);
+      return (
+        folded === foldedTarget ||
+        (target.recursive && folded.startsWith(`${foldedTarget}/`)) ||
+        selectedPhysicalPaths.has(folded)
+      );
+    });
   });
   if (aliases) {
     throw httpError(
@@ -1084,13 +1162,25 @@ function sameRefSnapshot(a: RefState[], b: RefState[]): boolean {
   });
 }
 
+async function verifyPathsAbsent(
+  root: string,
+  targets: HistoryDeleteTarget[],
+  expectedRefs: RefState[],
+): Promise<void> {
+  for (const target of targets) {
+    await verifyPathAbsent(root, target.path, expectedRefs, target.recursive);
+  }
+}
+
 async function verifyPathAbsent(
   root: string,
   target: string,
   expectedRefs: RefState[],
   recursive: boolean,
 ): Promise<void> {
-  const refs = expectedRefs.filter((item) => !item.ref.startsWith("refs/original/"));
+  const refs = expectedRefs.filter(
+    (item) => !item.ref.startsWith("refs/original/") && !item.ref.startsWith("refs/notes/"),
+  );
   const commits = [...new Set(refs.map(refCommitOid).filter((oid): oid is string => Boolean(oid)))];
   const pathspecs = [
     `:(literal)${target}`,
@@ -1204,32 +1294,34 @@ function argumentBatches(values: string[], maxLength: number): string[][] {
 
 async function verifyRecoveryReflogsClean(
   root: string,
-  target: string,
-  recursive: boolean,
+  targets: HistoryDeleteTarget[],
 ): Promise<void> {
-  const pathspecs = [
-    `:(literal)${target}`,
-    ...(recursive ? [] : [`:(exclude,literal)${target}/`]),
-  ];
-  const { stdout } = await runGit(root, [
-    "log",
-    "--reflog",
-    "--all",
-    "-m",
-    "--format=%H",
-    "--",
-    ...pathspecs,
-  ]);
-  if (stdout.trim()) {
-    throw new Error(`Verification failed: a reflog still reaches ${target}`);
+  for (const target of targets) {
+    const pathspecs = [
+      `:(literal)${target.path}`,
+      ...(target.recursive ? [] : [`:(exclude,literal)${target.path}/`]),
+    ];
+    const { stdout } = await runGit(root, [
+      "log",
+      "--reflog",
+      "--exclude=refs/notes/*",
+      "--all",
+      "-m",
+      "--format=%H",
+      "--",
+      ...pathspecs,
+    ]);
+    if (stdout.trim()) {
+      throw new Error(`Verification failed: a reflog still reaches ${target.path}`);
+    }
   }
 }
 
-async function quarantineWorkingTreePath(
+async function quarantineWorkingTreePaths(
   root: string,
-  target: string,
-  presentAtHead: boolean,
-): Promise<{ directory: string; path: string }> {
+  targets: HistoryDeleteTarget[],
+  presentAtHead: Set<string>,
+): Promise<{ directory: string; path: string; paths: QuarantinedPath[] }> {
   const rawGitDir = await gitText(root, ["rev-parse", "--git-common-dir"]);
   const gitDir = path.isAbsolute(rawGitDir) ? rawGitDir : path.resolve(root, rawGitDir);
   const container = path.join(
@@ -1238,34 +1330,54 @@ async function quarantineWorkingTreePath(
     `${Date.now()}-${randomBytes(5).toString("hex")}`,
   );
   await fs.mkdir(container, { recursive: true });
-  if (!presentAtHead) return { directory: container, path: "" };
+  const currentTargets = targets.filter((target) => presentAtHead.has(target.path));
+  if (!currentTargets.length) return { directory: container, path: "", paths: [] };
+  const batch = targets.length > 1;
   // Fixed disjoint slots avoid collisions with valid repository basenames
   // such as a tracked file literally named `index-before`.
-  const destination = path.join(container, "worktree-content");
+  const contentPath = path.join(container, "worktree-content");
+  const moved: QuarantinedPath[] = [];
   try {
-    await fs.rename(path.resolve(root, ...target.split("/")), destination);
-    return { directory: container, path: destination };
+    if (batch) await fs.mkdir(contentPath);
+    for (let index = 0; index < currentTargets.length; index++) {
+      const target = currentTargets[index].path;
+      const destination = batch
+        ? path.join(contentPath, String(index + 1).padStart(3, "0"))
+        : contentPath;
+      await fs.rename(path.resolve(root, ...target.split("/")), destination);
+      moved.push({ target, path: destination });
+    }
+    if (batch) {
+      await fs.writeFile(
+        path.join(contentPath, "paths.json"),
+        `${JSON.stringify(moved.map((item) => ({ target: item.target, backup: path.relative(contentPath, item.path) })), null, 2)}\n`,
+        { flag: "wx" },
+      );
+    }
+    return { directory: container, path: contentPath, paths: moved };
   } catch (error) {
-    await fs.rm(container, { recursive: true, force: true }).catch(() => undefined);
+    const restored = await restoreQuarantinedPaths(root, moved);
+    if (restored) await fs.rm(container, { recursive: true, force: true }).catch(() => undefined);
     throw httpError(
       409,
-      `Could not safely move the selected working-tree path into recovery storage (${errorMessage(error)})`,
+      `Could not safely move the selected working-tree paths into recovery storage${restored ? "" : `; recovery copies remain under ${container}`} (${errorMessage(error)})`,
     );
   }
 }
 
-async function removeTargetFromIndexAtomically(
+async function removeTargetsFromIndexAtomically(
   root: string,
-  target: string,
+  targets: HistoryDeleteTarget[],
   backupDirectory: string,
-  removePath: boolean,
+  presentAtHead: Set<string>,
 ): Promise<IndexTransition> {
   const rawIndex = await gitText(root, ["rev-parse", "--git-path", "index"]);
   const indexPath = path.isAbsolute(rawIndex) ? rawIndex : path.resolve(root, rawIndex);
   const before = await fs.readFile(indexPath);
   const backupPath = path.join(backupDirectory, "index-before");
   await fs.writeFile(backupPath, before, { flag: "wx" });
-  if (!removePath) {
+  const selected = targets.filter((target) => presentAtHead.has(target.path));
+  if (!selected.length) {
     return { indexPath, backupPath, before, after: before };
   }
 
@@ -1275,7 +1387,15 @@ async function removeTargetFromIndexAtomically(
     await fs.writeFile(tempIndex, before);
     await runGit(
       root,
-      ["rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", `:(literal)${target}`],
+      [
+        "rm",
+        "-r",
+        "-f",
+        "--cached",
+        "--ignore-unmatch",
+        "--",
+        ...selected.map((target) => `:(literal)${target.path}`),
+      ],
       { env: { GIT_INDEX_FILE: tempIndex } },
     );
     const after = await fs.readFile(tempIndex);
@@ -1320,29 +1440,30 @@ async function replaceIndexIfMatches(
   }
 }
 
-async function restoreQuarantinedPath(
+async function restoreQuarantinedPaths(
   root: string,
-  target: string,
-  quarantinePath: string,
+  quarantined: QuarantinedPath[],
 ): Promise<boolean> {
-  if (!quarantinePath) return true;
-  const destination = path.resolve(root, ...target.split("/"));
-  try {
-    await fs.access(destination);
-    return false;
-  } catch {
-    /* The original path is free, so restoring cannot overwrite new work. */
+  if (!quarantined.length) return true;
+  for (const item of quarantined) {
+    const destination = path.resolve(root, ...item.target.split("/"));
+    try {
+      await fs.access(destination);
+      return false;
+    } catch {
+      /* The original path is free, so restoring cannot overwrite new work. */
+    }
   }
-  try {
-    await fs.mkdir(path.dirname(destination), { recursive: true });
-    await fs.rename(quarantinePath, destination);
-    // The same directory can contain `index-before`. Never recursively remove
-    // it: rollback may need that exact staged state if reverse index CAS fails.
-    await fs.rmdir(path.dirname(quarantinePath)).catch(() => undefined);
-    return true;
-  } catch {
-    return false;
+  for (const item of quarantined) {
+    const destination = path.resolve(root, ...item.target.split("/"));
+    try {
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.rename(item.path, destination);
+    } catch {
+      return false;
+    }
   }
+  return true;
 }
 
 async function requireUnchangedIndexAndWorktree(root: string, oldHead: string): Promise<void> {

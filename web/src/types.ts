@@ -59,6 +59,7 @@ export interface HeadFileContent {
 
 export interface HistoryDeleteResult {
   path: string;
+  paths: string[];
   head: string;
   backupPath: string;
   worktreeBackupPath: string;

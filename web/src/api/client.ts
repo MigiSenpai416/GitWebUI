@@ -252,10 +252,10 @@ export const api = {
     const params = new URLSearchParams({ path, head });
     return req<HeadFileContent>(`/api/history-files/content?${params.toString()}`);
   },
-  deleteFromHistory: (path: string, expectedHead: string, confirmation: string, recursive: boolean) =>
+  deleteFromHistory: (paths: string[], expectedHead: string, confirmation: string, recursive: boolean) =>
     req<HistoryDeleteResult>("/api/history-files/delete", {
       method: "POST",
-      body: JSON.stringify({ path, expectedHead, confirmation, recursive }),
+      body: JSON.stringify({ paths, expectedHead, confirmation, recursive }),
     }),
   reveal: (path: string) =>
     req<{ ok: true }>("/api/reveal", { method: "POST", body: JSON.stringify({ path }) }),

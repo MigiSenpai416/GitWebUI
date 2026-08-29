@@ -418,11 +418,15 @@ api.get("/history-files/content", h(async (req, res) => {
 api.post("/history-files/delete", h(async (req, res) => {
   const root = requireRepoRoot(req);
   const target = String(req.body?.path ?? "");
+  const targets = Array.isArray(req.body?.paths)
+    ? req.body.paths.map((item: unknown) => String(item ?? ""))
+    : undefined;
   const expectedHead = String(req.body?.expectedHead ?? "");
   const confirmation = String(req.body?.confirmation ?? "");
-  const recursive = req.body?.recursive !== false;
+  const recursive = targets ? req.body?.recursive === true : req.body?.recursive !== false;
   const result = await deletePathFromHistory(root, {
     path: target,
+    paths: targets,
     expectedHead,
     confirmation,
     recursive,

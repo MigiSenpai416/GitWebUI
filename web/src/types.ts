@@ -45,6 +45,7 @@ export interface HeadFileEntry {
 export interface HeadFileTree {
   head: string | null;
   entries: HeadFileEntry[];
+  historicalPaths: string[];
 }
 
 export interface HeadFileContent {

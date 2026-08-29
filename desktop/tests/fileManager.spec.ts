@@ -15,8 +15,20 @@ test.describe.serial("File Manager history deletion", () => {
     await fs.mkdir(path.join(repoDir, "private"), { recursive: true });
     await fs.writeFile(path.join(repoDir, "private", "secret.txt"), "sensitive\nother sensitive\n");
     await fs.writeFile(path.join(repoDir, "keep.txt"), "keep\n");
+    await fs.writeFile(path.join(repoDir, "removed.txt"), "historical only\n");
+    await fs.writeFile(path.join(repoDir, "shape"), "historical file\n");
+    await fs.mkdir(path.join(repoDir, "former"));
+    await fs.writeFile(path.join(repoDir, "former", "old.txt"), "historical child\n");
     execFileSync("git", ["-C", repoDir, "add", "-A"], { stdio: "pipe" });
     execFileSync("git", ["-C", repoDir, "commit", "-m", "tracked files"], { stdio: "pipe" });
+    await fs.rm(path.join(repoDir, "removed.txt"));
+    await fs.rm(path.join(repoDir, "shape"));
+    await fs.mkdir(path.join(repoDir, "shape"));
+    await fs.writeFile(path.join(repoDir, "shape", "keep.txt"), "current child\n");
+    await fs.rm(path.join(repoDir, "former"), { recursive: true });
+    await fs.writeFile(path.join(repoDir, "former"), "current file\n");
+    execFileSync("git", ["-C", repoDir, "add", "-A"], { stdio: "pipe" });
+    execFileSync("git", ["-C", repoDir, "commit", "-m", "remove historical file"], { stdio: "pipe" });
 
     started = await launchApp();
     app = started.app;
@@ -51,6 +63,51 @@ test.describe.serial("File Manager history deletion", () => {
     await expect(dialog.getByText("private", { exact: true }).last()).toBeVisible();
     await expect(dialog.getByText("keep.txt", { exact: true })).toBeVisible();
     await expect(dialog.locator('.fm-row[title="keep.txt"] .fm-file-glyph svg')).toBeVisible();
+    await expect(dialog.getByText("removed.txt", { exact: true })).toBeHidden();
+
+    await dialog.getByRole("button", { name: /History paths/ }).click();
+    const removed = dialog.locator('.fm-row[title="removed.txt"]');
+    await expect(removed).toContainText("Not at HEAD");
+    await removed.click({ button: "right" });
+    await window.getByRole("menuitem", { name: "Delete file from history…" }).click();
+    const historicalConfirm = window.getByRole("alertdialog", { name: "Confirm history rewrite" });
+    await expect(historicalConfirm).toContainText("already absent from HEAD");
+    await historicalConfirm.getByLabel("Type the exact repository path to confirm:").press("Escape");
+
+    const shape = dialog.locator('.fm-row[title="shape"]');
+    await expect(shape).toContainText("Folder + historical file");
+    const viewport = await window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    await shape.dispatchEvent("contextmenu", {
+      button: 2,
+      clientX: viewport.width - 1,
+      clientY: viewport.height - 1,
+    });
+    const shapeMenu = window.getByRole("menu", { name: "Actions for shape" });
+    const shapeMenuBox = await shapeMenu.boundingBox();
+    expect(shapeMenuBox).not.toBeNull();
+    expect(shapeMenuBox!.x + shapeMenuBox!.width).toBeLessThanOrEqual(viewport.width - 8);
+    expect(shapeMenuBox!.y + shapeMenuBox!.height).toBeLessThanOrEqual(viewport.height - 8);
+    await expect(window.getByRole("menuitem", { name: "Delete file only from history…" })).toBeVisible();
+    await expect(window.getByRole("menuitem", { name: "Delete directory from history…" })).toBeVisible();
+    await window.evaluate(() => dispatchEvent(new Event("resize")));
+    await expect(shapeMenu).toBeHidden();
+    await shape.click({ button: "right" });
+    await window.getByRole("menuitem", { name: "Delete file only from history…" }).click();
+    await expect(window.getByRole("alertdialog", { name: "Confirm history rewrite" })).toContainText(
+      "a directory currently occupies the same path",
+    );
+    await window.keyboard.press("Escape");
+
+    const former = dialog.locator('.fm-row[title="former"]');
+    await expect(former).toContainText("Folder + file at HEAD");
+    await former.click({ button: "right" });
+    await expect(window.getByRole("menuitem", { name: "Open file" })).toBeVisible();
+    await expect(window.getByRole("menuitem", { name: "Delete file only from history…" })).toBeVisible();
+    await expect(window.getByRole("menuitem", { name: "Delete directory from history…" })).toBeVisible();
+    await window.keyboard.press("Escape");
+
+    await dialog.getByRole("button", { name: /History paths/ }).click();
+    await expect(removed).toBeHidden();
 
     await dialog.getByText("private", { exact: true }).last().dblclick();
     await expect(dialog.getByText("secret.txt", { exact: true })).toBeVisible();

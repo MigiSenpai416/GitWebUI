@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { configPath, ensureConfigDir } from "../config.js";
 import { getStatus } from "./status.js";
-import { GitError, runGit } from "./gitRunner.js";
+import { GitError, runGit, runGitNullRecords } from "./gitRunner.js";
 import { listWorktrees } from "./worktree.js";
 import { STASH_NOTES_REF } from "./stash.js";
 import { runningCommandCount } from "../terminal.js";
@@ -21,6 +21,7 @@ export interface HeadFileEntry {
 export interface HeadFileTree {
   head: string | null;
   entries: HeadFileEntry[];
+  historicalPaths: string[];
 }
 
 export interface HeadFileContent {
@@ -36,6 +37,7 @@ export interface HistoryDeleteInput {
   path: string;
   expectedHead: string;
   confirmation: string;
+  recursive?: boolean;
 }
 
 export interface HistoryDeleteResult {
@@ -89,9 +91,12 @@ function httpError(status: number, message: string): Error & { status: number } 
 }
 
 /** List every file-like entry in the tree at the currently checked-out HEAD. */
-export async function getHeadFileTree(root: string): Promise<HeadFileTree> {
+export async function getHeadFileTree(
+  root: string,
+  includeHistorical = false,
+): Promise<HeadFileTree> {
   const head = await verifiedHead(root);
-  if (!head) return { head: null, entries: [] };
+  if (!head) return { head: null, entries: [], historicalPaths: [] };
 
   const { stdout } = await runGit(root, [
     "ls-tree",
@@ -101,7 +106,51 @@ export async function getHeadFileTree(root: string): Promise<HeadFileTree> {
     "--full-tree",
     head,
   ]);
-  return { head, entries: parseLsTree(stdout) };
+  const entries = parseLsTree(stdout);
+  const historicalPaths = includeHistorical
+    ? await historicalPathsOutsideHead(root, entries)
+    : [];
+  return { head, entries, historicalPaths };
+}
+
+async function historicalPathsOutsideHead(
+  root: string,
+  entries: HeadFileEntry[],
+): Promise<string[]> {
+  const headPaths = new Set(entries.map((entry) => entry.path));
+  return (await getHistoricalPaths(root)).filter((item) => !headPaths.has(item));
+}
+
+/** List file paths that occur in commits reachable from user-visible refs. */
+export async function getHistoricalPaths(root: string): Promise<string[]> {
+  const stashTips = await gitText(root, [
+    "reflog",
+    "show",
+    "--format=%H",
+    "refs/stash",
+  ]).catch(() => "");
+  return changedPaths(root, [
+    "log",
+    "--exclude=refs/notes/*",
+    "--exclude=refs/gitwebui-history-rewrite/*",
+    "--all",
+    "--stdin",
+    "--root",
+    "-m",
+    "--no-renames",
+    "--format=",
+    "--name-only",
+    "-z",
+  ], stashTips ? `${stashTips}\n` : "");
+}
+
+async function changedPaths(
+  root: string,
+  args: string[],
+  input?: string,
+): Promise<string[]> {
+  return (await runGitNullRecords(root, args, input === undefined ? undefined : { input }))
+    .sort((a, b) => a.localeCompare(b));
 }
 
 /** Read one file blob from the exact HEAD snapshot shown by the File Manager. */
@@ -155,9 +204,9 @@ export async function getHeadFileContent(
 }
 
 /**
- * Remove one exact HEAD path (or every entry beneath it) from all reachable
+ * Remove one exact repository path (or every entry beneath it) from all reachable
  * refs. This is deliberately narrower than an arbitrary filter command: the
- * path is verified against HEAD, passed through an environment variable, and
+ * path is verified against reachable history, passed as one argument, and
  * used as a literal pathspec so punctuation can never become shell/pathspec
  * syntax.
  *
@@ -169,7 +218,8 @@ export async function deletePathFromHistory(
   root: string,
   input: HistoryDeleteInput,
 ): Promise<HistoryDeleteResult> {
-  const target = validateRepoPath(input.path);
+  const target = validateHistoryPath(input.path);
+  const recursive = input.recursive !== false;
   if (input.confirmation !== target) {
     throw httpError(400, "Confirmation must exactly match the repository path");
   }
@@ -189,6 +239,7 @@ export async function deletePathFromHistory(
   let internalPrefix = "";
   let mirrorDir = "";
   let quarantinePath = "";
+  let workingTreeBackupDirectory = "";
   let fetchHeadBefore: string | null = null;
   let fetchHeadQuarantine = "";
   let origHeadBefore: string | null = null;
@@ -198,7 +249,7 @@ export async function deletePathFromHistory(
   let indexTransition: IndexTransition | null = null;
   try {
     await requireFilterRepo(root);
-    const preflightResult = await preflight(root, target, input.expectedHead);
+    const preflightResult = await preflight(root, target, input.expectedHead, recursive);
     const oldHead = preflightResult.head;
     refsBefore = preflightResult.refs;
     fetchHeadBefore = await readPseudoRefFile(root, "FETCH_HEAD");
@@ -237,7 +288,7 @@ export async function deletePathFromHistory(
         "--force",
         "--partial",
         "--invert-paths",
-        `--path=${target}`,
+        recursive ? `--path=${target}` : `--path-regex=\\A${escapePathRegex(target)}\\Z`,
         "--prune-empty=never",
         "--prune-degenerate=never",
         "--preserve-commit-hashes",
@@ -257,7 +308,7 @@ export async function deletePathFromHistory(
     // Validate in the isolated mirror before a single ref in the live repo
     // moves, then import its objects and atomically exchange all ref tips.
     const mirrorRefs = await refSnapshot(mirrorDir);
-    await verifyPathAbsent(mirrorDir, target, mirrorRefs);
+    await verifyPathAbsent(mirrorDir, target, mirrorRefs, recursive);
     await runGit(mirrorDir, ["fsck", "--full", "--no-reflogs"]);
     publishedRefs = await importAndUpdateRefs(
       root,
@@ -266,16 +317,27 @@ export async function deletePathFromHistory(
       sourceRefs,
       reflogsBefore,
     );
-    await verifyPathAbsent(root, target, publishedRefs);
+    await verifyPathAbsent(root, target, publishedRefs, recursive);
     await requireUnchangedIndexAndWorktree(root, oldHead);
 
     const newHead = await verifiedHead(root);
     if (!newHead) throw new Error("History rewrite left the current branch without a HEAD");
-    quarantinePath = await quarantineWorkingTreePath(root, target);
+    const workingTreeBackup = await quarantineWorkingTreePath(
+      root,
+      target,
+      preflightResult.presentAtHead,
+    );
+    quarantinePath = workingTreeBackup.path;
+    workingTreeBackupDirectory = workingTreeBackup.directory;
     // Rewriting one path leaves every other entry in the tip tree unchanged.
     // Update only the index; the selected worktree path was atomically moved
     // to a recovery location, so concurrent edits elsewhere are never erased.
-    indexTransition = await removeTargetFromIndexAtomically(root, target, quarantinePath);
+    indexTransition = await removeTargetFromIndexAtomically(
+      root,
+      target,
+      workingTreeBackupDirectory,
+      preflightResult.presentAtHead,
+    );
     await rebuildStashReflog(root, stashRecovery);
 
     // Only now discard rollback refs. Reflogs other than refs/stash are expired
@@ -287,7 +349,7 @@ export async function deletePathFromHistory(
     // are reported as an incomplete cleanup, never as a successful rollback.
     cleanupIrreversible = true;
     await expireRecoveryReflogs(root);
-    await verifyRecoveryReflogsClean(root, target);
+    await verifyRecoveryReflogsClean(root, target, recursive);
     await requirePseudoRefAbsent(root, "FETCH_HEAD");
     await requirePseudoRefAbsent(root, "ORIG_HEAD");
     await deleteRefs(root, await refNames(root, internalPrefix));
@@ -302,7 +364,9 @@ export async function deletePathFromHistory(
       indexBackupPath: indexTransition.backupPath,
       rewrittenRefs: countChangedRefs(refsBefore, await refSnapshot(root)),
       warnings: [
-        `The removed working-tree content and pre-rewrite index were preserved at ${path.dirname(quarantinePath)} so racing edits cannot be lost.`,
+        quarantinePath
+          ? `The removed working-tree content and pre-rewrite index were preserved at ${workingTreeBackupDirectory} so racing edits cannot be lost.`
+          : `The pre-rewrite index was preserved at ${workingTreeBackupDirectory}; the selected path was absent from HEAD, so its current working-tree location was not changed.`,
         "Unreachable pre-rewrite Git objects may remain until normal pruning; use a verified fresh clone and remove the old repository plus recovery artifacts for a sensitive-data purge.",
         "Non-stash reflogs were cleared; their prior names, messages, timestamps, and ordering are available only indirectly through the recovery bundle's commits.",
       ],
@@ -311,7 +375,7 @@ export async function deletePathFromHistory(
     if (cleanupIrreversible) {
       throw httpError(
         500,
-        `History refs were rewritten, but recovery-route cleanup did not complete. Do not retry blindly. Recovery bundle: ${backupPath}.${quarantinePath ? ` Working-tree copy: ${quarantinePath}.` : ""} ${errorMessage(error)}`,
+        `History refs were rewritten, but recovery-route cleanup did not complete. Do not retry blindly. Recovery bundle: ${backupPath}.${workingTreeBackupDirectory ? ` Repository-state backup directory: ${workingTreeBackupDirectory}.` : ""} ${errorMessage(error)}`,
       );
     }
     if (publishedRefs) {
@@ -326,12 +390,12 @@ export async function deletePathFromHistory(
         await rebuildOriginalStashReflog(root, stashRecovery).catch(() => undefined);
         throw httpError(
           500,
-          `History rewrite failed and the original refs were restored.${indexTransition ? ` Pre-rewrite index backup: ${indexTransition.backupPath}.` : ""}${indexRestored ? "" : " The live index changed again and was not overwritten."}${worktreeRestored ? "" : ` The working-tree copy remains at ${quarantinePath}.`} Recovery bundle: ${backupPath}. ${errorMessage(error)}`,
+          `History rewrite failed and the original refs were restored.${workingTreeBackupDirectory ? ` Repository-state backup directory: ${workingTreeBackupDirectory}.` : ""}${indexRestored ? "" : " The live index changed again and was not overwritten."}${worktreeRestored ? "" : ` The working-tree copy remains at ${quarantinePath}.`} Recovery bundle: ${backupPath}. ${errorMessage(error)}`,
         );
       }
       throw httpError(
         500,
-        `History rewrite failed, but refs changed again and were not overwritten during rollback. Recovery bundle: ${backupPath}.${quarantinePath ? ` Working-tree copy: ${quarantinePath}.` : ""} ${errorMessage(error)}`,
+        `History rewrite failed, but refs changed again and were not overwritten during rollback. Recovery bundle: ${backupPath}.${workingTreeBackupDirectory ? ` Repository-state backup directory: ${workingTreeBackupDirectory}.` : ""} ${errorMessage(error)}`,
       );
     } else if (internalPrefix) {
       await deleteRefs(root, await refNames(root, internalPrefix).catch(() => [])).catch(
@@ -388,12 +452,14 @@ function parseLsTreeRecords(stdout: string): Array<HeadFileEntry & { oid: string
 interface PreflightResult {
   head: string;
   refs: RefState[];
+  presentAtHead: boolean;
 }
 
 async function preflight(
   root: string,
   target: string,
   expectedHead: string,
+  recursive: boolean,
 ): Promise<PreflightResult> {
   if (!/^[0-9a-fA-F]{40,64}$/.test(expectedHead ?? "")) {
     throw httpError(400, "A valid expected HEAD is required");
@@ -417,8 +483,14 @@ async function preflight(
     throw httpError(409, "Check out a branch before rewriting history; detached HEAD is not supported");
   }
 
-  await requirePathAtHead(root, head, target);
-  await rejectFilesystemAliasedSelection(root, head, target);
+  const presentAtHead = await pathAtHead(root, head, target, recursive);
+  if (!presentAtHead && !(await pathInHistory(root, target, recursive))) {
+    throw httpError(409, `The path no longer exists in reachable history: ${target}`);
+  }
+  if (presentAtHead) {
+    validateWorktreePath(target);
+    await rejectFilesystemAliasedSelection(root, head, target);
+  }
 
   if (runningCommandCount() > 0) {
     throw httpError(409, "Wait for running terminal commands to finish before rewriting history");
@@ -486,10 +558,10 @@ async function preflight(
 
   rejectNonCommitRefs(refs);
 
-  return { head, refs };
+  return { head, refs, presentAtHead };
 }
 
-function validateRepoPath(value: string): string {
+function validateHistoryPath(value: string): string {
   const target = String(value ?? "");
   if (!target || target === "." || target === "..") {
     throw httpError(400, "A repository-relative file or directory path is required");
@@ -497,8 +569,7 @@ function validateRepoPath(value: string): string {
   if (
     target.includes("\0") ||
     target.startsWith("/") ||
-    target.endsWith("/") ||
-    (process.platform === "win32" && target.includes("\\"))
+    target.endsWith("/")
   ) {
     throw httpError(400, "Invalid repository path");
   }
@@ -507,6 +578,15 @@ function validateRepoPath(value: string): string {
     throw httpError(400, "Invalid repository path");
   }
   return target;
+}
+
+function validateWorktreePath(target: string): void {
+  if (process.platform === "win32" && target.includes("\\")) {
+    throw httpError(
+      409,
+      "This Git path cannot be safely changed through the Windows working tree; delete it after it is absent from HEAD or use a case-sensitive checkout",
+    );
+  }
 }
 
 function validateGitTreePath(value: string): string {
@@ -525,7 +605,12 @@ async function verifiedHead(root: string): Promise<string | null> {
   }
 }
 
-async function requirePathAtHead(root: string, head: string, target: string): Promise<void> {
+async function pathAtHead(
+  root: string,
+  head: string,
+  target: string,
+  recursive: boolean,
+): Promise<boolean> {
   const { stdout } = await runGit(root, [
     "ls-tree",
     "-z",
@@ -536,10 +621,24 @@ async function requirePathAtHead(root: string, head: string, target: string): Pr
   const matches = stdout
     .split("\0")
     .filter(Boolean)
-    .map((record) => record.slice(record.indexOf("\t") + 1));
-  if (!matches.includes(target)) {
-    throw httpError(409, `The path no longer exists at HEAD: ${target}`);
-  }
+    .map((record) => {
+      const tab = record.indexOf("\t");
+      return {
+        path: record.slice(tab + 1),
+        type: record.slice(0, tab).trim().split(/\s+/)[1] ?? "",
+      };
+    });
+  const match = matches.find((item) => item.path === target);
+  return !!match && (recursive || match.type !== "tree");
+}
+
+async function pathInHistory(root: string, target: string, recursive: boolean): Promise<boolean> {
+  const paths = await getHistoricalPaths(root);
+  return paths.some((item) => item === target || (recursive && item.startsWith(`${target}/`)));
+}
+
+function escapePathRegex(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 }
 
 async function rejectFilesystemAliasedSelection(
@@ -989,13 +1088,18 @@ async function verifyPathAbsent(
   root: string,
   target: string,
   expectedRefs: RefState[],
+  recursive: boolean,
 ): Promise<void> {
   const refs = expectedRefs.filter((item) => !item.ref.startsWith("refs/original/"));
   const commits = [...new Set(refs.map(refCommitOid).filter((oid): oid is string => Boolean(oid)))];
+  const pathspecs = [
+    `:(literal)${target}`,
+    ...(recursive ? [] : [`:(exclude,literal)${target}/`]),
+  ];
   if (commits.length) {
     const { stdout } = await runGit(
       root,
-      ["rev-list", "--stdin", "--max-count=1", "--no-renames", "--", `:(literal)${target}`],
+      ["rev-list", "--stdin", "-m", "--max-count=1", "--no-renames", "--", ...pathspecs],
       { input: `${commits.join("\n")}\n` },
     );
     if (stdout.trim()) {
@@ -1004,11 +1108,12 @@ async function verifyPathAbsent(
         if (!oid) continue;
         const result = await runGit(root, [
           "rev-list",
+          "-m",
           "--max-count=1",
           "--no-renames",
           oid,
           "--",
-          `:(literal)${target}`,
+          ...pathspecs,
         ]);
         if (result.stdout.trim()) {
           throw new Error(`Verification failed: ${target} is still present at ${ref.ref}`);
@@ -1097,21 +1202,34 @@ function argumentBatches(values: string[], maxLength: number): string[][] {
   return batches;
 }
 
-async function verifyRecoveryReflogsClean(root: string, target: string): Promise<void> {
+async function verifyRecoveryReflogsClean(
+  root: string,
+  target: string,
+  recursive: boolean,
+): Promise<void> {
+  const pathspecs = [
+    `:(literal)${target}`,
+    ...(recursive ? [] : [`:(exclude,literal)${target}/`]),
+  ];
   const { stdout } = await runGit(root, [
     "log",
     "--reflog",
     "--all",
+    "-m",
     "--format=%H",
     "--",
-    `:(literal)${target}`,
+    ...pathspecs,
   ]);
   if (stdout.trim()) {
     throw new Error(`Verification failed: a reflog still reaches ${target}`);
   }
 }
 
-async function quarantineWorkingTreePath(root: string, target: string): Promise<string> {
+async function quarantineWorkingTreePath(
+  root: string,
+  target: string,
+  presentAtHead: boolean,
+): Promise<{ directory: string; path: string }> {
   const rawGitDir = await gitText(root, ["rev-parse", "--git-common-dir"]);
   const gitDir = path.isAbsolute(rawGitDir) ? rawGitDir : path.resolve(root, rawGitDir);
   const container = path.join(
@@ -1120,12 +1238,13 @@ async function quarantineWorkingTreePath(root: string, target: string): Promise<
     `${Date.now()}-${randomBytes(5).toString("hex")}`,
   );
   await fs.mkdir(container, { recursive: true });
+  if (!presentAtHead) return { directory: container, path: "" };
   // Fixed disjoint slots avoid collisions with valid repository basenames
   // such as a tracked file literally named `index-before`.
   const destination = path.join(container, "worktree-content");
   try {
     await fs.rename(path.resolve(root, ...target.split("/")), destination);
-    return destination;
+    return { directory: container, path: destination };
   } catch (error) {
     await fs.rm(container, { recursive: true, force: true }).catch(() => undefined);
     throw httpError(
@@ -1138,13 +1257,17 @@ async function quarantineWorkingTreePath(root: string, target: string): Promise<
 async function removeTargetFromIndexAtomically(
   root: string,
   target: string,
-  worktreeQuarantine: string,
+  backupDirectory: string,
+  removePath: boolean,
 ): Promise<IndexTransition> {
   const rawIndex = await gitText(root, ["rev-parse", "--git-path", "index"]);
   const indexPath = path.isAbsolute(rawIndex) ? rawIndex : path.resolve(root, rawIndex);
   const before = await fs.readFile(indexPath);
-  const backupPath = path.join(path.dirname(worktreeQuarantine), "index-before");
+  const backupPath = path.join(backupDirectory, "index-before");
   await fs.writeFile(backupPath, before, { flag: "wx" });
+  if (!removePath) {
+    return { indexPath, backupPath, before, after: before };
+  }
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gitwebui-history-live-index-"));
   const tempIndex = path.join(tempDir, "index");

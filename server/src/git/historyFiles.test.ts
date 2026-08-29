@@ -52,7 +52,11 @@ async function makeTree(entries: Array<{ mode: string; type: string; oid: string
 
 describe("HEAD file tree", () => {
   it("returns an empty, usable result for an unborn repository", async () => {
-    await expect(getHeadFileTree(ROOT)).resolves.toEqual({ head: null, entries: [] });
+    await expect(getHeadFileTree(ROOT)).resolves.toEqual({
+      head: null,
+      entries: [],
+      historicalPaths: [],
+    });
   });
 
   it("lists nested files from HEAD rather than untracked working-tree files", async () => {
@@ -70,6 +74,74 @@ describe("HEAD file tree", () => {
       "docs/nested/guide.txt",
     ]);
     expect(tree.entries.every((entry) => entry.kind === "file")).toBe(true);
+    expect(tree.historicalPaths).toEqual([]);
+  });
+
+  it("lists paths deleted from HEAD separately from current entries", async () => {
+    await fs.writeFile(path.join(ROOT, "a.txt"), "a\n");
+    await fs.writeFile(path.join(ROOT, "b.txt"), "b\n");
+    await commitAll("add both files");
+    await fs.rm(path.join(ROOT, "b.txt"));
+    const head = await commitAll("delete b");
+
+    await expect(getHeadFileTree(ROOT)).resolves.toMatchObject({ historicalPaths: [] });
+    await expect(getHeadFileTree(ROOT, true)).resolves.toEqual({
+      head,
+      entries: [
+        { path: "a.txt", mode: "100644", kind: "file", size: 2 },
+      ],
+      historicalPaths: ["b.txt"],
+    });
+  });
+
+  it("includes paths reachable only from older stash reflog entries", async () => {
+    await fs.writeFile(path.join(ROOT, "tracked.txt"), "tracked\n");
+    await commitAll("base");
+    await fs.writeFile(path.join(ROOT, "old-only.txt"), "old\n");
+    await runGit(ROOT, ["stash", "push", "-u", "-m", "older"]);
+    await fs.writeFile(path.join(ROOT, "new-only.txt"), "new\n");
+    await runGit(ROOT, ["stash", "push", "-u", "-m", "newer"]);
+
+    const tree = await getHeadFileTree(ROOT, true);
+
+    expect(tree.historicalPaths).toEqual(expect.arrayContaining(["new-only.txt", "old-only.txt"]));
+  });
+
+  it("preserves a leading UTF-8 BOM as part of a historical filename", async () => {
+    const target = "\uFEFFname.txt";
+    await fs.writeFile(path.join(ROOT, target), "bom name\n");
+    await commitAll("BOM filename");
+    await fs.rm(path.join(ROOT, target));
+    await commitAll("remove BOM filename");
+
+    expect((await getHeadFileTree(ROOT, true)).historicalPaths).toContain(target);
+  });
+
+  it("rejects non-UTF-8 historical paths instead of exposing a lossy selection", async () => {
+    const invalidBlob = await hashObject("invalid\n");
+    const invalidTree = (
+      await runGit(ROOT, ["mktree", "-z"], {
+        input: Buffer.concat([
+          Buffer.from(`100644 blob ${invalidBlob}\tbad-`),
+          Buffer.from([0xff]),
+          Buffer.from(".txt\0"),
+        ]),
+      })
+    ).stdout.trim();
+    const original = (
+      await runGit(ROOT, ["commit-tree", invalidTree], { input: "invalid filename\n" })
+    ).stdout.trim();
+    const keepBlob = await hashObject("keep\n");
+    const currentTree = await makeTree([
+      { mode: "100644", type: "blob", oid: keepBlob, name: "keep.txt" },
+    ]);
+    const head = (
+      await runGit(ROOT, ["commit-tree", currentTree, "-p", original], { input: "remove invalid\n" })
+    ).stdout.trim();
+    await runGit(ROOT, ["update-ref", "refs/heads/main", head]);
+    await runGit(ROOT, ["reset", "--hard", head]);
+
+    await expect(getHeadFileTree(ROOT, true)).rejects.toThrow("not valid UTF-8");
   });
 
   it("parses symlink and submodule modes without treating their sizes as numbers", () => {
@@ -158,6 +230,103 @@ describe("HEAD file content", () => {
 });
 
 describe("deletePathFromHistory", () => {
+  it("deletes an exact historical file without removing a current directory at the same path", async () => {
+    await fs.writeFile(path.join(ROOT, "shape"), "historical file\n");
+    await commitAll("shape is a file");
+    await fs.rm(path.join(ROOT, "shape"));
+    await fs.mkdir(path.join(ROOT, "shape"));
+    await fs.writeFile(path.join(ROOT, "shape", "keep.txt"), "keep\n");
+    const head = await commitAll("shape becomes a directory");
+
+    const result = await deletePathFromHistory(ROOT, {
+      path: "shape",
+      expectedHead: head,
+      confirmation: "shape",
+      recursive: false,
+    });
+
+    expect(result.worktreeBackupPath).toBe("");
+    expect(await fs.readFile(path.join(ROOT, "shape", "keep.txt"), "utf8")).toBe("keep\n");
+    expect((await runGit(ROOT, ["show", "HEAD:shape/keep.txt"])).stdout).toBe("keep\n");
+    expect((await runGit(ROOT, ["ls-files", "--error-unmatch", "shape/keep.txt"])).stdout.trim()).toBe("shape/keep.txt");
+    const tree = await getHeadFileTree(ROOT, true);
+    expect(tree.historicalPaths).not.toContain("shape");
+    expect(tree.entries.map((entry) => entry.path)).toContain("shape/keep.txt");
+  }, 30_000);
+
+  it("deletes a path reachable only from an older stash entry", async () => {
+    await fs.writeFile(path.join(ROOT, "tracked.txt"), "tracked\n");
+    const head = await commitAll("base");
+    await fs.writeFile(path.join(ROOT, "old-only.txt"), "old\n");
+    await runGit(ROOT, ["stash", "push", "-u", "-m", "older"]);
+    await fs.writeFile(path.join(ROOT, "new-only.txt"), "new\n");
+    await runGit(ROOT, ["stash", "push", "-u", "-m", "newer"]);
+
+    await deletePathFromHistory(ROOT, {
+      path: "old-only.txt",
+      expectedHead: head,
+      confirmation: "old-only.txt",
+      recursive: false,
+    });
+
+    const paths = (await getHeadFileTree(ROOT, true)).historicalPaths;
+    expect(paths).not.toContain("old-only.txt");
+    expect(paths).toContain("new-only.txt");
+    expect(await getStashes(ROOT)).toHaveLength(2);
+  }, 30_000);
+
+  it("deletes a history-only Git path containing a literal backslash", async () => {
+    const target = "old\\name.txt";
+    const secret = await hashObject("secret\n");
+    const keep = await hashObject("keep\n");
+    const originalTree = await makeTree([
+      { mode: "100644", type: "blob", oid: secret, name: target },
+      { mode: "100644", type: "blob", oid: keep, name: "keep.txt" },
+    ]);
+    const original = (
+      await runGit(ROOT, ["commit-tree", originalTree], { input: "backslash path\n" })
+    ).stdout.trim();
+    const currentTree = await makeTree([
+      { mode: "100644", type: "blob", oid: keep, name: "keep.txt" },
+    ]);
+    const head = (
+      await runGit(ROOT, ["commit-tree", currentTree, "-p", original], { input: "remove path\n" })
+    ).stdout.trim();
+    await runGit(ROOT, ["update-ref", "refs/heads/main", head]);
+    await runGit(ROOT, ["reset", "--hard", head]);
+    expect((await getHeadFileTree(ROOT, true)).historicalPaths).toContain(target);
+
+    await deletePathFromHistory(ROOT, {
+      path: target,
+      expectedHead: head,
+      confirmation: target,
+      recursive: false,
+    });
+
+    expect((await getHeadFileTree(ROOT, true)).historicalPaths).not.toContain(target);
+    expect((await runGit(ROOT, ["show", "HEAD:keep.txt"])).stdout).toBe("keep\n");
+  }, 30_000);
+
+  it("removes a path that was deleted from HEAD but remains in reachable history", async () => {
+    await fs.writeFile(path.join(ROOT, "a.txt"), "keep\n");
+    await fs.writeFile(path.join(ROOT, "b.txt"), "remove\n");
+    await commitAll("add both files");
+    await fs.rm(path.join(ROOT, "b.txt"));
+    const head = await commitAll("delete b");
+
+    const result = await deletePathFromHistory(ROOT, {
+      path: "b.txt",
+      expectedHead: head,
+      confirmation: "b.txt",
+    });
+
+    expect(result.worktreeBackupPath).toBe("");
+    await expect(fs.stat(result.indexBackupPath)).resolves.toMatchObject({ size: expect.any(Number) });
+    expect((await runGit(ROOT, ["log", "--all", "--format=%H", "--", ":(literal)b.txt"])).stdout.trim()).toBe("");
+    expect((await runGit(ROOT, ["show", "HEAD:a.txt"])).stdout).toBe("keep\n");
+    await expect(getHeadFileTree(ROOT, true)).resolves.toMatchObject({ historicalPaths: [] });
+  }, 30_000);
+
   it("removes an exact file path from every branch, tag, remote-tracking ref, and stash", async () => {
     const target = "odd [x] '$file.txt";
     await fs.writeFile(path.join(ROOT, "keep.txt"), "keep\n");

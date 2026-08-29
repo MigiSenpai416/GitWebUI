@@ -108,7 +108,7 @@ describe("history rewrite mutation reservations", () => {
     });
     expect(deletion.status).toBe(409);
     await expect(deletion.json()).resolves.toMatchObject({
-      error: expect.stringContaining("no longer exists at HEAD"),
+      error: expect.stringContaining("no longer exists in reachable history"),
     });
   });
 });

@@ -246,15 +246,16 @@ export const api = {
     req<StatusResult>("/api/discard", { method: "POST", body: JSON.stringify({ paths }) }),
   deleteFile: (path: string) =>
     req<StatusResult>("/api/file/delete", { method: "POST", body: JSON.stringify({ path }) }),
-  historyFiles: () => req<HeadFileTree>("/api/history-files"),
+  historyFiles: (includeHistory = false) =>
+    req<HeadFileTree>(`/api/history-files${includeHistory ? "?includeHistory=true" : ""}`),
   historyFileContent: (path: string, head: string) => {
     const params = new URLSearchParams({ path, head });
     return req<HeadFileContent>(`/api/history-files/content?${params.toString()}`);
   },
-  deleteFromHistory: (path: string, expectedHead: string, confirmation: string) =>
+  deleteFromHistory: (path: string, expectedHead: string, confirmation: string, recursive: boolean) =>
     req<HistoryDeleteResult>("/api/history-files/delete", {
       method: "POST",
-      body: JSON.stringify({ path, expectedHead, confirmation }),
+      body: JSON.stringify({ path, expectedHead, confirmation, recursive }),
     }),
   reveal: (path: string) =>
     req<{ ok: true }>("/api/reveal", { method: "POST", body: JSON.stringify({ path }) }),

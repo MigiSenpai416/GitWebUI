@@ -304,8 +304,7 @@ export function DiffViewer() {
   }, [diff, viewMode, diffLayout, selected, split]);
 
   // The two split panes have identical row counts and fixed line heights, so
-  // mirroring vertical offsets keeps their old/new rows aligned while leaving
-  // horizontal scrolling independent.
+  // mirroring both scroll offsets keeps their old/new rows and columns aligned.
   useEffect(() => {
     if (viewMode !== "diff" || diffLayout !== "split") return;
     const oldScroller = oldViewRef.current?.scrollDOM;
@@ -314,6 +313,7 @@ export function DiffViewer() {
 
     const sync = (from: HTMLElement, to: HTMLElement) => {
       if (to.scrollTop !== from.scrollTop) to.scrollTop = from.scrollTop;
+      if (to.scrollLeft !== from.scrollLeft) to.scrollLeft = from.scrollLeft;
     };
     const syncOld = () => sync(oldScroller, newScroller);
     const syncNew = () => sync(newScroller, oldScroller);

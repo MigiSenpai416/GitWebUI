@@ -83,6 +83,15 @@ test.describe.serial("diff viewer layout", () => {
       await newScroller.evaluate((element) => element.clientHeight),
     );
 
+    await oldScroller.evaluate((element) => {
+      element.scrollLeft = 80;
+    });
+    await expect.poll(() => newScroller.evaluate((element) => element.scrollLeft)).toBe(80);
+    await newScroller.evaluate((element) => {
+      element.scrollLeft = 30;
+    });
+    await expect.poll(() => oldScroller.evaluate((element) => element.scrollLeft)).toBe(30);
+
     await window.locator(".dv-split-old .cm-content").click();
     await window.keyboard.press("Control+f");
     const findInput = window.getByRole("textbox", { name: "Find in file" });

@@ -134,7 +134,7 @@ test.describe.serial("diff viewer layout", () => {
     }, originalSize);
   });
 
-  test("keeps the chosen diff layout through File View and resets it for the next file", async () => {
+  test("keeps the chosen diff layout through File View and new file selections", async () => {
     const splitButton = window.getByRole("button", { name: "Split layout" });
     await window.getByRole("button", { name: "File View" }).click();
 
@@ -147,22 +147,38 @@ test.describe.serial("diff viewer layout", () => {
     await expect(window.locator(".dv-split")).toBeVisible();
 
     await window.locator(".file-row", { hasText: "other-target.txt" }).click();
-    await expect(window.getByRole("button", { name: "Unified layout" })).toHaveAttribute(
+    await expect(window.getByRole("button", { name: "Split layout" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    await expect(window.locator(".dv-editor-unified")).toBeVisible();
+    await expect(window.locator(".dv-split")).toBeVisible();
   });
 
   test("rebuilds editor extensions when File View has the same text as the diff", async () => {
     await window.locator(".file-row", { hasText: "added-target.txt" }).click();
-    await expect(window.locator(".dv-editor-unified .cm-diff-add")).toHaveCount(1);
-    await expect(window.locator(".dv-editor-unified .cm-gutter-old")).toHaveCount(1);
+    await expect(window.locator(".dv-split-new .cm-diff-add")).toHaveCount(1);
+    await expect(window.locator(".dv-split-old .cm-diff-placeholder")).toHaveCount(1);
 
     await window.getByRole("button", { name: "File View" }).click();
 
     await expect(window.locator(".dv-editor-unified .cm-diff-add")).toHaveCount(0);
     await expect(window.locator(".dv-editor-unified .cm-gutter-old")).toHaveCount(0);
     await expect(window.locator(".dv-editor-unified .cm-lineNumbers")).toHaveCount(1);
+  });
+
+  test("restores the chosen diff layout after an app restart", async () => {
+    await app.close();
+    started = await launchApp({ reuse: started });
+    app = started.app;
+    window = await app.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+
+    await expect(window.getByText("first commit").first()).toBeVisible();
+    await window.locator(".file-row", { hasText: "layout-target.txt" }).click();
+    await expect(window.getByRole("button", { name: "Split layout" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(window.locator(".dv-split")).toBeVisible();
   });
 });

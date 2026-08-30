@@ -29,8 +29,10 @@ const TABS_KEY = "gwui.tabs";
 const VISIBLE_KEY = "gwui.visibleRefs";
 const TERMINAL_H_KEY = "gwui.terminalHeight";
 const GRAPH_MODE_KEY = "gwui.graphMode";
+const DIFF_LAYOUT_KEY = "gwui.diffLayout";
 
 export type GraphMode = "linear" | "full";
+export type DiffLayout = "unified" | "split";
 
 /** Per-repo set of extra remote branch refs whose commits are shown in the log. */
 function readVisibleMap(): Record<string, string[]> {
@@ -79,6 +81,22 @@ function writeGraphModeFor(root: string, mode: GraphMode): void {
     const modes = parsed && typeof parsed === "object" ? parsed : {};
     modes[root] = mode;
     localStorage.setItem(GRAPH_MODE_KEY, JSON.stringify(modes));
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
+function readDiffLayout(): DiffLayout {
+  try {
+    return localStorage.getItem(DIFF_LAYOUT_KEY) === "split" ? "split" : "unified";
+  } catch {
+    return "unified";
+  }
+}
+
+function writeDiffLayout(layout: DiffLayout): void {
+  try {
+    localStorage.setItem(DIFF_LAYOUT_KEY, layout);
   } catch {
     /* ignore storage failures */
   }
@@ -331,6 +349,7 @@ interface AppState {
 
   selectedFile: SelectedFile | null;
   viewMode: ViewMode;
+  diffLayout: DiffLayout;
   fileLayout: FileLayout;
 
   commitMenu: CommitMenu | null;
@@ -490,6 +509,7 @@ interface AppState {
   openFile: (file: SelectedFile) => void;
   closeFile: () => void;
   setViewMode: (mode: ViewMode) => void;
+  setDiffLayout: (layout: DiffLayout) => void;
   setFileLayout: (layout: FileLayout) => void;
   setError: (msg: string) => void;
   setNotice: (msg: string) => void;
@@ -563,6 +583,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   selectedFile: null,
   viewMode: "diff",
+  diffLayout: readDiffLayout(),
   fileLayout: "tree",
 
   commitMenu: null,
@@ -1794,6 +1815,11 @@ export const useStore = create<AppState>((set, get) => ({
 
   setViewMode(mode: ViewMode) {
     set({ viewMode: mode });
+  },
+
+  setDiffLayout(layout: DiffLayout) {
+    set({ diffLayout: layout });
+    writeDiffLayout(layout);
   },
 
   setFileLayout(layout: FileLayout) {

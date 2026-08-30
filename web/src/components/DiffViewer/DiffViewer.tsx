@@ -20,12 +20,12 @@ import { DiffMinimap, type DiffOverviewLine } from "./DiffMinimap";
 import { IconDiffSplit, IconDiffUnified } from "../icons";
 import "./DiffViewer.css";
 
-type DiffLayout = "unified" | "split";
-
 export function DiffViewer() {
   const selected = useStore((s) => s.selectedFile);
   const viewMode = useStore((s) => s.viewMode);
   const setViewMode = useStore((s) => s.setViewMode);
+  const diffLayout = useStore((s) => s.diffLayout);
+  const setDiffLayout = useStore((s) => s.setDiffLayout);
   const closeFile = useStore((s) => s.closeFile);
   const stage = useStore((s) => s.stage);
   const unstage = useStore((s) => s.unstage);
@@ -38,7 +38,6 @@ export function DiffViewer() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
-  const [diffLayout, setDiffLayout] = useState<DiffLayout>("unified");
 
   const hostRef = useRef<HTMLDivElement>(null);
   const oldHostRef = useRef<HTMLDivElement>(null);
@@ -151,7 +150,6 @@ export function DiffViewer() {
     setSearchOpen(false);
     setSearchQuery("");
     setActiveSearchIndex(0);
-    setDiffLayout("unified");
     searchReturnViewRef.current = null;
   }, [selectionKey]);
 

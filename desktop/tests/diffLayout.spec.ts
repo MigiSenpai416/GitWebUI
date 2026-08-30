@@ -9,22 +9,35 @@ test.describe.serial("diff viewer layout", () => {
   let app: ElectronApplication;
   let window: Page;
   let repoDir = "";
+  let lateFocusLines: string[] = [];
+  let earlyFocusLines: string[] = [];
 
   test.beforeAll(async () => {
     repoDir = makeRepo();
     await fs.writeFile(
       path.join(repoDir, "layout-target.txt"),
-      `shared before\nold one ${"x".repeat(240)}\nold two\nshared after\n`,
+      `shared before\nold one ${"x".repeat(420)}\nold two\nshared after\n`,
     );
     await fs.writeFile(path.join(repoDir, "other-target.txt"), "old other\n");
+    lateFocusLines = Array.from({ length: 220 }, (_, index) => `late context ${index + 1}`);
+    earlyFocusLines = Array.from({ length: 220 }, (_, index) => `early context ${index + 1}`);
+    lateFocusLines[179] = "old late change";
+    earlyFocusLines[19] = "old early change";
+    await fs.writeFile(path.join(repoDir, "focus-late.txt"), `${lateFocusLines.join("\n")}\n`);
+    await fs.writeFile(path.join(repoDir, "focus-early.txt"), `${earlyFocusLines.join("\n")}\n`);
     execFileSync("git", ["-C", repoDir, "add", "."], { stdio: "pipe" });
     execFileSync("git", ["-C", repoDir, "commit", "-m", "layout fixture"], { stdio: "pipe" });
     await fs.writeFile(
       path.join(repoDir, "layout-target.txt"),
-      `shared before\nnew one ${"y".repeat(240)}\nshared after\n`,
+      `shared before\nnew one ${"y".repeat(12)}\nshared after\n`,
     );
     await fs.writeFile(path.join(repoDir, "other-target.txt"), "new other\n");
     await fs.writeFile(path.join(repoDir, "added-target.txt"), "const added = true;");
+    await fs.writeFile(path.join(repoDir, "binary-target.bin"), Buffer.from([0x00, 0x01, 0x02]));
+    lateFocusLines[179] = "new late change";
+    earlyFocusLines[19] = "new early change";
+    await fs.writeFile(path.join(repoDir, "focus-late.txt"), `${lateFocusLines.join("\n")}\n`);
+    await fs.writeFile(path.join(repoDir, "focus-early.txt"), `${earlyFocusLines.join("\n")}\n`);
 
     started = await launchApp();
     app = started.app;
@@ -82,6 +95,10 @@ test.describe.serial("diff viewer layout", () => {
     expect(await oldScroller.evaluate((element) => element.clientHeight)).toBe(
       await newScroller.evaluate((element) => element.clientHeight),
     );
+    await expect.poll(async () => Math.abs(
+      await oldScroller.evaluate((element) => element.scrollWidth - element.clientWidth) -
+      await newScroller.evaluate((element) => element.scrollWidth - element.clientWidth),
+    )).toBeLessThanOrEqual(1);
 
     await oldScroller.evaluate((element) => {
       element.scrollLeft = 80;
@@ -91,6 +108,28 @@ test.describe.serial("diff viewer layout", () => {
       element.scrollLeft = 30;
     });
     await expect.poll(() => oldScroller.evaluate((element) => element.scrollLeft)).toBe(30);
+    const oldMax = await oldScroller.evaluate((element) => element.scrollWidth - element.clientWidth);
+    await oldScroller.evaluate((element) => {
+      element.scrollLeft = element.scrollWidth;
+    });
+    await expect.poll(() => oldScroller.evaluate((element) => element.scrollLeft)).toBe(oldMax);
+    await expect.poll(() => newScroller.evaluate((element) => element.scrollLeft)).toBe(oldMax);
+
+    const originalSize = await app.evaluate(({ BrowserWindow }) => {
+      const target = BrowserWindow.getAllWindows()[0];
+      const size = target.getSize();
+      target.setSize(size[0] - 100, size[1]);
+      return size;
+    });
+    await expect.poll(async () => Math.abs(
+      await oldScroller.evaluate((element) => element.scrollWidth - element.clientWidth) -
+      await newScroller.evaluate((element) => element.scrollWidth - element.clientWidth),
+    )).toBeLessThanOrEqual(1);
+    await expect.poll(() => oldScroller.evaluate((element) => element.scrollLeft)).toBe(oldMax);
+    await expect.poll(() => newScroller.evaluate((element) => element.scrollLeft)).toBe(oldMax);
+    await app.evaluate(({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0].setSize(size[0], size[1]);
+    }, originalSize);
 
     await window.locator(".dv-split-old .cm-content").click();
     await window.keyboard.press("Control+f");
@@ -134,8 +173,97 @@ test.describe.serial("diff viewer layout", () => {
     }, originalSize);
   });
 
+  test("focuses the first change whenever a different file is selected", async () => {
+    const splitButton = window.getByRole("button", { name: "Split layout" });
+    const unifiedButton = window.getByRole("button", { name: "Unified layout" });
+
+    await unifiedButton.click();
+    await window.locator(".file-row", { hasText: "focus-late.txt" }).click();
+    const unifiedScroller = window.locator(".dv-editor-unified .cm-scroller");
+    await expect.poll(() => unifiedScroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(1_000);
+
+    await window.locator(".file-row", { hasText: "focus-early.txt" }).click();
+    await expect(window.locator(".dv-editor-unified .cm-content")).toContainText("new early change");
+    await expect.poll(() => unifiedScroller.evaluate((element) => element.scrollTop)).toBeLessThan(500);
+
+    await window.locator(".file-row", { hasText: "focus-late.txt" }).click();
+    await expect.poll(() => unifiedScroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(1_000);
+    await unifiedScroller.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await window.locator(".file-row", { hasText: "binary-target.bin" }).click();
+    await expect(window.getByText("Binary file — no text diff available.")).toBeVisible();
+    await window.locator(".file-row", { hasText: "focus-late.txt" }).click();
+    await expect.poll(() => unifiedScroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(1_000);
+
+    await splitButton.click();
+    await window.locator(".file-row", { hasText: "focus-late.txt" }).click();
+    const oldScroller = window.locator(".dv-split-old .cm-scroller");
+    const newScroller = window.locator(".dv-split-new .cm-scroller");
+    await expect.poll(() => oldScroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(1_000);
+    await expect.poll(() => newScroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(1_000);
+
+    await window.locator(".file-row", { hasText: "focus-early.txt" }).click();
+    await expect(window.locator(".dv-split-new .cm-content")).toContainText("new early change");
+    await expect.poll(() => oldScroller.evaluate((element) => element.scrollTop)).toBeLessThan(500);
+    await expect.poll(() => newScroller.evaluate((element) => element.scrollTop)).toBeLessThan(500);
+
+    await window.locator(".file-row", { hasText: "focus-late.txt" }).click();
+    await expect.poll(() => newScroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(1_000);
+    await newScroller.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await window.locator(".file-row", { hasText: "binary-target.bin" }).click();
+    await expect(window.getByText("Binary file — no text diff available.")).toBeVisible();
+    await window.locator(".file-row", { hasText: "focus-late.txt" }).click();
+    await expect.poll(() => oldScroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(1_000);
+    await expect.poll(() => newScroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(1_000);
+  });
+
+  test("preserves scroll when the selected file refreshes in either layout", async () => {
+    const refresh = async () => {
+      await window.getByRole("button", { name: "Actions" }).click();
+      await window.getByRole("button", { name: "Refresh", exact: true }).click();
+    };
+
+    await window.getByRole("button", { name: "Unified layout" }).click();
+    await window.locator(".file-row", { hasText: "focus-early.txt" }).click();
+    const unifiedScroller = window.locator(".dv-editor-unified .cm-scroller");
+    await unifiedScroller.evaluate((element) => {
+      element.scrollTop = 900;
+    });
+    const unifiedTop = await unifiedScroller.evaluate((element) => element.scrollTop);
+    earlyFocusLines[59] = "refreshed context 60";
+    await fs.writeFile(path.join(repoDir, "focus-early.txt"), `${earlyFocusLines.join("\n")}\n`);
+    await refresh();
+    await expect(window.locator(".dv-editor-unified .cm-content")).toContainText("refreshed context 60");
+    await expect.poll(async () => Math.abs(
+      await unifiedScroller.evaluate((element) => element.scrollTop) - unifiedTop,
+    )).toBeLessThanOrEqual(1);
+
+    await window.getByRole("button", { name: "Split layout" }).click();
+    const oldScroller = window.locator(".dv-split-old .cm-scroller");
+    const newScroller = window.locator(".dv-split-new .cm-scroller");
+    await newScroller.evaluate((element) => {
+      element.scrollTop = 1_400;
+    });
+    const splitTop = await newScroller.evaluate((element) => element.scrollTop);
+    earlyFocusLines[79] = "refreshed context 80";
+    await fs.writeFile(path.join(repoDir, "focus-early.txt"), `${earlyFocusLines.join("\n")}\n`);
+    await refresh();
+    await expect(window.locator(".dv-split-new .cm-content")).toContainText("refreshed context 80");
+    await expect.poll(async () => Math.abs(
+      await oldScroller.evaluate((element) => element.scrollTop) - splitTop,
+    )).toBeLessThanOrEqual(1);
+    await expect.poll(async () => Math.abs(
+      await newScroller.evaluate((element) => element.scrollTop) - splitTop,
+    )).toBeLessThanOrEqual(1);
+  });
+
   test("keeps the chosen diff layout through File View and new file selections", async () => {
     const splitButton = window.getByRole("button", { name: "Split layout" });
+    await window.locator(".file-row", { hasText: "layout-target.txt" }).click();
+    await expect(window.locator(".dv-split")).toBeVisible();
     await window.getByRole("button", { name: "File View" }).click();
 
     await expect(splitButton).toBeDisabled();

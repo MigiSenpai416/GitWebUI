@@ -49,6 +49,7 @@ export function DiffViewer() {
   const searchReturnViewRef = useRef<EditorView | null>(null);
   const hunkIndex = useRef<number>(-1);
   const prevSelKey = useRef<string>("");
+  const loadedSelectionKeyRef = useRef<string>("");
   const buildSig = useRef<string>("");
   const builtRowsRef = useRef<readonly DiffRow[] | null>(null);
   const [buildTick, setBuildTick] = useState(0);
@@ -76,13 +77,18 @@ export function DiffViewer() {
 
     let cancelled = false;
     if (selectionChanged) {
+      loadedSelectionKeyRef.current = "";
+      buildSig.current = "";
       setLoading(true);
       setDiff(null);
     }
     api
       .diff(selected.source, selected.path, selected.hash)
       .then((d) => {
-        if (!cancelled) setDiff(d);
+        if (!cancelled) {
+          loadedSelectionKeyRef.current = selKey;
+          setDiff(d);
+        }
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -161,14 +167,21 @@ export function DiffViewer() {
 
   // Build / rebuild the active editor layout when diff, mode, or language changes.
   useEffect(() => {
-    if (!hostRef.current || !oldHostRef.current || !newHostRef.current || !diff || diff.binary) return;
+    if (
+      !hostRef.current ||
+      !oldHostRef.current ||
+      !newHostRef.current ||
+      !diff ||
+      diff.binary ||
+      loadedSelectionKeyRef.current !== selectionKey
+    ) return;
     let disposed = false;
 
     const build = async () => {
       const langExt = await loadLanguage(diff.path, diff.language);
       if (disposed || !hostRef.current || !oldHostRef.current || !newHostRef.current) return;
 
-      const sig = `${selected?.source}:${selected?.path}:${selected?.hash ?? ""}:${viewMode}:${diffLayout}`;
+      const sig = `${selectionKey}:${viewMode}:${diffLayout}`;
 
       if (viewMode === "diff" && diffLayout === "split" && split) {
         viewRef.current?.destroy();
@@ -299,7 +312,7 @@ export function DiffViewer() {
     return () => {
       disposed = true;
     };
-  }, [diff, viewMode, diffLayout, selected, split]);
+  }, [diff, viewMode, diffLayout, selectionKey, split]);
 
   // The two split panes have identical row counts and fixed line heights, so
   // mirroring both scroll offsets keeps their old/new rows and columns aligned.
@@ -309,7 +322,28 @@ export function DiffViewer() {
     const newScroller = newViewRef.current?.scrollDOM;
     if (!oldScroller || !newScroller) return;
 
+    let equalizingWidths = false;
+    let equalizeFrame = 0;
+    const equalizeWidths = () => {
+      if (equalizingWidths || !oldViewRef.current || !newViewRef.current) return;
+      equalizingWidths = true;
+      const previousLeft = Math.max(oldScroller.scrollLeft, newScroller.scrollLeft);
+      const sharedMax = equalizeSplitScrollWidths(oldViewRef.current, newViewRef.current);
+      const restoredLeft = Math.min(previousLeft, sharedMax);
+      oldScroller.scrollLeft = restoredLeft;
+      newScroller.scrollLeft = restoredLeft;
+      cancelAnimationFrame(equalizeFrame);
+      equalizeFrame = requestAnimationFrame(() => {
+        equalizingWidths = false;
+      });
+    };
+    equalizeWidths();
+    const resizeObserver = new ResizeObserver(equalizeWidths);
+    resizeObserver.observe(oldScroller);
+    resizeObserver.observe(newScroller);
+
     const sync = (from: HTMLElement, to: HTMLElement) => {
+      if (equalizingWidths) return;
       if (to.scrollTop !== from.scrollTop) to.scrollTop = from.scrollTop;
       if (to.scrollLeft !== from.scrollLeft) to.scrollLeft = from.scrollLeft;
     };
@@ -318,6 +352,8 @@ export function DiffViewer() {
     oldScroller.addEventListener("scroll", syncOld, { passive: true });
     newScroller.addEventListener("scroll", syncNew, { passive: true });
     return () => {
+      resizeObserver.disconnect();
+      cancelAnimationFrame(equalizeFrame);
       oldScroller.removeEventListener("scroll", syncOld);
       newScroller.removeEventListener("scroll", syncNew);
     };
@@ -651,6 +687,28 @@ function scrollSplitToLine(
       });
     }
   });
+}
+
+function equalizeSplitScrollWidths(oldView: EditorView, newView: EditorView): number {
+  const oldScroller = oldView.scrollDOM;
+  const newScroller = newView.scrollDOM;
+  oldView.contentDOM.style.minWidth = "";
+  newView.contentDOM.style.minWidth = "";
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const oldMax = oldScroller.scrollWidth - oldScroller.clientWidth;
+    const newMax = newScroller.scrollWidth - newScroller.clientWidth;
+    const difference = Math.abs(oldMax - newMax);
+    if (difference <= 1) return Math.min(oldMax, newMax);
+
+    const content = oldMax < newMax ? oldView.contentDOM : newView.contentDOM;
+    content.style.minWidth = `${content.getBoundingClientRect().width + difference}px`;
+  }
+
+  return Math.min(
+    oldScroller.scrollWidth - oldScroller.clientWidth,
+    newScroller.scrollWidth - newScroller.clientWidth,
+  );
 }
 
 function renderPath(path: string): React.ReactNode {

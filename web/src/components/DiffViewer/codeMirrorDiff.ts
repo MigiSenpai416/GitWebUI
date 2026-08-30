@@ -13,6 +13,16 @@ import { languages } from "@codemirror/language-data";
 import { tags as t } from "@lezer/highlight";
 import type { DiffRow } from "../../types";
 
+export interface SplitDiffRow extends DiffRow {
+  placeholder?: boolean;
+}
+
+export interface SplitDiffRows {
+  oldRows: SplitDiffRow[];
+  newRows: SplitDiffRow[];
+  hunkStarts: number[];
+}
+
 export interface SearchHighlights {
   /** Flat, ordered [from, to, from, to, ...] document ranges. */
   ranges: readonly number[];
@@ -147,6 +157,7 @@ export async function loadLanguage(path: string, fallbackLanguage: string): Prom
 
 const addLine = Decoration.line({ class: "cm-diff-add" });
 const delLine = Decoration.line({ class: "cm-diff-del" });
+const placeholderLine = Decoration.line({ class: "cm-diff-placeholder" });
 
 /**
  * A StateField providing static per-line diff backgrounds. Because the editor
@@ -163,6 +174,26 @@ export function diffDecorationField(rows: DiffRow[]): Extension {
         if (row.type === "context") continue;
         const line = state.doc.line(i);
         builder.add(line.from, line.from, row.type === "add" ? addLine : delLine);
+      }
+      return builder.finish();
+    },
+    update(value) {
+      return value;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+  return field;
+}
+
+function placeholderDecorationField(rows: SplitDiffRow[]): Extension {
+  const field = StateField.define<DecorationSet>({
+    create(state) {
+      const builder = new RangeSetBuilder<Decoration>();
+      const max = Math.min(rows.length, state.doc.lines);
+      for (let i = 1; i <= max; i++) {
+        if (!rows[i - 1].placeholder) continue;
+        const line = state.doc.line(i);
+        builder.add(line.from, line.from, placeholderLine);
       }
       return builder.finish();
     },
@@ -211,6 +242,61 @@ export function computeHunks(rows: DiffRow[]): number[] {
     inHunk = changed;
   }
   return starts;
+}
+
+/** Build line-aligned old/new documents for the side-by-side diff view. */
+export function splitDiffRows(rows: DiffRow[]): SplitDiffRows {
+  const oldRows: SplitDiffRow[] = [];
+  const newRows: SplitDiffRow[] = [];
+  const hunkStarts: number[] = [];
+  let index = 0;
+
+  while (index < rows.length) {
+    if (rows[index].type === "context") {
+      oldRows.push(rows[index]);
+      newRows.push(rows[index]);
+      index++;
+      continue;
+    }
+
+    hunkStarts.push(oldRows.length + 1);
+    const deleted: DiffRow[] = [];
+    const added: DiffRow[] = [];
+    while (index < rows.length && rows[index].type !== "context") {
+      const row = rows[index++];
+      if (row.type === "del") deleted.push(row);
+      else added.push(row);
+    }
+
+    const lineCount = Math.max(deleted.length, added.length);
+    for (let line = 0; line < lineCount; line++) {
+      oldRows.push(deleted[line] ?? emptySplitRow());
+      newRows.push(added[line] ?? emptySplitRow());
+    }
+  }
+
+  return { oldRows, newRows, hunkStarts };
+}
+
+export function sameDiffRows(left: readonly DiffRow[] | null, right: readonly DiffRow[]): boolean {
+  if (!left || left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++) {
+    const a = left[index];
+    const b = right[index];
+    if (
+      a.type !== b.type ||
+      a.oldNo !== b.oldNo ||
+      a.newNo !== b.newNo ||
+      a.noNewline !== b.noNewline
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function emptySplitRow(): SplitDiffRow {
+  return { type: "context", oldNo: null, newNo: null, text: "", placeholder: true };
 }
 
 // ---- Theme & syntax highlight --------------------------------------------
@@ -280,18 +366,34 @@ export function diffViewExtensions(rows: DiffRow[]): Extension[] {
   ];
 }
 
+/** Extensions for one side of the line-aligned side-by-side diff view. */
+export function splitDiffViewExtensions(
+  rows: SplitDiffRow[],
+  side: "old" | "new",
+): Extension[] {
+  return [
+    EditorView.contentAttributes.of({
+      "aria-label": side === "old" ? "Original file" : "Modified file",
+    }),
+    numberGutter(rows, side),
+    diffDecorationField(rows),
+    placeholderDecorationField(rows),
+  ];
+}
+
 /** Extensions for the plain "File View" (single number gutter). */
 export function fileViewExtensions(): Extension[] {
   return [lineNumbers()];
 }
 
-export function baseExtensions(): Extension[] {
+export function baseExtensions(wrapLines = true): Extension[] {
   return [
     EditorState.readOnly.of(true),
     EditorView.editable.of(false),
+    EditorView.contentAttributes.of({ tabindex: "0" }),
     editorTheme,
     syntaxHighlighting(diffHighlightStyle),
-    EditorView.lineWrapping,
+    ...(wrapLines ? [EditorView.lineWrapping] : []),
     searchHighlightField,
     searchHighlightPlugin,
   ];

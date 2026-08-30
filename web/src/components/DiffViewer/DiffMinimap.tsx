@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { EditorView } from "@codemirror/view";
-import type { DiffRow } from "../../types";
+
+export type DiffOverviewLine = "add" | "del" | "both" | null;
 
 interface Segment {
-  type: "add" | "del";
+  type: Exclude<DiffOverviewLine, null>;
   top: number; // 0..1 fraction of the full document height
   height: number;
 }
@@ -16,11 +17,11 @@ interface Segment {
  * are reachable at a glance even when they're far off-screen.
  */
 export function DiffMinimap({
-  rows,
+  lines,
   getView,
   buildTick,
 }: {
-  rows: DiffRow[];
+  lines: readonly DiffOverviewLine[];
   getView: () => EditorView | null;
   buildTick: number;
 }) {
@@ -42,11 +43,11 @@ export function DiffMinimap({
     if (!view) return;
     const sc = view.scrollDOM;
     const total = sc.scrollHeight || 1;
-    const lines = view.state.doc.lines;
+    const documentLines = view.state.doc.lines;
     const segs: Segment[] = [];
-    for (const run of computeRuns(rows)) {
-      const startLine = Math.min(run.start, lines);
-      const endLine = Math.min(run.end, lines);
+    for (const run of computeRuns(lines)) {
+      const startLine = Math.min(run.start, documentLines);
+      const endLine = Math.min(run.end, documentLines);
       const topBlock = view.lineBlockAt(view.state.doc.line(startLine).from);
       const botBlock = view.lineBlockAt(view.state.doc.line(endLine).from);
       segs.push({
@@ -57,7 +58,7 @@ export function DiffMinimap({
     }
     setSegments(segs);
     measureThumb(view);
-  }, [rows, getView, measureThumb]);
+  }, [lines, getView, measureThumb]);
 
   useEffect(() => {
     let raf = 0;
@@ -144,12 +145,20 @@ export function DiffMinimap({
 }
 
 /** Contiguous runs of added or removed rows, as 1-based line-number ranges. */
-function computeRuns(rows: DiffRow[]): Array<{ type: "add" | "del"; start: number; end: number }> {
-  const runs: Array<{ type: "add" | "del"; start: number; end: number }> = [];
-  let cur: { type: "add" | "del"; start: number; end: number } | null = null;
-  for (let i = 0; i < rows.length; i++) {
-    const ty = rows[i].type;
-    if (ty === "add" || ty === "del") {
+function computeRuns(lines: readonly DiffOverviewLine[]): Array<{
+  type: Exclude<DiffOverviewLine, null>;
+  start: number;
+  end: number;
+}> {
+  const runs: Array<{
+    type: Exclude<DiffOverviewLine, null>;
+    start: number;
+    end: number;
+  }> = [];
+  let cur: (typeof runs)[number] | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const ty = lines[i];
+    if (ty) {
       const line = i + 1;
       if (cur && cur.type === ty && cur.end === line - 1) {
         cur.end = line;

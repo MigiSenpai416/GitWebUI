@@ -3,7 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { useStore } from "../../state/store";
 import { api } from "../../api/client";
-import type { DiffResult } from "../../types";
+import type { DiffResult, DiffRow } from "../../types";
 import {
   baseExtensions,
   computeHunks,
@@ -11,10 +11,16 @@ import {
   fileViewExtensions,
   findTextMatchRanges,
   loadLanguage,
+  sameDiffRows,
   setSearchHighlights,
+  splitDiffRows,
+  splitDiffViewExtensions,
 } from "./codeMirrorDiff";
-import { DiffMinimap } from "./DiffMinimap";
+import { DiffMinimap, type DiffOverviewLine } from "./DiffMinimap";
+import { IconDiffSplit, IconDiffUnified } from "../icons";
 import "./DiffViewer.css";
+
+type DiffLayout = "unified" | "split";
 
 export function DiffViewer() {
   const selected = useStore((s) => s.selectedFile);
@@ -32,15 +38,27 @@ export function DiffViewer() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const [diffLayout, setDiffLayout] = useState<DiffLayout>("unified");
 
   const hostRef = useRef<HTMLDivElement>(null);
+  const oldHostRef = useRef<HTMLDivElement>(null);
+  const newHostRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const oldViewRef = useRef<EditorView | null>(null);
+  const newViewRef = useRef<EditorView | null>(null);
+  const searchReturnViewRef = useRef<EditorView | null>(null);
   const hunkIndex = useRef<number>(-1);
   const prevSelKey = useRef<string>("");
   const buildSig = useRef<string>("");
+  const builtRowsRef = useRef<readonly DiffRow[] | null>(null);
   const [buildTick, setBuildTick] = useState(0);
-  const getView = useCallback(() => viewRef.current, []);
+  const getView = useCallback(
+    () => viewMode === "file" || diffLayout === "unified"
+      ? viewRef.current
+      : (newViewRef.current ?? oldViewRef.current),
+    [diffLayout, viewMode],
+  );
   const selectionKey = selected
     ? `${selected.source}:${selected.path}:${selected.hash ?? ""}`
     : "";
@@ -78,14 +96,49 @@ export function DiffViewer() {
     };
   }, [selected, refreshKey, setError]);
 
-  const hunks = useMemo(() => (diff ? computeHunks(diff.rows) : []), [diff]);
+  const split = useMemo(() => (diff ? splitDiffRows(diff.rows) : null), [diff]);
+  const hunks = useMemo(
+    () => diffLayout === "split" ? (split?.hunkStarts ?? []) : (diff ? computeHunks(diff.rows) : []),
+    [diff, diffLayout, split],
+  );
+  const overviewLines = useMemo<DiffOverviewLine[]>(() => {
+    if (!diff) return [];
+    if (diffLayout !== "split" || !split) {
+      return diff.rows.map((row) => row.type === "context" ? null : row.type);
+    }
+    return split.oldRows.map((oldRow, index) => {
+      const deleted = oldRow.type === "del";
+      const added = split.newRows[index].type === "add";
+      if (deleted && added) return "both";
+      if (deleted) return "del";
+      if (added) return "add";
+      return null;
+    });
+  }, [diff, diffLayout, split]);
 
   const searchMatchRanges = useMemo(() => {
-    if (!searchOpen || !searchQuery || buildTick === 0 || !diff || diff.binary) return [];
+    if (!searchOpen || !searchQuery || buildTick === 0 || !diff || diff.binary) {
+      return { unified: [] as number[], old: [] as number[], new: [] as number[] };
+    }
+    if (viewMode === "diff" && diffLayout === "split") {
+      const oldText = oldViewRef.current?.state.doc.toString();
+      const newText = newViewRef.current?.state.doc.toString();
+      return {
+        unified: [],
+        old: oldText == null ? [] : findTextMatchRanges(oldText, searchQuery),
+        new: newText == null ? [] : findTextMatchRanges(newText, searchQuery),
+      };
+    }
     const text = viewRef.current?.state.doc.toString();
-    return text == null ? [] : findTextMatchRanges(text, searchQuery);
-  }, [searchOpen, searchQuery, buildTick, diff, viewMode]);
-  const searchMatchCount = searchMatchRanges.length / 2;
+    return {
+      unified: text == null ? [] : findTextMatchRanges(text, searchQuery),
+      old: [],
+      new: [],
+    };
+  }, [searchOpen, searchQuery, buildTick, diff, viewMode, diffLayout]);
+  const oldSearchMatchCount = searchMatchRanges.old.length / 2;
+  const searchMatchCount =
+    (searchMatchRanges.unified.length + searchMatchRanges.old.length + searchMatchRanges.new.length) / 2;
 
   const normalizedSearchIndex =
     searchMatchCount === 0
@@ -98,16 +151,88 @@ export function DiffViewer() {
     setSearchOpen(false);
     setSearchQuery("");
     setActiveSearchIndex(0);
+    setDiffLayout("unified");
+    searchReturnViewRef.current = null;
   }, [selectionKey]);
 
-  // Build / rebuild the editor when diff, mode, or language changes.
+  // A layout switch destroys the previous editor. Do not retain it as the
+  // focus target while an open search moves to the newly built view.
   useEffect(() => {
-    if (!hostRef.current || !diff || diff.binary) return;
+    searchReturnViewRef.current = null;
+  }, [diffLayout, viewMode]);
+
+  // Build / rebuild the active editor layout when diff, mode, or language changes.
+  useEffect(() => {
+    if (!hostRef.current || !oldHostRef.current || !newHostRef.current || !diff || diff.binary) return;
     let disposed = false;
 
     const build = async () => {
       const langExt = await loadLanguage(diff.path, diff.language);
-      if (disposed || !hostRef.current) return;
+      if (disposed || !hostRef.current || !oldHostRef.current || !newHostRef.current) return;
+
+      const sig = `${selected?.source}:${selected?.path}:${selected?.hash ?? ""}:${viewMode}:${diffLayout}`;
+
+      if (viewMode === "diff" && diffLayout === "split" && split) {
+        viewRef.current?.destroy();
+        viewRef.current = null;
+
+        const oldDoc = split.oldRows.map((row) => row.text).join("\n");
+        const newDoc = split.newRows.map((row) => row.text).join("\n");
+        if (
+          buildSig.current === sig &&
+          sameDiffRows(builtRowsRef.current, diff.rows) &&
+          oldViewRef.current?.state.doc.toString() === oldDoc &&
+          newViewRef.current?.state.doc.toString() === newDoc
+        ) {
+          buildSig.current = sig;
+          return;
+        }
+
+        const oldState = EditorState.create({
+          doc: oldDoc,
+          extensions: [
+            ...baseExtensions(false),
+            ...(langExt ? [langExt] : []),
+            ...splitDiffViewExtensions(split.oldRows, "old"),
+          ],
+        });
+        const newState = EditorState.create({
+          doc: newDoc,
+          extensions: [
+            ...baseExtensions(false),
+            ...(langExt ? [langExt] : []),
+            ...splitDiffViewExtensions(split.newRows, "new"),
+          ],
+        });
+
+        const prevScroll = newViewRef.current?.scrollDOM.scrollTop ?? 0;
+        const hadViews = !!oldViewRef.current && !!newViewRef.current;
+        if (oldViewRef.current) oldViewRef.current.setState(oldState);
+        else oldViewRef.current = new EditorView({ state: oldState, parent: oldHostRef.current });
+        if (newViewRef.current) newViewRef.current.setState(newState);
+        else newViewRef.current = new EditorView({ state: newState, parent: newHostRef.current });
+
+        hunkIndex.current = -1;
+        builtRowsRef.current = diff.rows;
+        setBuildTick((tick) => tick + 1);
+        const isNewView = buildSig.current !== sig;
+        buildSig.current = sig;
+        if (!isNewView && hadViews) {
+          requestAnimationFrame(() => {
+            if (oldViewRef.current) oldViewRef.current.scrollDOM.scrollTop = prevScroll;
+            if (newViewRef.current) newViewRef.current.scrollDOM.scrollTop = prevScroll;
+          });
+        } else if (isNewView && split.hunkStarts.length) {
+          scrollSplitToLine(oldViewRef.current, newViewRef.current, split.hunkStarts[0]);
+          hunkIndex.current = 0;
+        }
+        return;
+      }
+
+      oldViewRef.current?.destroy();
+      oldViewRef.current = null;
+      newViewRef.current?.destroy();
+      newViewRef.current = null;
 
       const doc =
         viewMode === "file"
@@ -117,8 +242,12 @@ export function DiffViewer() {
       // A refresh/refocus refetches the same content: if nothing actually
       // changed, leave the editor untouched so the reader's scroll position and
       // selection are preserved (no jump to the top).
-      if (viewRef.current && viewRef.current.state.doc.toString() === doc) {
-        buildSig.current = `${selected?.source}:${selected?.path}:${selected?.hash ?? ""}:${viewMode}`;
+      if (
+        buildSig.current === sig &&
+        viewRef.current?.state.doc.toString() === doc &&
+        (viewMode === "file" || sameDiffRows(builtRowsRef.current, diff.rows))
+      ) {
+        buildSig.current = sig;
         return;
       }
 
@@ -138,11 +267,11 @@ export function DiffViewer() {
         viewRef.current = new EditorView({ state, parent: hostRef.current });
       }
       hunkIndex.current = -1;
+      builtRowsRef.current = viewMode === "diff" ? diff.rows : null;
       setBuildTick((t) => t + 1);
 
       // Focus the first change when the file/view first opens (but not on a
       // silent working-tree refresh, which keeps the same selection + mode).
-      const sig = `${selected?.source}:${selected?.path}:${selected?.hash ?? ""}:${viewMode}`;
       const isNewView = buildSig.current !== sig;
       buildSig.current = sig;
       if (!isNewView && hadView) {
@@ -172,13 +301,40 @@ export function DiffViewer() {
     return () => {
       disposed = true;
     };
-  }, [diff, viewMode]);
+  }, [diff, viewMode, diffLayout, selected, split]);
+
+  // The two split panes have identical row counts and fixed line heights, so
+  // mirroring vertical offsets keeps their old/new rows aligned while leaving
+  // horizontal scrolling independent.
+  useEffect(() => {
+    if (viewMode !== "diff" || diffLayout !== "split") return;
+    const oldScroller = oldViewRef.current?.scrollDOM;
+    const newScroller = newViewRef.current?.scrollDOM;
+    if (!oldScroller || !newScroller) return;
+
+    const sync = (from: HTMLElement, to: HTMLElement) => {
+      if (to.scrollTop !== from.scrollTop) to.scrollTop = from.scrollTop;
+    };
+    const syncOld = () => sync(oldScroller, newScroller);
+    const syncNew = () => sync(newScroller, oldScroller);
+    oldScroller.addEventListener("scroll", syncOld, { passive: true });
+    newScroller.addEventListener("scroll", syncNew, { passive: true });
+    return () => {
+      oldScroller.removeEventListener("scroll", syncOld);
+      newScroller.removeEventListener("scroll", syncNew);
+    };
+  }, [buildTick, diffLayout, viewMode]);
 
   // Tear down the editor on unmount.
   useEffect(() => {
     return () => {
       viewRef.current?.destroy();
       viewRef.current = null;
+      oldViewRef.current?.destroy();
+      oldViewRef.current = null;
+      newViewRef.current?.destroy();
+      newViewRef.current = null;
+      builtRowsRef.current = null;
     };
   }, []);
 
@@ -186,34 +342,38 @@ export function DiffViewer() {
   // plugin decorates the visible subset, and rebuilding the editor reapplies
   // search to the new document through buildTick.
   useEffect(() => {
-    const view = viewRef.current;
-    if (!view) return;
-
-    const effects = [setSearchHighlights.of({ ranges: searchMatchRanges, activeIndex: normalizedSearchIndex })];
-
-    if (normalizedSearchIndex < 0) {
-      view.dispatch({ effects });
-      return;
+    if (viewMode === "diff" && diffLayout === "split") {
+      const oldActive = normalizedSearchIndex < oldSearchMatchCount ? normalizedSearchIndex : -1;
+      const newActive = normalizedSearchIndex >= oldSearchMatchCount
+        ? normalizedSearchIndex - oldSearchMatchCount
+        : -1;
+      applySearchHighlights(oldViewRef.current, searchMatchRanges.old, oldActive);
+      applySearchHighlights(newViewRef.current, searchMatchRanges.new, newActive);
+    } else {
+      applySearchHighlights(viewRef.current, searchMatchRanges.unified, normalizedSearchIndex);
     }
-
-    const activeFrom = searchMatchRanges[normalizedSearchIndex * 2];
-    view.dispatch({
-      selection: { anchor: activeFrom },
-      effects: [
-        ...effects,
-        EditorView.scrollIntoView(activeFrom, { y: "center" }),
-      ],
-    });
-  }, [searchMatchRanges, normalizedSearchIndex, buildTick]);
+  }, [
+    searchMatchRanges,
+    normalizedSearchIndex,
+    oldSearchMatchCount,
+    buildTick,
+    diffLayout,
+    viewMode,
+  ]);
 
   const gotoHunk = (dir: 1 | -1) => {
-    const view = viewRef.current;
-    if (!view || hunks.length === 0 || viewMode !== "diff") return;
+    if (hunks.length === 0 || viewMode !== "diff") return;
     let idx = hunkIndex.current + dir;
     if (idx < 0) idx = hunks.length - 1;
     if (idx >= hunks.length) idx = 0;
     hunkIndex.current = idx;
     const lineNo = hunks[idx];
+    if (diffLayout === "split") {
+      scrollSplitToLine(oldViewRef.current, newViewRef.current, lineNo);
+      return;
+    }
+    const view = viewRef.current;
+    if (!view) return;
     if (lineNo <= view.state.doc.lines) {
       const pos = view.state.doc.line(lineNo).from;
       view.dispatch({
@@ -224,17 +384,26 @@ export function DiffViewer() {
   };
 
   const openSearch = useCallback(() => {
+    if (!searchOpen) {
+      const activeElement = document.activeElement;
+      searchReturnViewRef.current = [viewRef.current, oldViewRef.current, newViewRef.current]
+        .find((view) => view?.hasFocus || (!!activeElement && view?.dom.contains(activeElement)))
+        ?? getView();
+    }
     setSearchOpen(true);
     requestAnimationFrame(() => {
       searchInputRef.current?.focus();
       searchInputRef.current?.select();
     });
-  }, []);
+  }, [getView, searchOpen]);
 
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
-    requestAnimationFrame(() => viewRef.current?.focus());
-  }, []);
+    requestAnimationFrame(() => {
+      (searchReturnViewRef.current ?? getView())?.focus();
+      searchReturnViewRef.current = null;
+    });
+  }, [getView]);
 
   const gotoSearchMatch = (dir: 1 | -1) => {
     if (searchMatchCount === 0) return;
@@ -310,6 +479,28 @@ export function DiffViewer() {
             onClick={() => setViewMode("diff")}
           >
             Diff View
+          </button>
+        </div>
+        <div className="dv-layout-toggle" role="group" aria-label="Diff layout">
+          <button
+            className={diffLayout === "unified" ? "active" : ""}
+            title="Unified diff view"
+            aria-label="Unified layout"
+            aria-pressed={diffLayout === "unified"}
+            disabled={viewMode !== "diff"}
+            onClick={() => setDiffLayout("unified")}
+          >
+            <IconDiffUnified width={14} height={14} />
+          </button>
+          <button
+            className={diffLayout === "split" ? "active" : ""}
+            title="Split diff view"
+            aria-label="Split layout"
+            aria-pressed={diffLayout === "split"}
+            disabled={viewMode !== "diff"}
+            onClick={() => setDiffLayout("split")}
+          >
+            <IconDiffSplit width={14} height={14} />
           </button>
         </div>
         <div className="dv-nav">
@@ -392,12 +583,31 @@ export function DiffViewer() {
           <div className="dv-message">No changes to display.</div>
         )}
         <div
-          className={"dv-editor" + (showMinimap ? " has-minimap" : "")}
+          className={"dv-editor dv-editor-unified" + (showMinimap && diffLayout === "unified" ? " has-minimap" : "")}
           ref={hostRef}
-          style={{ display: diff && !diff.binary ? "block" : "none" }}
+          style={{
+            display: diff && !diff.binary && (viewMode === "file" || diffLayout === "unified")
+              ? "block"
+              : "none",
+          }}
         />
+        <div
+          className="dv-split"
+          style={{
+            display: diff && !diff.binary && viewMode === "diff" && diffLayout === "split"
+              ? "flex"
+              : "none",
+          }}
+        >
+          <div className="dv-split-pane dv-split-old" role="region" aria-label="Original file">
+            <div className="dv-editor" ref={oldHostRef} />
+          </div>
+          <div className="dv-split-pane dv-split-new" role="region" aria-label="Modified file">
+            <div className={"dv-editor" + (showMinimap ? " has-minimap" : "")} ref={newHostRef} />
+          </div>
+        </div>
         {showMinimap && diff && (
-          <DiffMinimap rows={diff.rows} getView={getView} buildTick={buildTick} />
+          <DiffMinimap lines={overviewLines} getView={getView} buildTick={buildTick} />
         )}
       </div>
     </div>
@@ -406,6 +616,43 @@ export function DiffViewer() {
 
 function rowsToNewText(diff: DiffResult): string {
   return diff.rows.filter((r) => r.type !== "del").map((r) => r.text).join("\n");
+}
+
+function applySearchHighlights(
+  view: EditorView | null,
+  ranges: readonly number[],
+  activeIndex: number,
+): void {
+  if (!view) return;
+  const highlights = setSearchHighlights.of({ ranges, activeIndex });
+  if (activeIndex < 0) {
+    view.dispatch({ effects: highlights });
+    return;
+  }
+
+  const activeFrom = ranges[activeIndex * 2];
+  if (activeFrom == null) return;
+  view.dispatch({
+    selection: { anchor: activeFrom },
+    effects: [highlights, EditorView.scrollIntoView(activeFrom, { y: "center" })],
+  });
+}
+
+function scrollSplitToLine(
+  oldView: EditorView | null,
+  newView: EditorView | null,
+  lineNo: number,
+): void {
+  requestAnimationFrame(() => {
+    for (const view of [oldView, newView]) {
+      if (!view || lineNo > view.state.doc.lines) continue;
+      const pos = view.state.doc.line(lineNo).from;
+      view.dispatch({
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: "center" }),
+      });
+    }
+  });
 }
 
 function renderPath(path: string): React.ReactNode {

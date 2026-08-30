@@ -144,6 +144,18 @@ export const IconTree = (p: P) => (
     <path d="M14 5h6M14 10h6M14 17h6" />
   </svg>
 );
+export const IconDiffUnified = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M5 6h3M11 6h8M5 12h3M11 12h8M5 18h3M11 18h8" />
+  </svg>
+);
+export const IconDiffSplit = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3.5" y="4" width="7" height="16" rx="1" />
+    <rect x="13.5" y="4" width="7" height="16" rx="1" />
+    <path d="M6 8h2M6 12h2M6 16h2M16 8h2M16 12h2M16 16h2" />
+  </svg>
+);
 export const IconChevron = (p: P) => (
   <svg {...base({ width: 12, height: 12, ...p })}>
     <path d="m8 5 8 7-8 7" />

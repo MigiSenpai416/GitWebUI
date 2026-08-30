@@ -15,6 +15,7 @@ import { currentBranch } from "./repo.js";
  */
 
 export type MergeKind = "merge" | "rebase" | "cherry-pick" | "revert";
+export type MergeStrategy = "fast-forward" | "merge-commit";
 
 export interface MergeState {
   /** Whether an operation is mid-flight or unmerged paths remain. */
@@ -239,12 +240,18 @@ export async function abortMerge(root: string): Promise<void> {
  * Merge `name` into the current branch. A conflict is not an error: git leaves
  * the merge in progress, which the caller surfaces via `getMergeState`.
  */
-export async function mergeBranch(root: string, name: string): Promise<void> {
+export async function mergeBranch(
+  root: string,
+  name: string,
+  strategy: MergeStrategy = "fast-forward",
+): Promise<void> {
   if (name.startsWith("-")) {
     throw Object.assign(new Error("Invalid branch name"), { status: 400 });
   }
+  const args = ["merge", "--no-edit", strategy === "merge-commit" ? "--no-ff" : "--ff"];
+  args.push(name);
   try {
-    await runGit(root, ["merge", "--no-edit", name]);
+    await runGit(root, args);
   } catch (e) {
     if (!(await isConflicted(root))) throw e;
   }

@@ -270,6 +270,7 @@ export interface CreatedPr {
 }
 
 export type MergeKind = "merge" | "rebase" | "cherry-pick" | "revert";
+export type MergeStrategy = "fast-forward" | "merge-commit";
 
 /** State of an in-progress merge/rebase/cherry-pick/revert and its conflicts. */
 export interface MergeState {

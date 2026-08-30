@@ -87,6 +87,20 @@ describe("POST /commit", () => {
   });
 });
 
+describe("POST /merge", () => {
+  it("rejects an unknown merge strategy before running git", async () => {
+    const opened = registerRepo(await openRepo(TMP));
+    const response = await fetch(base + "/api/merge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
+      body: JSON.stringify({ branch: "feature", strategy: "squash" }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "A valid merge strategy is required" });
+  });
+});
+
 describe("POST /repo/prune", () => {
   it("prunes unreachable Git objects, preserves recovery files, and waits for mutations", async () => {
     const opened = registerRepo(await openRepo(TMP));

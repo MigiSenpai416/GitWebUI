@@ -15,6 +15,7 @@ import type {
   HistoryDeleteResult,
   IdentityInfo,
   MergeState,
+  MergeStrategy,
   PrContext,
   PrMeta,
   PushForce,
@@ -368,10 +369,10 @@ export const api = {
     }),
 
   // Merge / conflict resolution
-  merge: (branch: string) =>
+  merge: (branch: string, strategy: MergeStrategy) =>
     req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("/api/merge", {
       method: "POST",
-      body: JSON.stringify({ branch }),
+      body: JSON.stringify({ branch, strategy }),
     }),
   mergeState: () => req<{ merge: MergeState }>("/api/merge/state"),
   conflictFile: (path: string) =>

@@ -55,12 +55,16 @@ export function BranchMenu({ onClose }: { onClose: () => void }) {
   };
 
   const merge = async (name: string) => {
+    const root = repo?.root;
     onClose();
     const choice = await requestChoice(`Merge "${name}" into "${current}"?`, [
-      { label: "Merge", value: "merge", kind: "primary" },
+      { label: "Fast-forward if possible", value: "fast-forward", kind: "primary" },
+      { label: "Create merge commit", value: "merge-commit", kind: "neutral" },
       { label: "Cancel", value: "cancel", kind: "neutral" },
     ]);
-    if (choice === "merge") mergeBranch(name);
+    const active = useStore.getState().repo;
+    if (!root || active?.root !== root || active.branch !== current) return;
+    if (choice === "fast-forward" || choice === "merge-commit") mergeBranch(name, choice);
   };
 
   const openActions = (name: string, e: React.MouseEvent) => {

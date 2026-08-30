@@ -46,6 +46,24 @@ async function setupConflict(): Promise<void> {
   await runGit(ROOT, ["commit", "-am", "main edit"]);
 }
 
+async function setupFastForward(): Promise<{ base: string; feature: string }> {
+  await fs.mkdir(ROOT, { recursive: true });
+  await runGit(ROOT, ["init", "-b", "main"]);
+  await runGit(ROOT, ["config", "user.email", "t@example.com"]);
+  await runGit(ROOT, ["config", "user.name", "Test"]);
+  await write("a.txt", "base\n");
+  await runGit(ROOT, ["add", "-A"]);
+  await runGit(ROOT, ["commit", "-m", "base"]);
+  const base = await revParse("HEAD");
+  await runGit(ROOT, ["checkout", "-b", "feature"]);
+  await write("b.txt", "feature file\n");
+  await runGit(ROOT, ["add", "-A"]);
+  await runGit(ROOT, ["commit", "-m", "add b"]);
+  const feature = await revParse("HEAD");
+  await runGit(ROOT, ["checkout", "main"]);
+  return { base, feature };
+}
+
 beforeEach(async () => {
   await fs.rm(ROOT, { recursive: true, force: true });
 });
@@ -59,25 +77,28 @@ describe("merge conflict state", () => {
     expect(await isConflicted(ROOT)).toBe(false);
   });
 
-  it("merges a non-conflicting branch cleanly", async () => {
-    await fs.mkdir(ROOT, { recursive: true });
-    await runGit(ROOT, ["init", "-b", "main"]);
-    await runGit(ROOT, ["config", "user.email", "t@example.com"]);
-    await runGit(ROOT, ["config", "user.name", "Test"]);
-    await write("a.txt", "one\ntwo\nthree\n");
-    await runGit(ROOT, ["add", "-A"]);
-    await runGit(ROOT, ["commit", "-m", "base"]);
-    await runGit(ROOT, ["checkout", "-b", "feature"]);
-    await write("b.txt", "feature file\n");
-    await runGit(ROOT, ["add", "-A"]);
-    await runGit(ROOT, ["commit", "-m", "add b"]);
-    await runGit(ROOT, ["checkout", "main"]);
+  it("fast-forwards a non-conflicting branch by default", async () => {
+    const { feature } = await setupFastForward();
+    await runGit(ROOT, ["config", "merge.ff", "false"]);
 
     await mergeBranch(ROOT, "feature");
+
     expect(await isConflicted(ROOT)).toBe(false);
     expect((await getMergeState(ROOT)).active).toBe(false);
-    // feature's file is now present on main.
+    expect(await revParse("HEAD")).toBe(feature);
     expect(await fs.readFile(path.join(ROOT, "b.txt"), "utf8")).toContain("feature file");
+  });
+
+  it("creates a merge commit when requested even if fast-forward is possible", async () => {
+    const { base, feature } = await setupFastForward();
+
+    await mergeBranch(ROOT, "feature", "merge-commit");
+
+    expect(await isConflicted(ROOT)).toBe(false);
+    expect((await getMergeState(ROOT)).active).toBe(false);
+    const line = (await runGit(ROOT, ["rev-list", "--parents", "-n", "1", "HEAD"])).stdout.trim();
+    expect(line.split(" ").slice(1)).toEqual([base, feature]);
+    expect(await revParse("HEAD")).not.toBe(feature);
   });
 
   it("surfaces a conflict from a merge and its three-way content", async () => {

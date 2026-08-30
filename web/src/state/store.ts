@@ -12,6 +12,7 @@ import type {
   GitHubUser,
   IdentityInfo,
   MergeState,
+  MergeStrategy,
   PushForce,
   RepoInfo,
   Remote,
@@ -27,6 +28,9 @@ const SIDEBAR_KEY = "gwui.sidebarCollapsed";
 const TABS_KEY = "gwui.tabs";
 const VISIBLE_KEY = "gwui.visibleRefs";
 const TERMINAL_H_KEY = "gwui.terminalHeight";
+const GRAPH_MODE_KEY = "gwui.graphMode";
+
+export type GraphMode = "linear" | "full";
 
 /** Per-repo set of extra remote branch refs whose commits are shown in the log. */
 function readVisibleMap(): Record<string, string[]> {
@@ -51,6 +55,30 @@ function writeVisibleFor(root: string, refs: string[]): void {
     // and distinguishable from a repo opened for the first time.
     map[root] = refs;
     localStorage.setItem(VISIBLE_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
+function readGraphModeFor(root: string): GraphMode {
+  if (!root) return "linear";
+  try {
+    const raw = localStorage.getItem(GRAPH_MODE_KEY);
+    const parsed = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+    return parsed[root] === "full" ? "full" : "linear";
+  } catch {
+    return "linear";
+  }
+}
+
+function writeGraphModeFor(root: string, mode: GraphMode): void {
+  if (!root) return;
+  try {
+    const raw = localStorage.getItem(GRAPH_MODE_KEY);
+    const parsed = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+    const modes = parsed && typeof parsed === "object" ? parsed : {};
+    modes[root] = mode;
+    localStorage.setItem(GRAPH_MODE_KEY, JSON.stringify(modes));
   } catch {
     /* ignore storage failures */
   }
@@ -247,6 +275,8 @@ interface AppState {
   commits: Commit[];
   hasMore: boolean;
   loadingCommits: boolean;
+  /** Commit graph renderer, remembered independently for each repository. */
+  graphMode: GraphMode;
 
   selectedCommitHash: string | null;
   /**
@@ -347,6 +377,7 @@ interface AppState {
   closeCreateDialog: () => void;
 
   loadCommits: (reset: boolean) => Promise<void>;
+  setGraphMode: (mode: GraphMode) => void;
   selectCommit: (hash: string | null) => Promise<void>;
   selectStash: (hash: string | null) => Promise<void>;
   saveStashNote: (hash: string, title: string, description: string) => Promise<void>;
@@ -388,7 +419,7 @@ interface AppState {
   createPullRequest: (input: CreatePrInput) => Promise<CreatedPr>;
 
   loadMergeState: () => Promise<void>;
-  mergeBranch: (name: string) => Promise<void>;
+  mergeBranch: (name: string, strategy?: MergeStrategy) => Promise<void>;
   checkoutCommit: (hash: string) => Promise<void>;
   cherryPick: (hash: string, noCommit: boolean) => Promise<void>;
   abortMerge: () => Promise<void>;
@@ -492,6 +523,7 @@ export const useStore = create<AppState>((set, get) => ({
   commits: [],
   hasMore: false,
   loadingCommits: false,
+  graphMode: "linear",
 
   selectedCommitHash: null,
   selectedStashHash: null,
@@ -780,6 +812,11 @@ export const useStore = create<AppState>((set, get) => ({
     } finally {
       if (get().repo?.root === root) set({ loadingCommits: false });
     }
+  },
+
+  setGraphMode(mode) {
+    writeGraphModeFor(get().repo?.root ?? "", mode);
+    set({ graphMode: mode });
   },
 
   async selectCommit(hash: string | null) {
@@ -1213,11 +1250,11 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  async mergeBranch(name: string) {
+  async mergeBranch(name: string, strategy: MergeStrategy = "fast-forward") {
     const root = get().repo?.root;
     if (!root) return;
     try {
-      const { repo, merge, status } = await api.merge(name);
+      const { repo, merge, status } = await api.merge(name, strategy);
       if (!isActiveRepo(get, root)) return;
       if (repo) {
         set({ repo });
@@ -1978,6 +2015,7 @@ function showPicker(set: StoreSet): void {
     repo: null,
     commits: [],
     hasMore: false,
+    graphMode: "linear",
     selectedCommitHash: null,
     commitFiles: [],
     selectedFile: null,
@@ -2007,6 +2045,7 @@ async function hydrateRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promis
     repo: info,
     commits: [],
     hasMore: false,
+    graphMode: readGraphModeFor(info.root),
     selectedCommitHash: null,
     commitFiles: [],
     selectedFile: null,

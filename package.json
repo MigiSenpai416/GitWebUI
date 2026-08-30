@@ -24,7 +24,7 @@
     "build:exe:linux": "bun build server/src/bunEntry.ts --compile --target=bun-linux-x64 --outfile release/gitwebui",
     "build:exe": "npm run build:web && npm run embed && npm run build:exe:win && npm run build:exe:linux",
     "start": "npm run start --workspace server",
-    "test": "npm run test --workspace server",
+    "test": "npm run test --workspace server && npm run test --workspace web",
     "test:desktop": "npm run build:desktop && npm run test --workspace desktop",
     "icons": "node scripts/make-icons.mjs"
   },

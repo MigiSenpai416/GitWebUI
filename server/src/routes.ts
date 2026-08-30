@@ -990,13 +990,18 @@ api.post("/cherry-pick", h(async (req, res) => {
 api.post("/merge", h(async (req, res) => {
   const root = requireRepoRoot(req);
   const branch = String(req.body?.branch ?? "").trim();
+  const strategy = String(req.body?.strategy ?? "fast-forward");
   if (!branch) {
     res.status(400).json({ error: "A branch to merge is required" });
     return;
   }
+  if (strategy !== "fast-forward" && strategy !== "merge-commit") {
+    res.status(400).json({ error: "A valid merge strategy is required" });
+    return;
+  }
   // A conflicting merge is not an error — it's left in progress and surfaced as
   // merge state for the conflict resolver.
-  await mergeBranch(root, branch);
+  await mergeBranch(root, branch, strategy);
   res.json({
     repo: await refreshSession(root),
     merge: await getMergeState(root),

@@ -1,6 +1,12 @@
 .commit-list {
+  height: 100%;
+  min-height: 0;
+  overflow-x: auto;
+}
+.commit-list-inner {
   display: flex;
   flex-direction: column;
+  width: 100%;
   height: 100%;
   min-height: 0;
 }
@@ -17,12 +23,57 @@
   flex-shrink: 0;
 }
 .col-refs-head { width: var(--refs-w); flex-shrink: 0; padding-left: 12px; }
-.col-graph-head { width: var(--graph-w); flex-shrink: 0; padding-left: 4px; }
+.col-graph-head {
+  width: var(--graph-w);
+  flex-shrink: 0;
+  padding-left: 4px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
 .col-msg-head { flex: 1; padding-left: 6px; }
+
+.graph-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 19px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.graph-mode-toggle:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--bg-row-hover);
+}
+.graph-mode-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.graph-mode-value {
+  padding: 1px 4px;
+  border-radius: 7px;
+  background: rgba(97, 112, 126, 0.18);
+  color: var(--text-dim);
+  font-size: 9px;
+  letter-spacing: 0.35px;
+}
+.graph-mode-toggle.active .graph-mode-value {
+  color: var(--graph-color);
+  background: rgba(34, 178, 166, 0.16);
+}
 
 .commit-scroll {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   position: relative;
   min-height: 0;
 }
@@ -92,6 +143,15 @@
   fill: #0f171f;
   stroke: var(--graph-color);
   stroke-width: 3;
+}
+.full-graph-edge {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.full-graph-node {
+  fill: #0f171f;
 }
 .graph-node.wip {
   stroke-dasharray: 3 2.5;

@@ -28,8 +28,9 @@ them instead, and nothing in `server/` or `web/` is Windows-specific.
 - Open a local repo by its absolute path (native to the host OS). Recent repos
   are remembered.
 - GitKraken-style toolbar with a **branch switcher** (dropdown of local
-  branches; pick one to check it out). Undo/Redo are present as placeholders for
-  future work.
+  branches; pick one to check it out). Branch merges can use Git's default
+  fast-forward behavior or explicitly create a merge commit. Undo/Redo are
+  present as placeholders for future work.
 - **Terminal** — a dock across the bottom for running commands in the repo,
   through your own shell: `$SHELL` (bash/zsh) on Linux and macOS, **Git Bash**
   on Windows with **PowerShell** as the alternative, picked from the dock's
@@ -44,8 +45,10 @@ them instead, and nothing in `server/` or `web/` is Windows-specific.
   session password as everything else — worth remembering if you expose the
   server beyond localhost.
 - Commit list with a `Branch / Tag · Graph · Commit Message` layout: ref badges,
-  a single-lane graph column, and subject + body preview. Virtualized and
-  paginated for large histories.
+  subject + body preview, and a lightweight single-lane graph by default. Toggle
+  **Graph · Linear** to opt into a full parent-aware graph with separate lanes
+  for forks and merges. The choice is remembered per repository; both views are
+  virtualized and paginated for large histories.
 - Click a commit → metadata + changed-file list in the side panel.
 - Click a file → full-file **inline diff** viewer (CodeMirror 6): the entire file
   with add/delete/context coloring, twin old/new line-number gutters, syntax

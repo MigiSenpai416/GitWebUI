@@ -18,7 +18,9 @@ export function ConfirmBar() {
     if (!confirm) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") resolve(null);
-      else if (e.key === "Enter") resolve(confirm.buttons[0]?.value ?? null);
+      else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) {
+        resolve(confirm.buttons[0]?.value ?? null);
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

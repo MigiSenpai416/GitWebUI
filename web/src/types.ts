@@ -97,6 +97,60 @@ export interface DiffResult {
   empty: boolean;
 }
 
+export interface BlameCommit {
+  hash: string;
+  shortHash: string;
+  author: string;
+  email: string;
+  authorTime: number;
+  committer: string;
+  committerEmail: string;
+  committerTime: number;
+  summary: string;
+  boundary: boolean;
+  uncommitted: boolean;
+}
+
+export interface BlameLine {
+  lineNumber: number;
+  originalLine: number;
+  commitHash: string;
+  originalPath: string;
+  previousHash: string | null;
+  previousPath: string | null;
+  text: string;
+}
+
+export interface BlameResult {
+  path: string;
+  snapshot: "working-tree" | "head" | "revision";
+  revision: string | null;
+  lines: BlameLine[];
+  commits: BlameCommit[];
+}
+
+export interface FileHistoryEntry {
+  hash: string;
+  shortHash: string;
+  parents: string[];
+  author: string;
+  email: string;
+  dateISO: string;
+  subject: string;
+  status: ChangeStatus;
+  path: string;
+  oldPath: string | null;
+  contentHash: string | null;
+  contentPath: string;
+}
+
+export interface FileHistoryResult {
+  path: string;
+  query: string;
+  entries: FileHistoryEntry[];
+  hasMore: boolean;
+}
+
 export interface RepoInfo {
   root: string;
   branch: string;

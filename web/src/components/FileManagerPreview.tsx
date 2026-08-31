@@ -15,12 +15,13 @@ import { IconClose, IconFile, IconSearch, IconSpinner } from "./icons";
 interface Props {
   path: string;
   head: string;
+  revisionLabel?: string;
   shortcutsBlocked: boolean;
   onClose: () => void;
   onError: (message: string) => void;
 }
 
-export function FileManagerPreview({ path, head, shortcutsBlocked, onClose, onError }: Props) {
+export function FileManagerPreview({ path, head, revisionLabel = "HEAD", shortcutsBlocked, onClose, onError }: Props) {
   const [file, setFile] = useState<HeadFileContent | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -164,7 +165,7 @@ export function FileManagerPreview({ path, head, shortcutsBlocked, onClose, onEr
         </button>
         <IconFile />
         <div className="fm-preview-path" title={path}>{renderPath(path)}</div>
-        <span className="fm-preview-revision">HEAD {head.slice(0, 8)}</span>
+        <span className="fm-preview-revision">{revisionLabel} {head.slice(0, 8)}</span>
         <button className="fm-preview-find-button" onClick={openSearch} title="Find in file (Ctrl+F)">
           <IconSearch /> Find
         </button>

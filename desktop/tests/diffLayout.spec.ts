@@ -148,6 +148,17 @@ test.describe.serial("diff viewer layout", () => {
     await expect(window.locator(".dv-split")).toBeVisible();
   });
 
+  test("keeps the right sidebar compact so the diff retains more room", async () => {
+    const originalViewport = await window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    await window.setViewportSize({ width: 900, height: 560 });
+    await expect.poll(() => window.locator(".side-pane").evaluate((element) => element.getBoundingClientRect().width)).toBe(340);
+
+    await window.setViewportSize({ width: 1800, height: 900 });
+    await expect.poll(() => window.locator(".side-pane").evaluate((element) => element.getBoundingClientRect().width)).toBe(400);
+
+    await window.setViewportSize(originalViewport);
+  });
+
   test("keeps both layout controls usable at the supported narrow window size", async () => {
     const originalSize = await app.evaluate(({ BrowserWindow }) => {
       const target = BrowserWindow.getAllWindows()[0];

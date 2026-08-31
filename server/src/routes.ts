@@ -5,6 +5,8 @@ import { getLog } from "./git/log.js";
 import { getStatus } from "./git/status.js";
 import { getCommitFiles } from "./git/commitFiles.js";
 import { getDiff, type DiffSource } from "./git/diff.js";
+import { getBlame } from "./git/blame.js";
+import { getFileHistory } from "./git/fileHistory.js";
 import {
   stagePaths,
   stageAll,
@@ -510,6 +512,30 @@ api.get("/diff", h(async (req, res) => {
     return;
   }
   res.json(await getDiff(root, source, path, hash));
+}));
+
+api.get("/blame", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const path = String(req.query.path ?? "");
+  if (!path) {
+    res.status(400).json({ error: "A file path is required" });
+    return;
+  }
+  const revision = req.query.revision ? String(req.query.revision) : undefined;
+  res.json(await getBlame(root, path, revision));
+}));
+
+api.get("/file-history", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const path = String(req.query.path ?? "");
+  if (!path) {
+    res.status(400).json({ error: "A file path is required" });
+    return;
+  }
+  const skip = clampInt(req.query.skip, 0, 0, Number.MAX_SAFE_INTEGER);
+  const limit = clampInt(req.query.limit, 100, 1, 200);
+  const query = String(req.query.query ?? "");
+  res.json(await getFileHistory(root, path, skip, limit, query));
 }));
 
 api.post("/stage", h(async (req, res) => {

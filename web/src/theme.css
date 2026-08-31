@@ -93,9 +93,7 @@ select option {
   position: relative;
 }
 .side-pane {
-  width: 33%;
-  min-width: 340px;
-  max-width: 560px;
+  flex: 0 0 clamp(340px, 26vw, 400px);
   display: flex;
   flex-direction: column;
   min-height: 0;

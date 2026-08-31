@@ -4,12 +4,16 @@ import { api } from "../api/client";
 import { writeClipboard } from "../desktop";
 import { useStore } from "../state/store";
 import type { HeadEntryKind, HeadFileEntry, HistoryDeleteResult } from "../types";
+import { BlameView } from "./BlameView";
+import { FileHistoryView } from "./FileHistoryView";
 import { FileManagerPreview } from "./FileManagerPreview";
 import {
+  IconBlame,
   IconChevron,
   IconChevronDown,
   IconFile,
   IconFolder,
+  IconHistory,
   IconRefresh,
   IconSearch,
   IconSpinner,
@@ -47,10 +51,11 @@ const MAX_HISTORY_DELETE_PATHS = 100;
 
 interface Props {
   open: boolean;
+  intent?: "browse" | "blame";
   onClose: () => void;
 }
 
-export function FileManager({ open, onClose }: Props) {
+export function FileManager({ open, intent = "browse", onClose }: Props) {
   const repo = useStore((s) => s.repo);
   const refreshAll = useStore((s) => s.refreshAll);
   const setNotice = useStore((s) => s.setNotice);
@@ -63,6 +68,8 @@ export function FileManager({ open, onClose }: Props) {
   const [currentPath, setCurrentPath] = useState("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [blamePath, setBlamePath] = useState<string | null>(null);
+  const [historyPath, setHistoryPath] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -134,6 +141,30 @@ export function FileManager({ open, onClose }: Props) {
     }, 0);
   }, [previewPath]);
 
+  const closeBlame = useCallback(() => {
+    const path = blamePath;
+    setBlamePath(null);
+    setError("");
+    window.setTimeout(() => {
+      const row = Array.from(rowsRef.current?.querySelectorAll<HTMLButtonElement>(".fm-row-main") ?? [])
+        .find((candidate) => candidate.title === path);
+      if (row) row.focus();
+      else dialogRef.current?.focus();
+    }, 0);
+  }, [blamePath]);
+
+  const closeHistory = useCallback(() => {
+    const path = historyPath;
+    setHistoryPath(null);
+    setError("");
+    window.setTimeout(() => {
+      const row = Array.from(rowsRef.current?.querySelectorAll<HTMLButtonElement>(".fm-row-main") ?? [])
+        .find((candidate) => candidate.title === path);
+      if (row) row.focus();
+      else dialogRef.current?.focus();
+    }, 0);
+  }, [historyPath]);
+
   const load = async (includeHistorical = showHistorical) => {
     if (!repo) return;
     const requestRoot = repo.root;
@@ -160,6 +191,8 @@ export function FileManager({ open, onClose }: Props) {
       if (currentPath && !dirs.has(currentPath)) setCurrentPath("");
       if (selectedPath && !paths.has(selectedPath) && !dirs.has(selectedPath)) setSelectedPath(null);
       if (previewPath && !paths.has(previewPath)) setPreviewPath(null);
+      if (blamePath && !paths.has(blamePath)) setBlamePath(null);
+      if (historyPath && !paths.has(historyPath)) setHistoryPath(null);
     } catch (cause) {
       if (generation === loadGeneration.current && useStore.getState().repo?.root === requestRoot) {
         setError(messageOf(cause));
@@ -181,6 +214,8 @@ export function FileManager({ open, onClose }: Props) {
     setCurrentPath("");
     setSelectedPath(null);
     setPreviewPath(null);
+    setBlamePath(null);
+    setHistoryPath(null);
     setQuery("");
     setExpanded(new Set([""]));
     setMenu(null);
@@ -194,7 +229,7 @@ export function FileManager({ open, onClose }: Props) {
     // The repository root identifies the API binding; other local view state
     // intentionally survives refreshes while this repository stays open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, repo?.root]);
+  }, [intent, open, repo?.root]);
 
   useEffect(() => {
     if (open) {
@@ -217,6 +252,10 @@ export function FileManager({ open, onClose }: Props) {
         dismissMenu();
       } else if (previewPath) {
         closePreview();
+      } else if (blamePath) {
+        closeBlame();
+      } else if (historyPath) {
+        closeHistory();
       } else {
         onClose();
       }
@@ -251,7 +290,7 @@ export function FileManager({ open, onClose }: Props) {
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("keydown", trapFocus);
     };
-  }, [closeConfirmation, closePreview, deleting, dismissMenu, menu, onClose, open, pendingDelete, previewPath]);
+  }, [blamePath, closeBlame, closeConfirmation, closeHistory, closePreview, deleting, dismissMenu, historyPath, menu, onClose, open, pendingDelete, previewPath]);
 
   useEffect(() => {
     if (!menu) return;
@@ -283,6 +322,8 @@ export function FileManager({ open, onClose }: Props) {
     setCurrentPath(node.path);
     setSelectedPath(node.path);
     setPreviewPath(null);
+    setBlamePath(null);
+    setHistoryPath(null);
     setQuery("");
     setExpanded((before) => withAncestors(before, node.path));
   };
@@ -292,13 +333,38 @@ export function FileManager({ open, onClose }: Props) {
       navigate(node);
       return;
     }
-    openFile(node);
+    if (intent === "blame") openBlame(node);
+    else openFile(node);
   };
 
   const openFile = (node: BrowserNode) => {
     if (!node.headKind || node.headKind === "submodule" || !head) return;
     setSelectedPath(node.path);
     setPreviewPath(node.path);
+    setBlamePath(null);
+    setHistoryPath(null);
+    setMenu(null);
+    menuInvoker.current = null;
+    setError("");
+  };
+
+  const openBlame = (node: BrowserNode) => {
+    if (!node.headKind || node.headKind === "submodule") return;
+    setSelectedPath(node.path);
+    setBlamePath(node.path);
+    setPreviewPath(null);
+    setHistoryPath(null);
+    setMenu(null);
+    menuInvoker.current = null;
+    setError("");
+  };
+
+  const openHistory = (node: BrowserNode) => {
+    if (!isExactFileEntry(node) || node.headKind === "submodule") return;
+    setSelectedPath(node.path);
+    setHistoryPath(node.path);
+    setPreviewPath(null);
+    setBlamePath(null);
     setMenu(null);
     menuInvoker.current = null;
     setError("");
@@ -368,6 +434,8 @@ export function FileManager({ open, onClose }: Props) {
     setCurrentPath("");
     setSelectedPath(null);
     setPreviewPath(null);
+    setBlamePath(null);
+    setHistoryPath(null);
     setExpanded(new Set([""]));
     setMenu(null);
     if (!enabling) {
@@ -432,13 +500,13 @@ export function FileManager({ open, onClose }: Props) {
 
   return (
     <div className="fm-overlay" onMouseDown={(e) => e.target === e.currentTarget && !deleting && onClose()}>
-      <section className="fm-window" ref={dialogRef} role="dialog" aria-modal="true" aria-label="File Manager" tabIndex={-1}>
+      <section className="fm-window" ref={dialogRef} role="dialog" aria-modal="true" aria-label={intent === "blame" ? "Blame a File" : "File Manager"} tabIndex={-1}>
         <header className="fm-header">
-          <div className="fm-title-icon"><IconFolder /></div>
+          <div className="fm-title-icon">{intent === "blame" ? <IconBlame /> : <IconFolder />}</div>
           <div className="fm-heading">
-            <strong>File Manager</strong>
+            <strong>{intent === "blame" ? "Blame a File" : "File Manager"}</strong>
             <span>
-              {repoName} · {showHistorical ? "HEAD and reachable history" : "files tracked at HEAD"} {head ? head.slice(0, 8) : "(unborn)"}
+              {repoName} · {intent === "blame" ? "choose a tracked file to explain line history" : showHistorical ? "HEAD and reachable history" : "files tracked at HEAD"} {head ? head.slice(0, 8) : "(unborn)"}
             </span>
           </div>
           <button className="fm-close" onClick={onClose} disabled={deleting} aria-label="Close">×</button>
@@ -465,22 +533,42 @@ export function FileManager({ open, onClose }: Props) {
               );
             })}
           </div>
+          {intent === "browse" && (
+            <>
+              <button
+                className={`fm-history-toggle${showHistorical ? " active" : ""}`}
+                onClick={toggleHistorical}
+                aria-pressed={showHistorical}
+                title="Include paths absent from HEAD that remain in reachable history"
+              >
+                History paths
+                {historicalPaths.length > 0 && <span>{historicalPaths.length}</span>}
+              </button>
+              <button
+                className="fm-delete-selected"
+                onClick={beginSelectedDelete}
+                disabled={deletePaths.size === 0}
+                title="Delete the selected exact file paths from reachable history"
+              >
+                <IconTrash /> Delete selected{deletePaths.size > 0 ? ` (${deletePaths.size})` : ""}…
+              </button>
+            </>
+          )}
           <button
-            className={`fm-history-toggle${showHistorical ? " active" : ""}`}
-            onClick={toggleHistorical}
-            aria-pressed={showHistorical}
-            title="Include paths absent from HEAD that remain in reachable history"
+            className="fm-blame-selected"
+            onClick={() => selected && openBlame(selected)}
+            disabled={!selected?.headKind || selected.headKind === "submodule"}
+            title={selected?.headKind && selected.headKind !== "submodule" ? `Explain who changed each line in ${selected.path}` : "Select a tracked file to blame"}
           >
-            History paths
-            {historicalPaths.length > 0 && <span>{historicalPaths.length}</span>}
+            <IconBlame /> Blame selected
           </button>
           <button
-            className="fm-delete-selected"
-            onClick={beginSelectedDelete}
-            disabled={deletePaths.size === 0}
-            title="Delete the selected exact file paths from reachable history"
+            className="fm-history-selected"
+            onClick={() => selected && openHistory(selected)}
+            disabled={!selected || !isExactFileEntry(selected) || selected.headKind === "submodule"}
+            title={selected && isExactFileEntry(selected) && selected.headKind !== "submodule" ? `See every commit that changed ${selected.path}` : "Select a file to view its history"}
           >
-            <IconTrash /> Delete selected{deletePaths.size > 0 ? ` (${deletePaths.size})` : ""}…
+            <IconHistory /> History selected
           </button>
           <label className="fm-search">
             <IconSearch />
@@ -489,6 +577,8 @@ export function FileManager({ open, onClose }: Props) {
               onChange={(event) => {
                 setQuery(event.target.value);
                 setPreviewPath(null);
+                setBlamePath(null);
+                setHistoryPath(null);
               }}
               placeholder={showHistorical ? "Search all history paths" : "Search tracked files"}
               aria-label={showHistorical ? "Search all history paths" : "Search tracked files"}
@@ -530,7 +620,19 @@ export function FileManager({ open, onClose }: Props) {
             />
           </aside>
 
-          {previewPath && head ? (
+          {historyPath ? (
+            <FileHistoryView
+              path={historyPath}
+              onClose={closeHistory}
+              onError={setError}
+            />
+          ) : blamePath ? (
+            <BlameView
+              path={blamePath}
+              onClose={closeBlame}
+              onError={setError}
+            />
+          ) : previewPath && head ? (
             <FileManagerPreview
               path={previewPath}
               head={head}
@@ -539,8 +641,8 @@ export function FileManager({ open, onClose }: Props) {
               onError={setError}
             />
           ) : <main className="fm-list" onContextMenu={(e) => e.preventDefault()}>
-            <div className="fm-columns selecting">
-              <span>Select</span>
+            <div className={`fm-columns${intent === "browse" ? " selecting" : ""}`}>
+              {intent === "browse" && <span>Select</span>}
               <span>Name</span>
               <span>Type</span>
               <span>Size</span>
@@ -558,22 +660,24 @@ export function FileManager({ open, onClose }: Props) {
                     const node = shown[virtualRow.index];
                     return (
                       <div
-                        className={`fm-row${selected?.path === node.path ? " selected" : ""}${node.atHead ? "" : " historical"}${deletePaths.has(node.path) ? " delete-selected" : ""} selecting`}
+                        className={`fm-row${selected?.path === node.path ? " selected" : ""}${node.atHead ? "" : " historical"}${deletePaths.has(node.path) ? " delete-selected" : ""}${intent === "browse" ? " selecting" : ""}`}
                         key={`${node.kind}:${node.path}`}
                         style={{ transform: `translateY(${virtualRow.start}px)` }}
                         onContextMenu={(event) => openMenu(event, node)}
                         title={node.path}
                       >
-                        <button
-                          className="fm-row-check"
-                          onClick={() => toggleDeletePath(node)}
-                          disabled={!isExactFileEntry(node)}
-                          aria-label={`${deletePaths.has(node.path) ? "Remove" : "Select"} ${node.path} ${deletePaths.has(node.path) ? "from" : "for"} history deletion`}
-                          aria-pressed={deletePaths.has(node.path)}
-                          title={isExactFileEntry(node) ? "Select this exact file path" : "Folders use recursive deletion from their context menu"}
-                        >
-                          {deletePaths.has(node.path) && "✓"}
-                        </button>
+                        {intent === "browse" && (
+                          <button
+                            className="fm-row-check"
+                            onClick={() => toggleDeletePath(node)}
+                            disabled={!isExactFileEntry(node)}
+                            aria-label={`${deletePaths.has(node.path) ? "Remove" : "Select"} ${node.path} ${deletePaths.has(node.path) ? "from" : "for"} history deletion`}
+                            aria-pressed={deletePaths.has(node.path)}
+                            title={isExactFileEntry(node) ? "Select this exact file path" : "Folders use recursive deletion from their context menu"}
+                          >
+                            {deletePaths.has(node.path) && "✓"}
+                          </button>
+                        )}
                         <button
                           className="fm-row-main"
                           onClick={() => setSelectedPath(node.path)}
@@ -630,20 +734,34 @@ export function FileManager({ open, onClose }: Props) {
                 <IconFile /> Open file
               </button>
             )}
+            {isExactFileEntry(menu.node) && menu.node.headKind !== "submodule" && (
+              <button role="menuitem" onClick={() => openHistory(menu.node)}>
+                <IconHistory /> File history
+              </button>
+            )}
+            {menu.node.headKind && menu.node.headKind !== "submodule" && (
+              <button role="menuitem" onClick={() => openBlame(menu.node)}>
+                <IconBlame /> Blame file
+              </button>
+            )}
             <button role="menuitem" onClick={() => void copy(menu.node.path, "Copied repository path.")}>⧉ Copy repository path</button>
             {menu.node.atHead && (
               <button role="menuitem" onClick={() => void copy(joinPath(repo.root, menu.node.path), "Copied absolute path.")}>⧉ Copy absolute path</button>
             )}
-            <div />
-            {(menu.node.headKind || menu.node.historicalEntry) && (
-              <button role="menuitem" className="danger" onClick={() => beginDelete(false)}>
-                <IconTrash /> Delete {menu.node.kind === "directory" ? "file only" : "file"} from history…
-              </button>
-            )}
-            {menu.node.kind === "directory" && (
-              <button role="menuitem" className="danger" onClick={() => beginDelete(true)}>
-                <IconTrash /> Delete directory from history…
-              </button>
+            {intent === "browse" && (
+              <>
+                <div />
+                {(menu.node.headKind || menu.node.historicalEntry) && (
+                  <button role="menuitem" className="danger" onClick={() => beginDelete(false)}>
+                    <IconTrash /> Delete {menu.node.kind === "directory" ? "file only" : "file"} from history…
+                  </button>
+                )}
+                {menu.node.kind === "directory" && (
+                  <button role="menuitem" className="danger" onClick={() => beginDelete(true)}>
+                    <IconTrash /> Delete directory from history…
+                  </button>
+                )}
+              </>
             )}
             <small>{menu.node.path}</small>
           </div>

@@ -1,4 +1,5 @@
 import type {
+  BlameResult,
   Branch,
   Commit,
   CommitFile,
@@ -7,6 +8,7 @@ import type {
   CreatedPr,
   DiffResult,
   DiffSource,
+  FileHistoryResult,
   GitHubRepo,
   GitHubStatus,
   GitHubUser,
@@ -266,6 +268,20 @@ export const api = {
     const params = new URLSearchParams({ source, path });
     if (hash) params.set("hash", hash);
     return req<DiffResult>(`/api/diff?${params.toString()}`);
+  },
+  blame: (path: string, revision?: string) => {
+    const params = new URLSearchParams({ path });
+    if (revision) params.set("revision", revision);
+    return req<BlameResult>(`/api/blame?${params.toString()}`);
+  },
+  fileHistory: (path: string, skip: number, limit: number, query = "") => {
+    const params = new URLSearchParams({
+      path,
+      skip: String(skip),
+      limit: String(limit),
+    });
+    if (query) params.set("query", query);
+    return req<FileHistoryResult>(`/api/file-history?${params.toString()}`);
   },
 
   stage: (paths: string[]) =>

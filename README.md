@@ -53,6 +53,15 @@ them instead, and nothing in `server/` or `web/` is Windows-specific.
 - Click a file → full-file **inline diff** viewer (CodeMirror 6): the entire file
   with add/delete/context coloring, twin old/new line-number gutters, syntax
   highlighting, `File View` / `Diff View` toggle, and up/down hunk navigation.
+- **Git blame** — choose any tracked file from a searchable tree and see each
+  line grouped by its originating commit, author, and age. Select a line for
+  the full commit ID, message, timestamp, original path/line through renames,
+  and a plain-language explanation. Working-tree edits are clearly marked as
+  uncommitted instead of being attributed to the previous author.
+- **File history** — select a file to follow every change through renames in a
+  newest-first timeline. Each entry includes its author, date, commit, file
+  diff, complete revision, and historical blame. Exact-text search finds the
+  commits where remembered code was added or removed, even after it disappears.
 - Full changes sidebar:
   - Red **discard-all** button (reset tracked files + delete untracked;
     click-twice to confirm).
@@ -304,7 +313,7 @@ deploy. Run it and pass `--port`/`--host` as above, e.g. on a Linux server:
 
 ```
 server/   Express API that spawns git (never via a shell)
-  src/git/       gitRunner, gitPath, log, status, diff, commitFiles, mutate
+  src/git/       gitRunner, gitPath, log, status, diff, blame, commitFiles, mutate
   src/app.ts     createApp() — the factory all three entry points share
   src/routes.ts  REST endpoints
   src/index.ts   Node entry (serves web/dist from disk)

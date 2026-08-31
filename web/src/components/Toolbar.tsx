@@ -6,6 +6,7 @@ import { ActionsMenu } from "./ActionsMenu";
 import { FileManager } from "./FileManager";
 import {
   IconActions,
+  IconBlame,
   IconBranch,
   IconCaretDown,
   IconFolder,
@@ -39,10 +40,10 @@ export function Toolbar() {
   const opening = useStore((s) => s.opening);
   const [branchOpen, setBranchOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
-  const [fileManagerOpen, setFileManagerOpen] = useState(false);
+  const [fileManagerIntent, setFileManagerIntent] = useState<"browse" | "blame" | null>(null);
 
   useEffect(() => {
-    if (opening) setFileManagerOpen(false);
+    if (opening) setFileManagerIntent(null);
   }, [opening]);
 
   if (!repo) return null;
@@ -146,10 +147,19 @@ export function Toolbar() {
 
       <div className="tb-right">
         <ToolButton
+          label="Blame"
+          onClick={() => setFileManagerIntent("blame")}
+          disabled={opening || !repo.head}
+          active={fileManagerIntent === "blame"}
+          title={repo.head ? "Choose a file and explain who last changed each line" : "Blame requires at least one commit"}
+        >
+          <IconBlame />
+        </ToolButton>
+        <ToolButton
           label="File Manager"
-          onClick={() => setFileManagerOpen(true)}
+          onClick={() => setFileManagerIntent("browse")}
           disabled={opening}
-          active={fileManagerOpen}
+          active={fileManagerIntent === "browse"}
           title="Browse the files tracked at HEAD"
         >
           <IconFolder />
@@ -172,8 +182,9 @@ export function Toolbar() {
         )}
       </div>
       <FileManager
-        open={fileManagerOpen && !opening}
-        onClose={() => setFileManagerOpen(false)}
+        open={fileManagerIntent !== null && !opening}
+        intent={fileManagerIntent ?? "browse"}
+        onClose={() => setFileManagerIntent(null)}
       />
     </div>
   );

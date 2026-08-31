@@ -190,6 +190,19 @@ export const IconCommit = (p: P) => (
     <path d="M4 12h4.6M15.4 12H20" />
   </svg>
 );
+export const IconBlame = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 5h3M4 10h3M4 15h3M4 20h3" />
+    <path d="M10 5h10M10 10h7M10 15h10M10 20h6" />
+    <circle cx="8.5" cy="10" r="1.5" fill="currentColor" stroke="none" />
+  </svg>
+);
+export const IconHistory = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4.5 8A8 8 0 1 1 4 14" />
+    <path d="M4.5 4v4h4M12 7.5V12l3 2" />
+  </svg>
+);
 export const IconCaretDown = (p: P) => (
   <svg {...base({ width: 10, height: 10, strokeWidth: 2.4, ...p })}>
     <path d="m5 8 7 8 7-8" />

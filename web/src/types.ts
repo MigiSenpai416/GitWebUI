@@ -225,9 +225,24 @@ export interface GitHubUser {
 
 export interface GitHubStatus {
   configured: boolean;
+  authMethod: "pat" | "oauth" | null;
   user: GitHubUser | null;
   error?: string;
 }
+
+export interface GitHubOAuthDeviceFlow {
+  flowId: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string | null;
+  expiresAt: number;
+  intervalMs: number;
+}
+
+export type GitHubOAuthPoll =
+  | { status: "pending"; retryAfterMs: number; message?: string }
+  | { status: "complete"; user: GitHubUser }
+  | { status: "denied" | "expired"; message: string };
 
 export interface CommitIdentity {
   name: string;

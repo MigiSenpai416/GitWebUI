@@ -46,7 +46,9 @@ export function configPath(name: string): string {
 
 /** Ensure the config dir exists before writing into it. */
 export async function ensureConfigDir(): Promise<void> {
-  await fs.mkdir(configDir(), { recursive: true });
+  const dir = configDir();
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") await fs.chmod(dir, 0o700);
 }
 
 const MAX_RECENT = 15;

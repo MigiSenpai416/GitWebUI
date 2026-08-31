@@ -58,6 +58,158 @@
   line-height: 1.45;
 }
 
+.acct-methods {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 14px 0 18px;
+}
+.acct-method {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px;
+  text-align: left;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.acct-method:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg-elevated);
+}
+.acct-method > span:nth-child(2) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.acct-method strong {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+}
+.acct-method strong em {
+  margin-left: 5px;
+  padding: 2px 5px;
+  color: #7ee08c;
+  background: rgba(63, 185, 80, 0.14);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-style: normal;
+  font-weight: 500;
+}
+.acct-method small {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.acct-method-icon {
+  display: flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-strong);
+  background: var(--bg-elevated);
+  border-radius: 50%;
+}
+.acct-token-icon {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: -1px;
+}
+.acct-method-arrow {
+  color: var(--text-faint);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.acct-oauth-scopes {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 15px 0 18px;
+  padding: 11px 12px;
+  color: var(--text-dim);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+}
+.acct-oauth-scopes strong {
+  color: var(--text);
+}
+.acct-oauth-scopes span::before {
+  content: "✓";
+  margin-right: 8px;
+  color: var(--green);
+}
+.acct-device-code {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 10px;
+  padding: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.acct-device-code code {
+  flex: 1;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-align: center;
+  user-select: all;
+}
+.acct-open-github {
+  width: 100%;
+  margin-bottom: 13px;
+}
+.acct-oauth-wait {
+  display: flex;
+  justify-content: center;
+  min-height: 20px;
+  margin-bottom: 13px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.acct-oauth-success {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 18px;
+  padding: 12px;
+  color: #7ee08c;
+  background: rgba(63, 185, 80, 0.12);
+  border: 1px solid rgba(63, 185, 80, 0.4);
+  border-radius: var(--radius);
+}
+.acct-oauth-success > span {
+  display: flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  background: rgba(63, 185, 80, 0.18);
+  border-radius: 50%;
+  font-size: 17px;
+}
+.acct-oauth-success div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.acct-oauth-success small {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
 /* Tabs (Add Remote) */
 .acct-tabs {
   display: flex;

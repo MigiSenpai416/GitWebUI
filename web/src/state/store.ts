@@ -8,6 +8,8 @@ import type {
   ConflictFileData,
   CreatePrInput,
   CreatedPr,
+  GitHubOAuthDeviceFlow,
+  GitHubOAuthPoll,
   GitHubStatus,
   GitHubUser,
   IdentityInfo,
@@ -458,6 +460,9 @@ interface AppState {
   loadGitHubStatus: () => Promise<void>;
   setGitHubToken: (token: string) => Promise<GitHubUser>;
   revokeGitHubToken: () => Promise<void>;
+  beginGitHubOAuth: () => Promise<GitHubOAuthDeviceFlow>;
+  pollGitHubOAuth: (flowId: string) => Promise<GitHubOAuthPoll>;
+  cancelGitHubOAuth: (flowId: string) => Promise<void>;
 
   loadIdentity: () => Promise<void>;
   saveIdentity: (name: string, email: string) => Promise<void>;
@@ -1491,7 +1496,7 @@ export const useStore = create<AppState>((set, get) => ({
   async setGitHubToken(token: string) {
     // Errors propagate to the dialog for inline display.
     const { user } = await api.githubSetToken(token);
-    set({ githubStatus: { configured: true, user } });
+    set({ githubStatus: { configured: true, authMethod: "pat", user } });
     // The connected account now provides the commit identity — refresh it.
     get().loadIdentity();
     return user;
@@ -1506,6 +1511,23 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       reportError(set, e);
     }
+  },
+
+  beginGitHubOAuth() {
+    return api.githubOAuthStart();
+  },
+
+  async pollGitHubOAuth(flowId: string) {
+    const result = await api.githubOAuthPoll(flowId);
+    if (result.status === "complete") {
+      set({ githubStatus: { configured: true, authMethod: "oauth", user: result.user } });
+      get().loadIdentity();
+    }
+    return result;
+  },
+
+  async cancelGitHubOAuth(flowId: string) {
+    await api.githubOAuthCancel(flowId);
   },
 
   async loadIdentity() {

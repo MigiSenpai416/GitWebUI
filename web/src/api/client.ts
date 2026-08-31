@@ -9,6 +9,8 @@ import type {
   DiffResult,
   DiffSource,
   FileHistoryResult,
+  GitHubOAuthDeviceFlow,
+  GitHubOAuthPoll,
   GitHubRepo,
   GitHubStatus,
   GitHubUser,
@@ -311,15 +313,30 @@ export const api = {
     req<IdentityInfo>("/api/identity", { method: "POST", body: JSON.stringify({ name, email }) }),
   clearIdentity: () => req<IdentityInfo>("/api/identity", { method: "DELETE", body: "{}" }),
 
-  // GitHub account (Personal Access Token)
+  // GitHub account (OAuth or Personal Access Token)
   githubStatus: () => req<GitHubStatus>("/api/github/status"),
   githubSetToken: (token: string) =>
-    req<{ configured: true; user: GitHubUser }>("/api/github/token", {
+    req<{ configured: true; authMethod: "pat"; user: GitHubUser }>("/api/github/token", {
       method: "POST",
       body: JSON.stringify({ token }),
     }),
   githubRevoke: () =>
-    req<{ configured: false; user: null }>("/api/github/token", { method: "DELETE", body: "{}" }),
+    req<{ configured: false; authMethod: null; user: null }>("/api/github/token", {
+      method: "DELETE",
+      body: "{}",
+    }),
+  githubOAuthStart: () =>
+    req<GitHubOAuthDeviceFlow>("/api/github/oauth/device", { method: "POST", body: "{}" }),
+  githubOAuthPoll: (flowId: string) =>
+    req<GitHubOAuthPoll>("/api/github/oauth/poll", {
+      method: "POST",
+      body: JSON.stringify({ flowId }),
+    }),
+  githubOAuthCancel: (flowId: string) =>
+    req<{ ok: true }>("/api/github/oauth/device", {
+      method: "DELETE",
+      body: JSON.stringify({ flowId }),
+    }),
   githubRepos: () => req<{ repos: GitHubRepo[] }>("/api/github/repos"),
 
   // Remotes

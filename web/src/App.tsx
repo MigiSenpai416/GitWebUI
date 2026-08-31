@@ -147,9 +147,9 @@ export function App() {
       <AddRemoteDialog />
       <CloneDialog />
       <CreateDialog />
-      <GitHubDialog />
       <PullRequestDialog />
       <IdentityDialog />
+      <GitHubDialog />
       {overlays}
     </div>
   );

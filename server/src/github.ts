@@ -1,9 +1,11 @@
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { configPath, ensureConfigDir } from "./config.js";
 import type { CommitIdentity } from "./identity.js";
 
 /**
- * GitHub Personal Access Token storage + minimal GitHub REST calls.
+ * GitHub credential storage + minimal GitHub REST calls.
  *
  * The token is stored in plaintext in the app config dir (like git's own
  * `store` credential helper) because git needs the live value to authenticate
@@ -11,7 +13,13 @@ import type { CommitIdentity } from "./identity.js";
  */
 
 const tokenFile = () => configPath("github.json");
+const refreshRecoveryFile = () => configPath("github-refresh.json");
 const API = "https://api.github.com";
+const GITHUB = "https://github.com";
+const GITHUB_OAUTH_CLIENT_ID = "Ov23liu2LXjA3dklsGu1";
+const OAUTH_FINISH_TTL_MS = 30 * 60_000;
+const GITHUB_REQUEST_TIMEOUT_MS = 15_000;
+const TOKEN_TEMP_MAX_AGE_MS = 10 * 60_000;
 
 export interface GitHubUser {
   login: string;
@@ -21,19 +29,188 @@ export interface GitHubUser {
   email: string | null;
 }
 
+export type GitHubAuthMethod = "pat" | "oauth";
+
 interface TokenConfig {
   token: string;
+  authMethod: GitHubAuthMethod;
+  refreshToken?: string;
+  expiresAt?: number;
+  refreshTokenExpiresAt?: number;
+}
+
+interface PendingOAuthRefresh {
+  config: TokenConfig;
+  previousToken: string;
+  tokenRevision: number;
+}
+
+interface RefreshRecovery {
+  config: TokenConfig;
+  previousToken: string;
 }
 
 let cache: TokenConfig | null = null;
 let loaded = false;
+let tokenRevision = 0;
+let refreshPromise: Promise<TokenConfig | null> | null = null;
+let pendingOAuthRefresh: PendingOAuthRefresh | null = null;
+let tokenWriteQueue: Promise<void> = Promise.resolve();
+
+function processIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function cleanupTokenTemps(removeActive = false): Promise<void> {
+  const target = tokenFile();
+  const dir = path.dirname(target);
+  const prefix = `${path.basename(target)}.`;
+  try {
+    for (const name of await fs.readdir(dir)) {
+      if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
+      const pid = Number(name.slice(prefix.length).split(".", 1)[0]);
+      const candidate = path.join(dir, name);
+      const age = Date.now() - (await fs.stat(candidate)).mtimeMs;
+      if (
+        removeActive ||
+        age >= TOKEN_TEMP_MAX_AGE_MS ||
+        !Number.isSafeInteger(pid) ||
+        !processIsRunning(pid)
+      ) {
+        await fs.rm(candidate, { force: true });
+      }
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+}
+
+async function writeConfigFile(target: string, value: unknown): Promise<void> {
+  await ensureConfigDir();
+  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporary, JSON.stringify(value, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    if (process.platform !== "win32") await fs.chmod(temporary, 0o600);
+    await fs.rename(temporary, target);
+  } catch (e) {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+    throw e;
+  }
+}
+
+async function persistTokenConfig(config: TokenConfig): Promise<void> {
+  await cleanupTokenTemps();
+  await writeConfigFile(tokenFile(), config);
+}
+
+function parseTokenConfig(raw: string): TokenConfig | null {
+  const parsed = JSON.parse(raw) as Partial<TokenConfig>;
+  return parsed.token
+    ? {
+        token: parsed.token,
+        authMethod: parsed.authMethod === "oauth" ? "oauth" : "pat",
+        ...(typeof parsed.refreshToken === "string" ? { refreshToken: parsed.refreshToken } : {}),
+        ...(typeof parsed.expiresAt === "number" ? { expiresAt: parsed.expiresAt } : {}),
+        ...(typeof parsed.refreshTokenExpiresAt === "number"
+          ? { refreshTokenExpiresAt: parsed.refreshTokenExpiresAt }
+          : {}),
+      }
+    : null;
+}
+
+async function clearRefreshRecovery(): Promise<void> {
+  const target = refreshRecoveryFile();
+  const dir = path.dirname(target);
+  const prefix = `${path.basename(target)}.`;
+  await fs.rm(target, { force: true });
+  try {
+    for (const name of await fs.readdir(dir)) {
+      if (name.startsWith(prefix) && name.endsWith(".tmp")) {
+        await fs.rm(path.join(dir, name), { force: true });
+      }
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+}
+
+async function readRefreshRecovery(): Promise<RefreshRecovery | null> {
+  const target = refreshRecoveryFile();
+  const dir = path.dirname(target);
+  const prefix = `${path.basename(target)}.`;
+  const candidates = [target];
+  try {
+    for (const name of await fs.readdir(dir)) {
+      if (name.startsWith(prefix) && name.endsWith(".tmp")) candidates.push(path.join(dir, name));
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+  const recovered: Array<{ recovery: RefreshRecovery; mtimeMs: number }> = [];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(candidate, "utf8")) as Partial<RefreshRecovery>;
+      const config = parsed.config ? parseTokenConfig(JSON.stringify(parsed.config)) : null;
+      if (config && typeof parsed.previousToken === "string") {
+        recovered.push({
+          recovery: { config, previousToken: parsed.previousToken },
+          mtimeMs: (await fs.stat(candidate)).mtimeMs,
+        });
+      } else {
+        throw new Error("Invalid refresh recovery record");
+      }
+    } catch {
+      const name = path.basename(candidate);
+      const pid = Number(name.slice(prefix.length).split(".", 1)[0]);
+      const age = await fs.stat(candidate).then((stat) => Date.now() - stat.mtimeMs, () => Infinity);
+      if (
+        candidate === target ||
+        age >= TOKEN_TEMP_MAX_AGE_MS ||
+        !Number.isSafeInteger(pid) ||
+        !processIsRunning(pid)
+      ) {
+        await fs.rm(candidate, { force: true });
+      }
+    }
+  }
+  recovered.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return recovered[0]?.recovery ?? null;
+}
 
 async function read(): Promise<TokenConfig | null> {
   if (loaded) return cache;
   try {
-    const raw = await fs.readFile(tokenFile(), "utf8");
-    const parsed = JSON.parse(raw) as Partial<TokenConfig>;
-    cache = parsed.token ? { token: parsed.token } : null;
+    await cleanupTokenTemps();
+    const main = await fs.readFile(tokenFile(), "utf8").then(parseTokenConfig, () => null);
+    const recovered = await readRefreshRecovery();
+    if (recovered) {
+      if (main && (
+        main.token === recovered.previousToken ||
+        main.token === recovered.config.token
+      )) {
+        try {
+          await persistTokenConfig(recovered.config);
+          await clearRefreshRecovery();
+        } catch {
+          // The complete recovery record remains authoritative until promotion succeeds.
+        }
+        cache = recovered.config;
+        loaded = true;
+        return cache;
+      }
+      await clearRefreshRecovery().catch(() => undefined);
+    }
+    cache = main;
   } catch {
     cache = null;
   }
@@ -42,26 +219,94 @@ async function read(): Promise<TokenConfig | null> {
 }
 
 export async function getToken(): Promise<string | null> {
-  return (await read())?.token ?? null;
+  let config = await read();
+  if (!config) return null;
+  if (pendingOAuthRefresh?.tokenRevision === tokenRevision) {
+    try {
+      config = (await refreshOAuthToken(config)) ?? config;
+    } catch {
+      config = pendingOAuthRefresh?.config ?? config;
+      if (config.expiresAt !== undefined && config.expiresAt <= Date.now()) return null;
+      return config.token;
+    }
+  }
+  if (
+    config.authMethod === "oauth" &&
+    config.expiresAt !== undefined &&
+    config.expiresAt <= Date.now() + 60_000
+  ) {
+    if (config.refreshToken) {
+      try {
+        const refreshed = await refreshOAuthToken(config);
+        return refreshed?.token ?? null;
+      } catch {
+        // A token still inside its lifetime can make one final API attempt.
+        const pending = pendingOAuthRefresh;
+        if (pending?.tokenRevision === tokenRevision) {
+          if (pending.config.expiresAt !== undefined && pending.config.expiresAt <= Date.now()) {
+            return null;
+          }
+          return pending.config.token;
+        }
+      }
+    }
+    if (config.expiresAt <= Date.now()) return null;
+  }
+  return config.token;
 }
 
 export async function hasToken(): Promise<boolean> {
   return (await getToken()) !== null;
 }
 
-/** Persist the token. */
-export async function setToken(token: string): Promise<void> {
-  await ensureConfigDir();
-  await fs.writeFile(tokenFile(), JSON.stringify({ token }, null, 2), "utf8");
-  cache = { token };
-  loaded = true;
+async function writeTokenConfig(config: TokenConfig): Promise<void> {
+  const write = tokenWriteQueue.then(async () => {
+    await persistTokenConfig(config);
+    await clearRefreshRecovery().catch(() => undefined);
+    tokenRevision++;
+    pendingOAuthRefresh = null;
+    cache = config;
+    loaded = true;
+  });
+  tokenWriteQueue = write.catch(() => undefined);
+  await write;
+}
+
+/** Persist a PAT or an OAuth access token. */
+export async function setToken(
+  token: string,
+  options: {
+    authMethod?: GitHubAuthMethod;
+    refreshToken?: string;
+    expiresIn?: number;
+    refreshTokenExpiresIn?: number;
+  } = {},
+): Promise<void> {
+  const now = Date.now();
+  await writeTokenConfig({
+    token,
+    authMethod: options.authMethod ?? "pat",
+    ...(options.refreshToken ? { refreshToken: options.refreshToken } : {}),
+    ...(options.expiresIn ? { expiresAt: now + options.expiresIn * 1000 } : {}),
+    ...(options.refreshTokenExpiresIn
+      ? { refreshTokenExpiresAt: now + options.refreshTokenExpiresIn * 1000 }
+      : {}),
+  });
 }
 
 /** Remove the stored token (revoke locally). */
 export async function deleteToken(): Promise<void> {
-  await fs.rm(tokenFile(), { force: true });
-  cache = null;
-  loaded = true;
+  const remove = tokenWriteQueue.then(async () => {
+    await clearRefreshRecovery();
+    await fs.rm(tokenFile(), { force: true });
+    await cleanupTokenTemps(true);
+    tokenRevision++;
+    pendingOAuthRefresh = null;
+    cache = null;
+    loaded = true;
+  });
+  tokenWriteQueue = remove.catch(() => undefined);
+  await remove;
 }
 
 function ghHeaders(token: string): Record<string, string> {
@@ -96,9 +341,573 @@ function ghError(status: number, body: string): Error & { status: number } {
   return Object.assign(new Error(message), { status: outStatus });
 }
 
+function oauthError(value: unknown, fallback: string): Error & { status: number } {
+  const response = value as { error?: string; error_description?: string };
+  const known: Record<string, string> = {
+    access_denied: "GitHub authorization was cancelled.",
+    device_flow_disabled: "Device Flow is not enabled for this GitHub OAuth app.",
+    expired_token: "The GitHub sign-in code expired. Start again to get a new code.",
+    incorrect_client_credentials: "The configured GitHub OAuth Client ID is invalid.",
+    incorrect_device_code: "GitHub rejected the sign-in code. Start the sign-in again.",
+    unsupported_grant_type: "GitHub rejected the OAuth grant type.",
+  };
+  const message =
+    (response.error && known[response.error]) ||
+    response.error_description ||
+    fallback;
+  return Object.assign(new Error(message), { status: 502 });
+}
+
+async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | null> {
+  if (refreshPromise) return refreshPromise;
+  const persist = async (pending: PendingOAuthRefresh): Promise<TokenConfig | null> => {
+    const commit = tokenWriteQueue.then(async () => {
+      if (pendingOAuthRefresh !== pending || pending.tokenRevision !== tokenRevision) {
+        if (pendingOAuthRefresh === pending) pendingOAuthRefresh = null;
+        return read();
+      }
+      try {
+        await writeConfigFile(refreshRecoveryFile(), {
+          config: pending.config,
+          previousToken: pending.previousToken,
+        } satisfies RefreshRecovery);
+        await persistTokenConfig(pending.config);
+        await clearRefreshRecovery();
+      } catch (e) {
+        if (pending.tokenRevision === tokenRevision) {
+          cache = pending.config;
+          loaded = true;
+        }
+        throw e;
+      }
+      if (pendingOAuthRefresh === pending) pendingOAuthRefresh = null;
+      cache = pending.config;
+      loaded = true;
+      return pending.config;
+    });
+    tokenWriteQueue = commit.then(() => undefined, () => undefined);
+    return commit;
+  };
+
+  const refresh = (async () => {
+    if (pendingOAuthRefresh?.tokenRevision === tokenRevision) {
+      return persist(pendingOAuthRefresh);
+    }
+    pendingOAuthRefresh = null;
+
+    if (!config.refreshToken) throw new Error("GitHub OAuth cannot refresh this token");
+    if (
+      config.refreshTokenExpiresAt !== undefined &&
+      config.refreshTokenExpiresAt <= Date.now()
+    ) {
+      throw new Error("The GitHub OAuth refresh token expired");
+    }
+
+    const expectedRevision = tokenRevision;
+    const body = new URLSearchParams({
+      client_id: GITHUB_OAUTH_CLIENT_ID,
+      grant_type: "refresh_token",
+      refresh_token: config.refreshToken,
+    });
+    const res = await fetch(`${GITHUB}/login/oauth/access_token`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
+    });
+    const response = (await res.json()) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+      refresh_token_expires_in?: number;
+      error?: string;
+      error_description?: string;
+    };
+    if (!res.ok || !response.access_token) {
+      throw oauthError(response, `GitHub OAuth refresh failed (${res.status})`);
+    }
+
+    const now = Date.now();
+    const pending: PendingOAuthRefresh = {
+      tokenRevision: expectedRevision,
+      previousToken: config.token,
+      config: {
+        token: response.access_token,
+        authMethod: "oauth",
+        refreshToken: response.refresh_token ?? config.refreshToken,
+        ...(response.expires_in ? { expiresAt: now + response.expires_in * 1000 } : {}),
+        ...(response.refresh_token_expires_in
+          ? { refreshTokenExpiresAt: now + response.refresh_token_expires_in * 1000 }
+          : config.refreshTokenExpiresAt
+            ? { refreshTokenExpiresAt: config.refreshTokenExpiresAt }
+            : {}),
+      },
+    };
+    pendingOAuthRefresh = pending;
+    return persist(pending);
+  })();
+  refreshPromise = refresh.finally(() => {
+    refreshPromise = null;
+  });
+  return refreshPromise;
+}
+
+export interface GitHubOAuthDeviceFlow {
+  flowId: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string | null;
+  expiresAt: number;
+  intervalMs: number;
+}
+
+export type GitHubOAuthPoll =
+  | { status: "pending"; retryAfterMs: number; message?: string }
+  | { status: "complete"; user: GitHubUser }
+  | { status: "denied" | "expired"; message: string };
+
+interface OAuthFlowState {
+  deviceCode: string;
+  expiresAt: number;
+  intervalMs: number;
+  nextPollAt: number;
+  polling: boolean;
+  cancelled: boolean;
+  tokenRevisionAtStart: number;
+  exchanged: {
+    token: string;
+    scope: string;
+    refreshToken?: string;
+    expiresAt?: number;
+    refreshTokenExpiresAt?: number;
+    finishExpiresAt: number;
+  } | null;
+  finishing: boolean;
+  commitStarted: boolean;
+  commitPromise: Promise<void> | null;
+  committedRevision: number | null;
+  previousConfig: TokenConfig | null;
+  cleanupTimer: ReturnType<typeof setTimeout> | null;
+}
+
+const oauthFlows = new Map<string, OAuthFlowState>();
+
+function removeOAuthFlow(flowId: string): void {
+  const flow = oauthFlows.get(flowId);
+  if (flow?.cleanupTimer) clearTimeout(flow.cleanupTimer);
+  oauthFlows.delete(flowId);
+}
+
+async function expireOAuthFlow(flowId: string, flow: OAuthFlowState): Promise<void> {
+  if (flow.commitStarted) await cancelOAuthDeviceFlow(flowId);
+  else removeOAuthFlow(flowId);
+}
+
+function scheduleOAuthCleanup(flowId: string, flow: OAuthFlowState, expiresAt: number): void {
+  if (flow.cleanupTimer) clearTimeout(flow.cleanupTimer);
+  flow.cleanupTimer = setTimeout(() => {
+    if (oauthFlows.get(flowId) !== flow) return;
+    if (expiresAt > Date.now()) {
+      scheduleOAuthCleanup(flowId, flow, expiresAt);
+      return;
+    }
+    void expireOAuthFlow(flowId, flow).catch(() => {
+      if (oauthFlows.get(flowId) === flow) {
+        scheduleOAuthCleanup(flowId, flow, Date.now() + 1_000);
+      }
+    });
+  }, Math.max(1, expiresAt - Date.now()));
+  flow.cleanupTimer.unref?.();
+}
+
+async function pruneOAuthFlows(now = Date.now()): Promise<void> {
+  for (const [id, flow] of oauthFlows) {
+    if ((flow.exchanged?.finishExpiresAt ?? flow.expiresAt) <= now) {
+      await expireOAuthFlow(id, flow);
+    }
+  }
+}
+
+/** Begin GitHub's OAuth Device Flow without exposing the device secret to the browser. */
+export async function beginOAuthDeviceFlow(): Promise<GitHubOAuthDeviceFlow> {
+  const body = new URLSearchParams({ client_id: GITHUB_OAUTH_CLIENT_ID, scope: "repo user:email" });
+  const res = await fetch(`${GITHUB}/login/device/code`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+    signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
+  });
+  const response = (await res.json()) as {
+    device_code?: string;
+    user_code?: string;
+    verification_uri?: string;
+    verification_uri_complete?: string;
+    expires_in?: number;
+    interval?: number;
+    error?: string;
+    error_description?: string;
+  };
+  if (
+    !res.ok ||
+    !response.device_code ||
+    !response.user_code ||
+    !response.verification_uri ||
+    !response.expires_in
+  ) {
+    throw oauthError(response, `GitHub OAuth could not start (${res.status})`);
+  }
+
+  const verification = new URL(response.verification_uri);
+  if (verification.protocol !== "https:" || verification.hostname !== "github.com") {
+    throw Object.assign(new Error("GitHub returned an invalid verification URL"), { status: 502 });
+  }
+  let verificationUriComplete: string | null = null;
+  if (response.verification_uri_complete) {
+    const complete = new URL(response.verification_uri_complete);
+    if (complete.protocol === "https:" && complete.hostname === "github.com") {
+      verificationUriComplete = complete.toString();
+    }
+  }
+
+  const now = Date.now();
+  const intervalMs = Math.max(1, response.interval ?? 5) * 1000;
+  const flowId = randomUUID();
+  const expiresAt = now + response.expires_in * 1000;
+  await pruneOAuthFlows(now);
+  const flow: OAuthFlowState = {
+    deviceCode: response.device_code,
+    expiresAt,
+    intervalMs,
+    nextPollAt: now + intervalMs,
+    polling: false,
+    cancelled: false,
+    tokenRevisionAtStart: tokenRevision,
+    exchanged: null,
+    finishing: false,
+    commitStarted: false,
+    commitPromise: null,
+    committedRevision: null,
+    previousConfig: null,
+    cleanupTimer: null,
+  };
+  oauthFlows.set(flowId, flow);
+  scheduleOAuthCleanup(flowId, flow, expiresAt);
+  return {
+    flowId,
+    userCode: response.user_code,
+    verificationUri: verification.toString(),
+    verificationUriComplete,
+    expiresAt,
+    intervalMs,
+  };
+}
+
+async function finishOAuthDeviceFlow(
+  flowId: string,
+  flow: OAuthFlowState,
+): Promise<GitHubOAuthPoll> {
+  const exchanged = flow.exchanged;
+  if (!exchanged) return { status: "pending", retryAfterMs: flow.intervalMs };
+  if (flow.finishing) return { status: "pending", retryAfterMs: flow.intervalMs };
+  if (exchanged.finishExpiresAt <= Date.now()) {
+    removeOAuthFlow(flowId);
+    return {
+      status: "expired",
+      message: "The completed GitHub authorization expired before it could be saved. Start again.",
+    };
+  }
+  flow.finishing = true;
+  try {
+    const grantedScopes = new Set(
+      exchanged.scope.split(/[ ,]+/).map((scope) => scope.trim()).filter(Boolean),
+    );
+    if (!grantedScopes.has("repo")) {
+      removeOAuthFlow(flowId);
+      return {
+        status: "denied",
+        message: "GitHub did not grant repository access. Authorize the repo scope to connect GitWebUI.",
+      };
+    }
+    if (
+      flow.cancelled ||
+      oauthFlows.get(flowId) !== flow ||
+      flow.tokenRevisionAtStart !== tokenRevision
+    ) {
+      removeOAuthFlow(flowId);
+      return { status: "expired", message: "This GitHub sign-in was cancelled." };
+    }
+
+    let user: GitHubUser;
+    try {
+      user = await fetchUser(exchanged.token, AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS));
+    } catch (e) {
+      return {
+        status: "pending",
+        retryAfterMs: flow.intervalMs,
+        message: `${e instanceof Error ? e.message : "Couldn't validate the GitHub account."} Retrying…`,
+      };
+    }
+    if (exchanged.finishExpiresAt <= Date.now()) {
+      removeOAuthFlow(flowId);
+      return {
+        status: "expired",
+        message: "The completed GitHub authorization expired before it could be saved. Start again.",
+      };
+    }
+    if (
+      flow.cancelled ||
+      oauthFlows.get(flowId) !== flow ||
+      flow.tokenRevisionAtStart !== tokenRevision
+    ) {
+      removeOAuthFlow(flowId);
+      return { status: "expired", message: "This GitHub sign-in was cancelled." };
+    }
+
+    try {
+      const stored = await storeOAuthToken(flowId, flow, exchanged);
+      if (!stored) {
+        removeOAuthFlow(flowId);
+        return {
+          status: "expired",
+          message: exchanged.finishExpiresAt <= Date.now()
+            ? "The completed GitHub authorization expired before it could be saved. Start again."
+            : flow.cancelled
+              ? "This GitHub sign-in was cancelled."
+              : "The saved GitHub credentials changed while signing in. Start again if needed.",
+        };
+      }
+      if (flow.cancelled) {
+        return { status: "expired", message: "This GitHub sign-in was cancelled." };
+      }
+      if (exchanged.finishExpiresAt <= Date.now()) {
+        await cancelOAuthDeviceFlow(flowId);
+        return {
+          status: "expired",
+          message: "The completed GitHub authorization expired before it could be saved. Start again.",
+        };
+      }
+    } catch (e) {
+      return {
+        status: "pending",
+        retryAfterMs: flow.intervalMs,
+        message: `${e instanceof Error ? e.message : "Couldn't save the GitHub account."} Retrying…`,
+      };
+    }
+    removeOAuthFlow(flowId);
+    return { status: "complete", user };
+  } finally {
+    flow.finishing = false;
+  }
+}
+
+async function storeOAuthToken(
+  flowId: string,
+  flow: OAuthFlowState,
+  exchanged: NonNullable<OAuthFlowState["exchanged"]>,
+): Promise<boolean> {
+  const config: TokenConfig = {
+    token: exchanged.token,
+    authMethod: "oauth",
+    ...(exchanged.refreshToken ? { refreshToken: exchanged.refreshToken } : {}),
+    ...(exchanged.expiresAt ? { expiresAt: exchanged.expiresAt } : {}),
+    ...(exchanged.refreshTokenExpiresAt
+      ? { refreshTokenExpiresAt: exchanged.refreshTokenExpiresAt }
+      : {}),
+  };
+  let stored = false;
+  const commit = tokenWriteQueue.then(async () => {
+    if (
+      flow.cancelled ||
+      oauthFlows.get(flowId) !== flow ||
+      flow.tokenRevisionAtStart !== tokenRevision ||
+      exchanged.finishExpiresAt <= Date.now()
+    ) {
+      return;
+    }
+    flow.commitStarted = true;
+    flow.previousConfig = await read();
+    if (
+      flow.cancelled ||
+      oauthFlows.get(flowId) !== flow ||
+      flow.tokenRevisionAtStart !== tokenRevision ||
+      exchanged.finishExpiresAt <= Date.now()
+    ) {
+      return;
+    }
+    await persistTokenConfig(config);
+    await clearRefreshRecovery().catch(() => undefined);
+    tokenRevision++;
+    flow.committedRevision = tokenRevision;
+    pendingOAuthRefresh = null;
+    cache = config;
+    loaded = true;
+    stored = true;
+  });
+  flow.commitPromise = commit;
+  tokenWriteQueue = commit.catch(() => undefined);
+  try {
+    await commit;
+  } finally {
+    if (!stored) {
+      flow.commitStarted = false;
+      if (flow.cancelled) removeOAuthFlow(flowId);
+    }
+  }
+  return stored;
+}
+
+/** Poll one Device Flow at GitHub's required cadence and store the resulting token. */
+export async function pollOAuthDeviceFlow(flowId: string): Promise<GitHubOAuthPoll> {
+  const flow = oauthFlows.get(flowId);
+  if (!flow) {
+    return { status: "expired", message: "This GitHub sign-in is no longer active. Start again." };
+  }
+  const now = Date.now();
+  if ((flow.exchanged?.finishExpiresAt ?? flow.expiresAt) <= now) {
+    await expireOAuthFlow(flowId, flow);
+    return {
+      status: "expired",
+      message: flow.exchanged
+        ? "The completed GitHub authorization expired before it could be saved. Start again."
+        : "The GitHub sign-in code expired. Start again.",
+    };
+  }
+  if (flow.cancelled) {
+    await cancelOAuthDeviceFlow(flowId);
+    return { status: "expired", message: "This GitHub sign-in was cancelled." };
+  }
+  if (flow.tokenRevisionAtStart !== tokenRevision) {
+    removeOAuthFlow(flowId);
+    return {
+      status: "expired",
+      message: "The saved GitHub credentials changed while signing in. Start again if needed.",
+    };
+  }
+  if (flow.exchanged) return finishOAuthDeviceFlow(flowId, flow);
+  if (flow.polling || flow.nextPollAt > now) {
+    return { status: "pending", retryAfterMs: Math.max(250, flow.nextPollAt - now) };
+  }
+
+  flow.polling = true;
+  flow.nextPollAt = now + flow.intervalMs;
+  try {
+    const body = new URLSearchParams({
+      client_id: GITHUB_OAUTH_CLIENT_ID,
+      device_code: flow.deviceCode,
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+    });
+    const res = await fetch(`${GITHUB}/login/oauth/access_token`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
+    });
+    const response = (await res.json()) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+      refresh_token_expires_in?: number;
+      scope?: string;
+      error?: string;
+      error_description?: string;
+      interval?: number;
+    };
+    if (response.access_token) {
+      if (
+        flow.cancelled ||
+        oauthFlows.get(flowId) !== flow ||
+        flow.tokenRevisionAtStart !== tokenRevision ||
+        flow.expiresAt <= Date.now()
+      ) {
+        removeOAuthFlow(flowId);
+        return { status: "expired", message: "This GitHub sign-in was cancelled." };
+      }
+      const exchangedAt = Date.now();
+      const expiresAt = response.expires_in
+        ? exchangedAt + response.expires_in * 1000
+        : undefined;
+      flow.exchanged = {
+        token: response.access_token,
+        scope: response.scope ?? "",
+        refreshToken: response.refresh_token,
+        expiresAt,
+        refreshTokenExpiresAt: response.refresh_token_expires_in
+          ? exchangedAt + response.refresh_token_expires_in * 1000
+          : undefined,
+        finishExpiresAt: Math.min(
+          expiresAt ?? Number.POSITIVE_INFINITY,
+          exchangedAt + OAUTH_FINISH_TTL_MS,
+        ),
+      };
+      scheduleOAuthCleanup(flowId, flow, flow.exchanged.finishExpiresAt);
+      return finishOAuthDeviceFlow(flowId, flow);
+    }
+    if (response.error === "authorization_pending") {
+      return { status: "pending", retryAfterMs: flow.intervalMs };
+    }
+    if (response.error === "slow_down") {
+      flow.intervalMs += 5_000;
+      flow.nextPollAt = Date.now() + flow.intervalMs;
+      return { status: "pending", retryAfterMs: flow.intervalMs };
+    }
+    if (response.error === "access_denied") {
+      removeOAuthFlow(flowId);
+      return { status: "denied", message: "GitHub authorization was cancelled." };
+    }
+    if (response.error === "expired_token") {
+      removeOAuthFlow(flowId);
+      return { status: "expired", message: "The GitHub sign-in code expired. Start again." };
+    }
+    removeOAuthFlow(flowId);
+    throw oauthError(response, `GitHub OAuth failed (${res.status})`);
+  } finally {
+    flow.polling = false;
+  }
+}
+
+export async function cancelOAuthDeviceFlow(flowId: string): Promise<void> {
+  const flow = oauthFlows.get(flowId);
+  if (!flow) return;
+  flow.cancelled = true;
+  if (!flow.commitStarted || !flow.commitPromise) {
+    removeOAuthFlow(flowId);
+    return;
+  }
+  await flow.commitPromise.catch(() => undefined);
+  if (flow.committedRevision === null) {
+    removeOAuthFlow(flowId);
+    return;
+  }
+
+  const rollback = tokenWriteQueue.then(async () => {
+    if (flow.committedRevision !== tokenRevision) return;
+    if (flow.previousConfig) {
+      await persistTokenConfig(flow.previousConfig);
+      await clearRefreshRecovery().catch(() => undefined);
+    } else {
+      await clearRefreshRecovery();
+      await fs.rm(tokenFile(), { force: true });
+    }
+    tokenRevision++;
+    pendingOAuthRefresh = null;
+    cache = flow.previousConfig;
+    loaded = true;
+  });
+  tokenWriteQueue = rollback.catch(() => undefined);
+  try {
+    await rollback;
+  } catch (e) {
+    if (oauthFlows.get(flowId) === flow) {
+      scheduleOAuthCleanup(flowId, flow, Date.now() + 1_000);
+    }
+    throw e;
+  }
+  removeOAuthFlow(flowId);
+}
+
 /** Fetch the authenticated user for a token; throws on an invalid token. */
-export async function fetchUser(token: string): Promise<GitHubUser> {
-  const res = await fetch(`${API}/user`, { headers: ghHeaders(token) });
+export async function fetchUser(token: string, signal?: AbortSignal): Promise<GitHubUser> {
+  const res = await fetch(`${API}/user`, { headers: ghHeaders(token), signal });
   if (!res.ok) throw ghError(res.status, await res.text());
   const j = (await res.json()) as {
     login: string;
@@ -161,14 +970,27 @@ export async function githubIdentity(): Promise<CommitIdentity | null> {
   }
 }
 
-/** Current connection status: whether a token is stored and, if valid, the user. */
-export async function status(): Promise<{ configured: boolean; user: GitHubUser | null; error?: string }> {
+/** Current connection status: whether credentials are stored and, if valid, the user. */
+export async function status(): Promise<{
+  configured: boolean;
+  authMethod: GitHubAuthMethod | null;
+  user: GitHubUser | null;
+  error?: string;
+}> {
+  const stored = await read();
+  if (!stored) return { configured: false, authMethod: null, user: null };
   const token = await getToken();
-  if (!token) return { configured: false, user: null };
+  const authMethod = (await read())?.authMethod ?? stored.authMethod;
+  if (!token) return { configured: true, authMethod, user: null, error: "OAuth token expired" };
   try {
-    return { configured: true, user: await fetchUser(token) };
+    return { configured: true, authMethod, user: await fetchUser(token) };
   } catch (e) {
-    return { configured: true, user: null, error: e instanceof Error ? e.message : "Invalid token" };
+    return {
+      configured: true,
+      authMethod,
+      user: null,
+      error: e instanceof Error ? e.message : "Invalid token",
+    };
   }
 }
 
@@ -489,6 +1311,13 @@ export async function updateIssueFields(
 
 /** Test hook to reset the in-memory cache. */
 export function _resetTokenCache(): void {
+  tokenRevision++;
   cache = null;
   loaded = false;
+  refreshPromise = null;
+  pendingOAuthRefresh = null;
+  for (const flow of oauthFlows.values()) {
+    if (flow.cleanupTimer) clearTimeout(flow.cleanupTimer);
+  }
+  oauthFlows.clear();
 }

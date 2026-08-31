@@ -4,8 +4,9 @@ A local, GitKraken-style git client for browsing and committing to a repository
 on your own machine. The backend shells out to your installed `git` binary; the
 frontend renders a dark, GitKraken-like interface.
 
-It focuses on a **local** repo, and also supports GitHub remotes: connect a
-Personal Access Token to push, pull, add remotes, and create repositories.
+It focuses on a **local** repo, and also supports GitHub remotes: connect with
+GitHub OAuth or a Personal Access Token to push, pull, add remotes, and create
+repositories.
 
 It runs two ways, from one codebase:
 
@@ -86,10 +87,10 @@ them instead, and nothing in `server/` or `web/` is Windows-specific.
   and optionally **submit as draft**.
 - **GitHub remotes** — a **LOCAL / REMOTE** left sidebar (checkout branches;
   right-click a remote branch to check it out or **delete it on the remote**;
-  hover **REMOTE** for a green + to add a remote). Connect a GitHub Personal
-  Access Token to **push**, **pull**, add a remote by **URL**, or **create a new
-  GitHub repository** and push to it. The token is stored on the host and can be
-  changed or revoked at any time.
+  hover **REMOTE** for a green + to add a remote). Connect with GitHub OAuth or
+  a Personal Access Token to **push**, **pull**, add a remote by **URL**, or
+  **create a new GitHub repository** and push to it. The credential is stored on
+  the host and can be changed or disconnected at any time.
 
 ## Requirements
 
@@ -151,7 +152,7 @@ time; choose **More info → Run anyway**.
   its log; the remembered state reappears once 5175 is free again. A predictable
   port costs nothing here, since anything on your machine can scan the loopback
   range in milliseconds — the session cookie is what keeps others out.
-- **Shares its configuration with the server.** The password, GitHub token,
+- **Shares its configuration with the server.** The password, GitHub credentials,
   commit identity and recent repositories live in the same place either way, so
   switching between the two just works. Electron's own state (window size,
   caches, open tabs) is kept separately in `gitwebui-desktop`.
@@ -244,11 +245,18 @@ elsewhere; override with `GITWEBUI_CONFIG_DIR`). **Forgot the password?** Delete
 
 ### GitHub & remotes (push / pull)
 
-1. **Connect a token.** Toolbar → **Actions → Connect GitHub account…**, paste a
-   [Personal Access Token](https://github.com/settings/tokens) (classic `repo`
-   scope, or fine-grained with Contents read/write). It's validated against the
-   GitHub API and stored in `github.json` in the config dir. Use the same dialog
-   to **change** it or **Disconnect** (revoke/delete the stored token).
+1. **Connect an account.** Toolbar → **Actions → Connect GitHub account…**, then
+   choose one of these methods:
+   - **GitHub OAuth** — GitWebUI shows a one-time code and provides a button to
+     open GitHub in the browser. Authorize it there; the connection finishes
+     automatically and the dialog shows the connected account. OAuth requests
+     repository access plus email read access for the Git commit identity.
+   - **Personal Access Token** — paste a
+     [Personal Access Token](https://github.com/settings/tokens) (classic `repo`
+     scope, or fine-grained with Contents read/write).
+
+   The credential is validated against GitHub and stored in `github.json` in
+   the config dir. Use the same dialog to change methods or **Disconnect**.
 2. **Add a remote.** In the left sidebar, hover **REMOTE** and click the green **+**:
    - **URL** tab — paste an existing remote URL (name defaults to `origin`).
    - **GitHub** tab — pick the connected account, name the repo, choose
@@ -276,11 +284,17 @@ branch. The dialog reads the repo's GitHub remotes, so:
 
 The created PR opens in a new browser tab.
 
-The token is injected per-command via an HTTP auth header, and any system
+The connected access token is injected per-command via an HTTP auth header, and any system
 credential manager is bypassed so operations never block on a GUI prompt — a
 missing/invalid token fails fast with a clear message. **Forgot to revoke?**
-Delete `github.json` in the config dir (or use **Disconnect**). Storing a token
-is optional; it's only needed for authenticated HTTPS actions.
+Delete `github.json` in the config dir (or use **Disconnect**). Connecting an
+account is optional; it is only needed for authenticated HTTPS actions.
+
+#### GitHub OAuth
+
+GitWebUI uses its official GitHub OAuth App with **Device Flow** enabled. Its
+public Client ID is built into the source, so users can sign in without any
+configuration. No client secret is used or shipped.
 
 ### Standalone binaries
 

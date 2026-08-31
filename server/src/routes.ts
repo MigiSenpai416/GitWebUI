@@ -597,7 +597,7 @@ api.delete("/identity", h(async (_req, res) => {
   res.json({ manual: null, github: gh, effective: gh ?? null });
 }));
 
-// ---- GitHub account (Personal Access Token) ----
+// ---- GitHub account (OAuth or Personal Access Token) ----
 
 api.get("/github/status", h(async (_req, res) => {
   res.json(await github.status());
@@ -611,13 +611,32 @@ api.post("/github/token", h(async (req, res) => {
   }
   // Validate the token against the GitHub API before storing it.
   const user = await github.fetchUser(token);
-  await github.setToken(token);
-  res.json({ configured: true, user });
+  await github.setToken(token, { authMethod: "pat" });
+  res.json({ configured: true, authMethod: "pat", user });
 }));
 
 api.delete("/github/token", h(async (_req, res) => {
   await github.deleteToken();
-  res.json({ configured: false, user: null });
+  res.json({ configured: false, authMethod: null, user: null });
+}));
+
+api.post("/github/oauth/device", h(async (_req, res) => {
+  res.json(await github.beginOAuthDeviceFlow());
+}));
+
+api.post("/github/oauth/poll", h(async (req, res) => {
+  const flowId = String(req.body?.flowId ?? "").trim();
+  if (!flowId) {
+    res.status(400).json({ error: "An OAuth flow is required" });
+    return;
+  }
+  res.json(await github.pollOAuthDeviceFlow(flowId));
+}));
+
+api.delete("/github/oauth/device", h(async (req, res) => {
+  const flowId = String(req.body?.flowId ?? "").trim();
+  if (flowId) await github.cancelOAuthDeviceFlow(flowId);
+  res.json({ ok: true });
 }));
 
 api.get("/github/repos", h(async (_req, res) => {

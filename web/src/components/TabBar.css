@@ -49,6 +49,26 @@
   border-top-color: var(--graph-color);
   color: var(--text-strong);
 }
+.tab.dragging {
+  opacity: 0.45;
+}
+.tab.drop-before::before,
+.tab.drop-after::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--graph-color);
+  z-index: 1;
+}
+.tab.drop-before::before {
+  left: 0;
+}
+.tab.drop-after::after {
+  right: -1px;
+}
 /* Each repo keeps a color derived from its path (see brand.ts), so a tab is
    findable by color rather than by reading its label. */
 .tab-icon {

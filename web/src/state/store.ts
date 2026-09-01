@@ -392,6 +392,7 @@ interface AppState {
   newTab: () => void;
   selectTab: (id: string) => Promise<void>;
   closeTab: (id: string) => void;
+  moveTab: (id: string, targetId: string, position: "before" | "after") => void;
   openCloneDialog: () => void;
   closeCloneDialog: () => void;
   openCreateDialog: () => void;
@@ -793,6 +794,18 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  moveTab(id: string, targetId: string, position: "before" | "after") {
+    if (id === targetId) return;
+    const state = get();
+    const moving = state.tabs.find((t) => t.id === id);
+    if (!moving || !state.tabs.some((t) => t.id === targetId)) return;
+    const tabs = state.tabs.filter((t) => t.id !== id);
+    const targetIndex = tabs.findIndex((t) => t.id === targetId);
+    tabs.splice(targetIndex + (position === "after" ? 1 : 0), 0, moving);
+    set({ tabs });
+    persistTabs(tabs, state.activeTabId);
+  },
+
   openCloneDialog() {
     set({ cloneDialogOpen: true });
   },
@@ -1082,13 +1095,13 @@ export const useStore = create<AppState>((set, get) => ({
       // Re-point the CURRENT tab at the worktree's directory (a valid repo root
       // sharing the same .git), then load its data.
       const { repo } = await api.openRepo(path);
-      const tabs = state.tabs.map((t) =>
+      const tabs = get().tabs.map((t) =>
         t.id === state.activeTabId
           ? { ...t, root: repo.root, name: basename(repo.root), branch: repo.branch }
           : t,
       );
       set({ tabs });
-      persistTabs(tabs, state.activeTabId);
+      persistTabs(tabs, get().activeTabId);
       await hydrateRepo(get, set, repo);
       await get().loadRecent();
     } catch (e) {

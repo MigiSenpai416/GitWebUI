@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 
 export type DiffOverviewLine = "add" | "del" | "both" | null;
 
@@ -67,12 +67,20 @@ export function DiffMinimap({
   buildTick: number;
 }) {
   const barRef = useRef<HTMLDivElement>(null);
+  const thumbRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
+  const firstScrollCleanupRef = useRef<() => void>(() => {});
   const settleFrameRef = useRef(0);
   const settleTokenRef = useRef(0);
   const measureKeyRef = useRef({});
   const [segments, setSegments] = useState<Segment[]>([]);
   const [thumb, setThumb] = useState<{ top: number; height: number }>({ top: 0, height: 1 });
+
+  const cancelSettling = useCallback(() => {
+    firstScrollCleanupRef.current();
+    settleTokenRef.current++;
+    cancelAnimationFrame(settleFrameRef.current);
+  }, []);
 
   const measureThumb = useCallback((view: EditorView) => {
     const sc = view.scrollDOM;
@@ -80,10 +88,15 @@ export function DiffMinimap({
     if (!trackHeight) return;
     const geometry = diffMinimapScrollGeometry(sc.scrollHeight, sc.clientHeight, trackHeight);
     const progress = geometry.maxScroll > 0 ? sc.scrollTop / geometry.maxScroll : 0;
-    setThumb({
+    const nextThumb = {
       top: progress * geometry.thumbTravel / trackHeight,
       height: geometry.thumbHeight / trackHeight,
-    });
+    };
+    if (thumbRef.current) {
+      thumbRef.current.style.top = `${nextThumb.top * 100}%`;
+      thumbRef.current.style.height = `${nextThumb.height * 100}%`;
+    }
+    setThumb(nextThumb);
   }, []);
 
   // Recompute marker positions from the live editor geometry so they line up
@@ -120,8 +133,17 @@ export function DiffMinimap({
         return;
       }
       const sc = view.scrollDOM;
+      const owner = barRef.current?.closest<HTMLElement>(".diff-viewer") ?? sc;
       const onScroll = () => measureThumb(view);
+      const cancelForUserInput = (event: Event) => {
+        if (event.target instanceof Node && barRef.current?.contains(event.target)) return;
+        cancelSettling();
+      };
       sc.addEventListener("scroll", onScroll, { passive: true });
+      owner.addEventListener("pointerdown", cancelForUserInput, { capture: true, passive: true });
+      owner.addEventListener("touchstart", cancelForUserInput, { capture: true, passive: true });
+      owner.addEventListener("wheel", cancelForUserInput, { capture: true, passive: true });
+      owner.addEventListener("keydown", cancelForUserInput, true);
       const ro = new ResizeObserver(() => measure());
       ro.observe(sc);
       measure();
@@ -129,17 +151,20 @@ export function DiffMinimap({
       raf = requestAnimationFrame(() => measure());
       cleanup = () => {
         sc.removeEventListener("scroll", onScroll);
+        owner.removeEventListener("pointerdown", cancelForUserInput, true);
+        owner.removeEventListener("touchstart", cancelForUserInput, true);
+        owner.removeEventListener("wheel", cancelForUserInput, true);
+        owner.removeEventListener("keydown", cancelForUserInput, true);
         ro.disconnect();
       };
     };
     attach();
     return () => {
-      settleTokenRef.current++;
-      cancelAnimationFrame(settleFrameRef.current);
+      cancelSettling();
       cancelAnimationFrame(raf);
       cleanup();
     };
-  }, [buildTick, measure, measureThumb]);
+  }, [buildTick, cancelSettling, measure, measureThumb]);
 
   const scrollToClientY = useCallback(
     (clientY: number) => {
@@ -150,6 +175,7 @@ export function DiffMinimap({
       const f = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
       const sc = view.scrollDOM;
       const token = ++settleTokenRef.current;
+      firstScrollCleanupRef.current();
       cancelAnimationFrame(settleFrameRef.current);
 
       const targetScrollTop = () => diffMinimapScrollTop(
@@ -158,7 +184,26 @@ export function DiffMinimap({
         sc.clientHeight,
         bar.clientHeight,
       );
+      const targetHeight = f * view.contentHeight;
+      const targetBlock = view.lineBlockAtHeight(targetHeight);
+      const onFirstScroll = () => {
+        firstScrollCleanupRef.current();
+        if (settleTokenRef.current === token && getView() === view) {
+          sc.scrollTop = targetScrollTop();
+          measureThumb(view);
+        }
+      };
+      firstScrollCleanupRef.current = () => {
+        sc.removeEventListener("scroll", onFirstScroll);
+        firstScrollCleanupRef.current = () => {};
+      };
+      sc.addEventListener("scroll", onFirstScroll, { once: true });
+      view.dispatch({
+        effects: EditorView.scrollIntoView(targetBlock.from, { y: "center" }),
+      });
+      view.lineBlockAtHeight(targetHeight);
       sc.scrollTop = targetScrollTop();
+      measureThumb(view);
 
       const settle = (attempt: number, previousHeight: number) => {
         if (settleTokenRef.current !== token || getView() !== view) return;
@@ -178,7 +223,10 @@ export function DiffMinimap({
               settleFrameRef.current = requestAnimationFrame(() => settle(attempt + 1, scrollHeight));
             } else {
               settleFrameRef.current = requestAnimationFrame(() => {
-                if (settleTokenRef.current === token && getView() === view) measure();
+                if (settleTokenRef.current === token && getView() === view) {
+                  firstScrollCleanupRef.current();
+                  measure();
+                }
               });
             }
           },
@@ -225,6 +273,7 @@ export function DiffMinimap({
       ))}
       <div
         className="dv-mm-thumb"
+        ref={thumbRef}
         style={{ top: `${thumb.top * 100}%`, height: `${thumb.height * 100}%` }}
       />
     </div>

@@ -285,6 +285,7 @@
   width: 18px;
   z-index: 5;
   cursor: pointer;
+  touch-action: none;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
 }

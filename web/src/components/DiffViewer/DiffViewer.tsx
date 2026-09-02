@@ -6,6 +6,7 @@ import { api } from "../../api/client";
 import type { DiffResult, DiffRow } from "../../types";
 import {
   baseExtensions,
+  computeIntralineDiff,
   computeHunks,
   diffViewExtensions,
   fileViewExtensions,
@@ -101,7 +102,18 @@ export function DiffViewer() {
     };
   }, [selected, refreshKey, setError]);
 
-  const split = useMemo(() => (diff ? splitDiffRows(diff.rows) : null), [diff]);
+  const intralineDiff = useMemo(
+    () => diff && viewMode === "diff"
+      ? computeIntralineDiff(diff.rows)
+      : { ranges: [], pairs: [] },
+    [diff, viewMode],
+  );
+  const split = useMemo(
+    () => diff && viewMode === "diff" && diffLayout === "split"
+      ? splitDiffRows(diff.rows, intralineDiff)
+      : null,
+    [diff, diffLayout, intralineDiff, viewMode],
+  );
   const hunks = useMemo(
     () => diffLayout === "split" ? (split?.hunkStarts ?? []) : (diff ? computeHunks(diff.rows) : []),
     [diff, diffLayout, split],
@@ -204,7 +216,7 @@ export function DiffViewer() {
           extensions: [
             ...baseExtensions(false),
             ...(langExt ? [langExt] : []),
-            ...splitDiffViewExtensions(split.oldRows, "old"),
+            ...splitDiffViewExtensions(split.oldRows, split.oldHighlights, "old"),
           ],
         });
         const newState = EditorState.create({
@@ -212,7 +224,7 @@ export function DiffViewer() {
           extensions: [
             ...baseExtensions(false),
             ...(langExt ? [langExt] : []),
-            ...splitDiffViewExtensions(split.newRows, "new"),
+            ...splitDiffViewExtensions(split.newRows, split.newHighlights, "new"),
           ],
         });
 
@@ -265,7 +277,9 @@ export function DiffViewer() {
       const extensions = [
         ...baseExtensions(),
         ...(langExt ? [langExt] : []),
-        ...(viewMode === "file" ? fileViewExtensions() : diffViewExtensions(diff.rows)),
+        ...(viewMode === "file"
+          ? fileViewExtensions()
+          : diffViewExtensions(diff.rows, intralineDiff.ranges)),
       ];
 
       const state = EditorState.create({ doc, extensions });
@@ -312,7 +326,7 @@ export function DiffViewer() {
     return () => {
       disposed = true;
     };
-  }, [diff, viewMode, diffLayout, selectionKey, split]);
+  }, [diff, viewMode, diffLayout, selectionKey, split, intralineDiff]);
 
   // The two split panes have identical row counts and fixed line heights, so
   // mirroring both scroll offsets keeps their old/new rows and columns aligned.

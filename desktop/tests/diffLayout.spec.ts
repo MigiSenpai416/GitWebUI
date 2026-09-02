@@ -67,6 +67,24 @@ test.describe.serial("diff viewer layout", () => {
     await expect(window.locator(".dv-editor-unified")).toBeVisible();
     await expect(window.locator(".dv-editor-unified .cm-content")).toContainText("old one");
     await expect(window.locator(".dv-editor-unified .cm-content")).toContainText("new one");
+    await expect(
+      window.locator(".dv-editor-unified .cm-diff-del-text").filter({ hasText: "old" }),
+    ).toHaveCount(1);
+    await expect(
+      window.locator(".dv-editor-unified .cm-diff-add-text").filter({ hasText: "new" }),
+    ).toHaveCount(1);
+    const accentBackgrounds = await window.locator(".dv-editor-unified").evaluate((editor) => {
+      const removed = editor.querySelector<HTMLElement>(".cm-diff-del-text");
+      const added = editor.querySelector<HTMLElement>(".cm-diff-add-text");
+      return {
+        removed: removed ? getComputedStyle(removed).backgroundColor : "",
+        removedLine: removed ? getComputedStyle(removed.closest(".cm-line")!).backgroundColor : "",
+        added: added ? getComputedStyle(added).backgroundColor : "",
+        addedLine: added ? getComputedStyle(added.closest(".cm-line")!).backgroundColor : "",
+      };
+    });
+    expect(accentBackgrounds.removed).not.toBe(accentBackgrounds.removedLine);
+    expect(accentBackgrounds.added).not.toBe(accentBackgrounds.addedLine);
 
     await splitButton.click();
 
@@ -81,6 +99,12 @@ test.describe.serial("diff viewer layout", () => {
     await expect(window.locator(".dv-split-new .cm-diff-add")).toHaveCount(1);
     await expect(window.locator(".dv-split-new .cm-diff-del")).toHaveCount(0);
     await expect(window.locator(".dv-split-new .cm-diff-placeholder")).toHaveCount(1);
+    await expect(
+      window.locator(".dv-split-old .cm-diff-del-text").filter({ hasText: "old" }),
+    ).toHaveCount(1);
+    await expect(
+      window.locator(".dv-split-new .cm-diff-add-text").filter({ hasText: "new" }),
+    ).toHaveCount(1);
     await expect(window.locator(".dv-split-old .cm-gutter-old")).toHaveCount(1);
     await expect(window.locator(".dv-split-new .cm-gutter-new")).toHaveCount(1);
     await expect(window.getByRole("region", { name: "Original file" })).toBeVisible();

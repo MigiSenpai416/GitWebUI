@@ -53,8 +53,10 @@
 
   /* Diff */
   --diff-add-bg: rgba(46, 160, 67, 0.18);
+  --diff-add-highlight: rgba(46, 160, 67, 0.42);
   --diff-add-gutter: rgba(46, 160, 67, 0.30);
   --diff-del-bg: rgba(248, 81, 73, 0.16);
+  --diff-del-highlight: rgba(248, 81, 73, 0.38);
   --diff-del-gutter: rgba(248, 81, 73, 0.28);
   --diff-add-line: #14361f;
   --diff-del-line: #3a1a1d;

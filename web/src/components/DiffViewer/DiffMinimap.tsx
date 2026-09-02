@@ -9,6 +9,47 @@ interface Segment {
   height: number;
 }
 
+const MIN_THUMB_HEIGHT = 14;
+const SETTLE_ATTEMPTS = 8;
+
+interface ScrollGeometry {
+  maxScroll: number;
+  thumbHeight: number;
+  thumbTravel: number;
+}
+
+export function diffMinimapScrollGeometry(
+  scrollHeight: number,
+  clientHeight: number,
+  trackHeight: number,
+): ScrollGeometry {
+  const maxScroll = Math.max(0, scrollHeight - clientHeight);
+  const naturalThumbHeight = scrollHeight > 0
+    ? trackHeight * Math.min(clientHeight / scrollHeight, 1)
+    : trackHeight;
+  const thumbHeight = Math.min(trackHeight, Math.max(MIN_THUMB_HEIGHT, naturalThumbHeight));
+  return {
+    maxScroll,
+    thumbHeight,
+    thumbTravel: Math.max(0, trackHeight - thumbHeight),
+  };
+}
+
+export function diffMinimapScrollTop(
+  fraction: number,
+  scrollHeight: number,
+  clientHeight: number,
+  trackHeight: number,
+): number {
+  const geometry = diffMinimapScrollGeometry(scrollHeight, clientHeight, trackHeight);
+  if (geometry.maxScroll === 0 || geometry.thumbTravel === 0) return 0;
+  const thumbTop = Math.max(
+    0,
+    Math.min(geometry.thumbTravel, fraction * trackHeight - geometry.thumbHeight / 2),
+  );
+  return thumbTop / geometry.thumbTravel * geometry.maxScroll;
+}
+
 /**
  * A GitKraken-style overview strip pinned to the diff's right edge. It paints a
  * green/red mark for every added/removed run at its proportional position in the
@@ -27,13 +68,22 @@ export function DiffMinimap({
 }) {
   const barRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
+  const settleFrameRef = useRef(0);
+  const settleTokenRef = useRef(0);
+  const measureKeyRef = useRef({});
   const [segments, setSegments] = useState<Segment[]>([]);
   const [thumb, setThumb] = useState<{ top: number; height: number }>({ top: 0, height: 1 });
 
   const measureThumb = useCallback((view: EditorView) => {
     const sc = view.scrollDOM;
-    const total = sc.scrollHeight || 1;
-    setThumb({ top: sc.scrollTop / total, height: Math.min(sc.clientHeight / total, 1) });
+    const trackHeight = barRef.current?.clientHeight ?? 0;
+    if (!trackHeight) return;
+    const geometry = diffMinimapScrollGeometry(sc.scrollHeight, sc.clientHeight, trackHeight);
+    const progress = geometry.maxScroll > 0 ? sc.scrollTop / geometry.maxScroll : 0;
+    setThumb({
+      top: progress * geometry.thumbTravel / trackHeight,
+      height: geometry.thumbHeight / trackHeight,
+    });
   }, []);
 
   // Recompute marker positions from the live editor geometry so they line up
@@ -84,6 +134,8 @@ export function DiffMinimap({
     };
     attach();
     return () => {
+      settleTokenRef.current++;
+      cancelAnimationFrame(settleFrameRef.current);
       cancelAnimationFrame(raf);
       cleanup();
     };
@@ -97,9 +149,44 @@ export function DiffMinimap({
       const rect = bar.getBoundingClientRect();
       const f = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
       const sc = view.scrollDOM;
-      sc.scrollTop = Math.max(0, f * sc.scrollHeight - sc.clientHeight / 2);
+      const token = ++settleTokenRef.current;
+      cancelAnimationFrame(settleFrameRef.current);
+
+      const targetScrollTop = () => diffMinimapScrollTop(
+        f,
+        sc.scrollHeight,
+        sc.clientHeight,
+        bar.clientHeight,
+      );
+      sc.scrollTop = targetScrollTop();
+
+      const settle = (attempt: number, previousHeight: number) => {
+        if (settleTokenRef.current !== token || getView() !== view) return;
+        view.requestMeasure({
+          key: measureKeyRef.current,
+          read: () => ({
+            currentScrollTop: sc.scrollTop,
+            scrollHeight: sc.scrollHeight,
+            scrollTop: targetScrollTop(),
+          }),
+          write: ({ currentScrollTop, scrollHeight, scrollTop }) => {
+            if (settleTokenRef.current !== token || getView() !== view) return;
+            if (Math.abs(currentScrollTop - scrollTop) > 0.5) sc.scrollTop = scrollTop;
+            if (attempt + 1 < SETTLE_ATTEMPTS && scrollHeight !== previousHeight) {
+              settleFrameRef.current = requestAnimationFrame(() => settle(attempt + 1, scrollHeight));
+            } else if (attempt < 2) {
+              settleFrameRef.current = requestAnimationFrame(() => settle(attempt + 1, scrollHeight));
+            } else {
+              settleFrameRef.current = requestAnimationFrame(() => {
+                if (settleTokenRef.current === token && getView() === view) measure();
+              });
+            }
+          },
+        });
+      };
+      settle(0, sc.scrollHeight);
     },
-    [getView],
+    [getView, measure],
   );
 
   const onPointerDown = (e: React.PointerEvent) => {

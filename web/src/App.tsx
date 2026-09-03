@@ -28,6 +28,7 @@ import { CreateDialog } from "./components/CreateDialog";
 import { GitHubDialog } from "./components/GitHubDialog";
 import { PullRequestDialog } from "./components/PullRequestDialog";
 import { IdentityDialog } from "./components/IdentityDialog";
+import { AiCommitDialog } from "./components/AiCommitDialog";
 import { ToastStack } from "./components/ToastStack";
 
 export function App() {
@@ -119,16 +120,10 @@ export function App() {
                     <CommitDetails />
                   ) : selectedStashHash ? (
                     <StashDetails />
-                  ) : mergeActive ? (
-                    <>
-                      <ConflictPanel />
-                      <CommitBox key={repo.root} />
-                    </>
                   ) : (
-                    <>
-                      <ChangesPanel />
-                      <CommitBox key={repo.root} />
-                    </>
+                    <CommitBox key={repo.root}>
+                      {(ai) => mergeActive ? <ConflictPanel /> : <ChangesPanel ai={ai} />}
+                    </CommitBox>
                   )}
                 </div>
                 {conflictPath && <ConflictResolver />}
@@ -149,6 +144,7 @@ export function App() {
       <CreateDialog />
       <PullRequestDialog />
       <IdentityDialog />
+      <AiCommitDialog />
       <GitHubDialog />
       {overlays}
     </div>

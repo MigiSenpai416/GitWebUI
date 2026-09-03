@@ -337,6 +337,7 @@ interface AppState {
   addRemoteOpen: boolean;
   githubDialogOpen: boolean;
   identityDialogOpen: boolean;
+  aiCommitDialogOpen: boolean;
   identity: IdentityInfo | null;
   /** Whether the Create Pull Request dialog is open. */
   prDialogOpen: boolean;
@@ -470,6 +471,8 @@ interface AppState {
   clearIdentity: () => Promise<void>;
   openIdentityDialog: () => void;
   closeIdentityDialog: () => void;
+  openAiCommitDialog: () => void;
+  closeAiCommitDialog: () => void;
 
   openAddRemote: () => void;
   closeAddRemote: () => void;
@@ -579,6 +582,7 @@ export const useStore = create<AppState>((set, get) => ({
   addRemoteOpen: false,
   githubDialogOpen: false,
   identityDialogOpen: false,
+  aiCommitDialogOpen: false,
   identity: null,
   prDialogOpen: false,
   prHeadBranch: null,
@@ -1573,6 +1577,13 @@ export const useStore = create<AppState>((set, get) => ({
   },
   closeIdentityDialog() {
     set({ identityDialogOpen: false });
+  },
+
+  openAiCommitDialog() {
+    set({ aiCommitDialogOpen: true });
+  },
+  closeAiCommitDialog() {
+    set({ aiCommitDialogOpen: false });
   },
 
   openAddRemote() {

@@ -371,3 +371,14 @@ export interface SelectedFile {
   staged?: boolean;
   status?: ChangeStatus;
 }
+
+export interface AiCommitInfo {
+  configured: boolean;
+  model: string;
+}
+
+export interface AiCommitMessage {
+  title: string;
+  description: string;
+  source: "staged" | "unstaged";
+}

@@ -82,7 +82,7 @@
   padding: 3px 5px;
   display: inline-flex;
 }
-.summary-ai:hover {
+.summary-ai:hover:not(:disabled) {
   background: rgba(163, 113, 247, 0.3);
 }
 
@@ -132,8 +132,13 @@
   font-size: var(--fs-sm);
   font-weight: 600;
 }
-.compose-ai:hover {
+.compose-ai:hover:not(:disabled) {
   background: rgba(163, 113, 247, 0.28);
+}
+.summary-ai:disabled,
+.compose-ai:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .commit-submit {

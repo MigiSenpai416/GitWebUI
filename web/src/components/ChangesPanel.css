@@ -67,8 +67,12 @@
   color: var(--purple);
   flex-shrink: 0;
 }
-.ai-btn:hover {
+.ai-btn:hover:not(:disabled) {
   background: rgba(163, 113, 247, 0.26);
+}
+.ai-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* Controls: sort · Path/Tree */

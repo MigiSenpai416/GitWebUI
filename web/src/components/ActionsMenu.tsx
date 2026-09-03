@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { useStore } from "../state/store";
-import { IconPullRequest, IconRefresh, IconSpinner, IconTrash } from "./icons";
+import { IconPullRequest, IconRefresh, IconSparkle, IconSpinner, IconTrash } from "./icons";
 import "./BranchMenu.css";
 
 export function ActionsMenu({ onClose }: { onClose: () => void }) {
@@ -12,6 +12,7 @@ export function ActionsMenu({ onClose }: { onClose: () => void }) {
   const setNotice = useStore((s) => s.setNotice);
   const openGitHubDialog = useStore((s) => s.openGitHubDialog);
   const openIdentityDialog = useStore((s) => s.openIdentityDialog);
+  const openAiCommitDialog = useStore((s) => s.openAiCommitDialog);
   const openPullRequest = useStore((s) => s.openPullRequest);
   const githubStatus = useStore((s) => s.githubStatus);
   const [pruning, setPruning] = useState(false);
@@ -90,6 +91,16 @@ export function ActionsMenu({ onClose }: { onClose: () => void }) {
         >
           <span className="bmi-check" />
           <span className="bmi-name">Commit identity…</span>
+        </button>
+        <button
+          className="branch-menu-item"
+          onClick={() => {
+            openAiCommitDialog();
+            onClose();
+          }}
+        >
+          <IconSparkle width={14} height={14} className="bmi-icon" />
+          <span className="bmi-name">Set Up AI Commit Info</span>
         </button>
         <button
           className="branch-menu-item"

@@ -71,7 +71,17 @@ them instead, and nothing in `server/` or `web/` is Windows-specific.
   - Collapsible **Unstaged** / **Staged** sections, per-file stage/unstage,
     **Stage All** / **Unstage All**.
 - Commit box: **Amend previous commit**, summary (with character budget) +
-  description, one-click commit. AI-compose controls are placeholders.
+  description, one-click commit. **Actions → Set Up AI Commit Info** saves a
+  Google AI Studio API key and model slug. The AI buttons fill both fields from
+  staged changes, or unstaged changes (including new files) when nothing is
+  staged. Amend describes the complete replacement commit. Titles stay within
+  72 characters; descriptions have no app-imposed length limit.
+  Generation sends all diff hunks with nearby context to Google, plus new text
+  files and change metadata; binary contents are not sent. Diffs over 8 MiB are
+  rejected with an instruction to stage a smaller set, never silently truncated.
+  The key is stored in `ai-commit.json` in the host's config directory, in
+  plaintext like the GitHub credential, and is never returned to the browser.
+  Use the setup dialog to change the model, replace the key, or clear both.
 - **Password-protected access** — the web UI is gated by a single password
   (set on first run), with an optional **Remember me** (stays signed in for 7
   days). Useful when running on a headless/remote host reachable over the network.

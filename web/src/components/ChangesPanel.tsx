@@ -2,11 +2,12 @@ import { useMemo, useState, type MouseEvent } from "react";
 import { useStore } from "../state/store";
 import type { FileChange } from "../types";
 import { FileRow } from "./FileRow";
+import type { AiCommitControls } from "./CommitBox";
 import { buildTree, allDirPaths, filesUnder, type TreeNode } from "./fileTree";
-import { IconChevron, IconChevronDown, IconFolder, IconPath, IconSort, IconSparkle, IconTrash, IconTree } from "./icons";
+import { IconChevron, IconChevronDown, IconFolder, IconPath, IconSort, IconSparkle, IconSpinner, IconTrash, IconTree } from "./icons";
 import "./ChangesPanel.css";
 
-export function ChangesPanel() {
+export function ChangesPanel({ ai }: { ai: AiCommitControls }) {
   const repo = useStore((s) => s.repo);
   const status = useStore((s) => s.status);
   const stage = useStore((s) => s.stage);
@@ -106,8 +107,8 @@ export function ChangesPanel() {
         <div className="changes-title">
           {total} file change{total === 1 ? "" : "s"} on <span className="changes-branch">{repo?.branch}</span>
         </div>
-        <button className="ai-btn" title="AI features (coming soon)" onClick={() => setNotice("AI features aren't available yet.")}>
-          <IconSparkle width={16} height={16} />
+        <button className="ai-btn" title={ai.label} disabled={ai.disabled} onClick={ai.generate}>
+          {ai.generating ? <IconSpinner width={16} height={16} /> : <IconSparkle width={16} height={16} />}
         </button>
       </div>
 

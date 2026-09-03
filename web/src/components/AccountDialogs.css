@@ -275,6 +275,12 @@
   padding: 0 4px;
   color: var(--text-dim);
 }
+.acct-hint a {
+  color: var(--accent);
+}
+.acct-hint a:hover {
+  color: var(--text-strong);
+}
 
 .acct-error {
   background: rgba(248, 81, 73, 0.12);

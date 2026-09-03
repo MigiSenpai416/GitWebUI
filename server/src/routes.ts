@@ -56,6 +56,7 @@ import {
   readPullRequestTemplate,
 } from "./git/pullRequest.js";
 import { getIdentity, setIdentity, clearIdentity, type CommitIdentity } from "./identity.js";
+import { getAiCommitInfo, setAiCommitInfo, clearAiCommitInfo, generateAiCommitInfo } from "./aiCommit.js";
 import {
   getStashes,
   stashPush,
@@ -569,6 +570,34 @@ api.post("/commit", h(async (req, res) => {
   // reloads /commits, whose unborn-repo fast path reads this metadata.
   const repo = await refreshSession(root);
   res.json({ hash, status, repo });
+}));
+
+// ---- AI commit information ----
+
+api.get("/ai-commit/settings", h(async (_req, res) => {
+  res.json(await getAiCommitInfo());
+}));
+
+api.post("/ai-commit/settings", h(async (req, res) => {
+  const apiKey = String(req.body?.apiKey ?? "");
+  const model = String(req.body?.model ?? "");
+  res.json(await setAiCommitInfo(apiKey, model));
+}));
+
+api.delete("/ai-commit/settings", h(async (_req, res) => {
+  res.json(await clearAiCommitInfo());
+}));
+
+api.post("/ai-commit/generate", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  res.once("close", cancel);
+  try {
+    res.json(await generateAiCommitInfo(root, Boolean(req.body?.amend), controller.signal));
+  } finally {
+    res.removeListener("close", cancel);
+  }
 }));
 
 // ---- Commit identity ----

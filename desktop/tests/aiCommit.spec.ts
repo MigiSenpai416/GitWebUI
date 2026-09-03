@@ -11,6 +11,10 @@ interface AiTestState {
   release?: () => void;
 }
 
+interface AiProviderTestState {
+  requests: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }>;
+}
+
 test("AI settings persist and all compose controls populate the current draft safely", async () => {
   const repoDir = makeRepo();
   let started: TestApp | undefined;
@@ -203,6 +207,165 @@ test("generated messages commit staged changes and preserve amend draft behavior
     expect(git("log", "-1", "--format=%s")).toBe("Clarify the feature implementation");
     expect(git("show", "HEAD:feature.txt")).toBe("staged feature");
     expect(git("diff", "--", "feature.txt")).toContain("+later unstaged edit");
+  } finally {
+    if (app) await app.close();
+    if (started) await cleanupApp(started);
+    await removeRepo(repoDir);
+  }
+});
+
+test("provider selection preserves Google settings and uses Chat Completions for all AI controls", async () => {
+  const repoDir = makeRepo();
+  let started: TestApp | undefined;
+  let app: ElectronApplication | undefined;
+  try {
+    await fs.writeFile(path.join(repoDir, "new.txt"), "A new feature\n");
+    started = await launchApp();
+    app = started.app;
+    await fs.mkdir(started.configDir, { recursive: true });
+    await fs.writeFile(path.join(started.configDir, "ai-commit.json"), JSON.stringify({ apiKey: "legacy-key", model: "gemini-legacy" }));
+    await app.evaluate(() => {
+      const state: AiProviderTestState = { requests: [] };
+      (globalThis as unknown as { aiProviderTest: AiProviderTestState }).aiProviderTest = state;
+      const original = globalThis.fetch;
+      globalThis.fetch = async (input, init) => {
+        const url = String(input);
+        const google = url.startsWith("https://generativelanguage.googleapis.com/");
+        if (!google && !url.startsWith("https://compatible.example/")) return original(input, init);
+        state.requests.push({ url, headers: init?.headers as Record<string, string>, body: JSON.parse(String(init?.body)) });
+        const content = JSON.stringify({
+          title: google ? "Google commit draft" : `Chat commit draft ${state.requests.length}`,
+          description: "Describe the feature changes from the complete diff.",
+        });
+        return Response.json(google
+          ? { candidates: [{ finishReason: "STOP", content: { parts: [{ text: content }] } }] }
+          : { choices: [{ finish_reason: "stop", message: { role: "assistant", content } }] });
+      };
+    });
+    let window = await app.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+    await window.getByRole("button", { name: "Open", exact: true }).first().click();
+    await window.locator(".picker-form input").fill(repoDir);
+    await window.locator(".picker-form button[type=submit]").click();
+    const openSettings = async () => {
+      await window.getByRole("button", { name: "Actions", exact: true }).click();
+      await window.getByRole("button", { name: "Set Up AI Commit Info", exact: true }).click();
+    };
+    await openSettings();
+    let dialog = window.getByRole("dialog", { name: "Set Up AI Commit Info" });
+    await expect(dialog.getByRole("tab", { name: "Google AI Studio" })).toHaveAttribute("aria-selected", "true");
+    await expect(dialog.getByLabel("Model slug")).toHaveValue("gemini-legacy");
+    await expect(dialog.getByLabel("Base URL")).toHaveCount(0);
+    await expect(dialog.getByRole("link", { name: "Create API Key" })).toBeVisible();
+    await window.screenshot({ path: test.info().outputPath("google-provider.png") });
+
+    await dialog.getByRole("tab", { name: "OpenAI Chat Completions" }).click();
+    await expect(dialog.getByRole("link", { name: "Create API Key" })).toHaveCount(0);
+    await expect(dialog.getByLabel("Base URL")).toHaveValue("https://api.openai.com/v1");
+    await expect(dialog.getByLabel("Model slug")).toHaveValue("");
+    await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await dialog.getByLabel("Base URL").fill("https://compatible.example/api/v1/");
+    await dialog.getByLabel("API key").fill("chat-key");
+    await dialog.getByLabel("Model slug").fill("vendor/model:free");
+    await dialog.getByRole("tab", { name: "Google AI Studio" }).click();
+    await expect(dialog.getByLabel("Model slug")).toHaveValue("gemini-legacy");
+    await expect(dialog.getByLabel("API key")).toHaveValue("");
+    await dialog.getByRole("tab", { name: "OpenAI Chat Completions" }).click();
+    await expect(dialog.getByLabel("Model slug")).toHaveValue("vendor/model:free");
+    await expect(dialog.getByLabel("API key")).toHaveValue("chat-key");
+    await window.screenshot({ path: test.info().outputPath("chat-provider.png") });
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog).toBeHidden();
+
+    const summary = window.getByPlaceholder("Commit summary");
+    for (const [index, selector] of [".ai-btn", ".summary-ai", ".compose-ai"].entries()) {
+      await window.locator(selector).click();
+      await expect(summary).toHaveValue(`Chat commit draft ${index + 1}`);
+      await expect(window.getByPlaceholder("Description", { exact: true })).toHaveValue(/complete diff/);
+    }
+    const requests = await app.evaluate(() => (globalThis as unknown as { aiProviderTest: AiProviderTestState }).aiProviderTest.requests);
+    expect(requests).toHaveLength(3);
+    for (const request of requests) {
+      expect(request.url).toBe("https://compatible.example/api/v1/chat/completions");
+      expect(request.headers.Authorization).toBe("Bearer chat-key");
+      expect(request.headers["x-goog-api-key"]).toBeUndefined();
+      expect(request.body).toMatchObject({
+        model: "vendor/model:free", stream: false,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "commit_message", strict: true,
+            schema: { type: "object", required: ["title", "description"], additionalProperties: false },
+          },
+        },
+      });
+      expect(JSON.stringify(request.body.messages)).toContain("A new feature");
+    }
+
+    await openSettings();
+    await expect(dialog.getByRole("tab", { name: "OpenAI Chat Completions" })).toHaveAttribute("aria-selected", "true");
+    await expect(dialog.getByLabel("API key")).toHaveValue("");
+    await dialog.getByLabel("Base URL").fill("https://different.example/v1");
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog.getByRole("alert")).toContainText("Re-enter the API key");
+    const initialSize = await app.evaluate(({ BrowserWindow }) => {
+      const current = BrowserWindow.getAllWindows()[0];
+      const size = current.getSize();
+      current.setSize(900, 560);
+      return size;
+    });
+    await expect.poll(() => window.evaluate(() => innerHeight)).toBeLessThanOrEqual(560);
+    await window.screenshot({ path: test.info().outputPath("chat-provider-small-window.png") });
+    const bounds = await dialog.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom, viewportHeight: innerHeight };
+    });
+    expect(bounds.top).toBeGreaterThanOrEqual(0);
+    expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight);
+    await dialog.getByRole("button", { name: "Save", exact: true }).scrollIntoViewIfNeeded();
+    await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeInViewport();
+    await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size[0], size[1]), initialSize);
+    await dialog.getByLabel("Base URL").fill("https://compatible.example/api/v1");
+    await dialog.getByLabel("Model slug").fill("vendor/new-model");
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await openSettings();
+    await dialog.getByRole("tab", { name: "Google AI Studio" }).click();
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await window.locator(".summary-ai").click();
+    await expect(summary).toHaveValue("Chat commit draft 4");
+    await openSettings();
+    await dialog.getByRole("tab", { name: "Google AI Studio" }).click();
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await window.locator(".summary-ai").click();
+    await expect(summary).toHaveValue("Google commit draft");
+    const google = await app.evaluate(() => (globalThis as unknown as { aiProviderTest: AiProviderTestState }).aiProviderTest.requests.at(-1));
+    expect(google?.headers["x-goog-api-key"]).toBe("legacy-key");
+    expect(google?.body.generationConfig).toBeDefined();
+    await openSettings();
+    await dialog.getByRole("tab", { name: "OpenAI Chat Completions" }).click();
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog).toBeHidden();
+
+    await app.close();
+    app = undefined;
+    app = (await launchApp({ reuse: started })).app;
+    window = await app.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+    await openSettings();
+    dialog = window.getByRole("dialog", { name: "Set Up AI Commit Info" });
+    await expect(dialog.getByRole("tab", { name: "OpenAI Chat Completions" })).toHaveAttribute("aria-selected", "true");
+    await expect(dialog.getByLabel("Model slug")).toHaveValue("vendor/new-model");
+    await expect(dialog.getByLabel("Base URL")).toHaveValue("https://compatible.example/api/v1");
+    await expect(dialog.getByLabel("API key")).toHaveValue("");
+    await dialog.getByRole("button", { name: "Clear", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await openSettings();
+    await expect(dialog.getByLabel("Model slug")).toHaveValue("");
+    await dialog.getByRole("tab", { name: "Google AI Studio" }).click();
+    await expect(dialog.getByLabel("Model slug")).toHaveValue("gemini-legacy");
+    await expect(dialog.getByLabel("API key")).toHaveAttribute("placeholder", /Key saved/);
   } finally {
     if (app) await app.close();
     if (started) await cleanupApp(started);

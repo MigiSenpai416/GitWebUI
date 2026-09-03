@@ -4,6 +4,10 @@
 .acct-dialog {
   width: 460px;
 }
+.ai-commit-dialog {
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
 .acct-head {
   display: flex;
   align-items: center;

@@ -1,6 +1,7 @@
 import type {
   AiCommitInfo,
   AiCommitMessage,
+  AiCommitProvider,
   BlameResult,
   Branch,
   Commit,
@@ -311,9 +312,10 @@ export const api = {
 
   // AI commit information
   aiCommitInfo: (signal?: AbortSignal) => req<AiCommitInfo>("/api/ai-commit/settings", { signal }),
-  setAiCommitInfo: (apiKey: string, model: string) =>
-    req<AiCommitInfo>("/api/ai-commit/settings", { method: "POST", body: JSON.stringify({ apiKey, model }) }),
-  clearAiCommitInfo: () => req<AiCommitInfo>("/api/ai-commit/settings", { method: "DELETE" }),
+  setAiCommitInfo: (apiKey: string, model: string, provider: AiCommitProvider, baseUrl: string) =>
+    req<AiCommitInfo>("/api/ai-commit/settings", { method: "POST", body: JSON.stringify({ apiKey, model, provider, baseUrl }) }),
+  clearAiCommitInfo: (provider: AiCommitProvider) =>
+    req<AiCommitInfo>("/api/ai-commit/settings", { method: "DELETE", body: JSON.stringify({ provider }) }),
   generateAiCommitInfo: (amend: boolean, signal: AbortSignal) =>
     req<AiCommitMessage>("/api/ai-commit/generate", { method: "POST", body: JSON.stringify({ amend }), signal }),
 

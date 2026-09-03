@@ -56,7 +56,7 @@ import {
   readPullRequestTemplate,
 } from "./git/pullRequest.js";
 import { getIdentity, setIdentity, clearIdentity, type CommitIdentity } from "./identity.js";
-import { getAiCommitInfo, setAiCommitInfo, clearAiCommitInfo, generateAiCommitInfo } from "./aiCommit.js";
+import { getAiCommitInfo, setAiCommitInfo, clearAiCommitInfo, generateAiCommitInfo, parseProvider } from "./aiCommit.js";
 import {
   getStashes,
   stashPush,
@@ -581,11 +581,14 @@ api.get("/ai-commit/settings", h(async (_req, res) => {
 api.post("/ai-commit/settings", h(async (req, res) => {
   const apiKey = String(req.body?.apiKey ?? "");
   const model = String(req.body?.model ?? "");
-  res.json(await setAiCommitInfo(apiKey, model));
+  const provider = parseProvider(req.body?.provider);
+  const baseUrl = String(req.body?.baseUrl ?? "");
+  res.json(await setAiCommitInfo(apiKey, model, provider, baseUrl));
 }));
 
-api.delete("/ai-commit/settings", h(async (_req, res) => {
-  res.json(await clearAiCommitInfo());
+api.delete("/ai-commit/settings", h(async (req, res) => {
+  const provider = req.body?.provider === undefined ? undefined : parseProvider(req.body.provider);
+  res.json(await clearAiCommitInfo(provider));
 }));
 
 api.post("/ai-commit/generate", h(async (req, res) => {

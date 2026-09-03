@@ -6,64 +6,159 @@ import { runGit } from "./git/gitRunner.js";
 import { currentBranch, headHash } from "./git/repo.js";
 import { getStatus } from "./git/status.js";
 
+export type AiCommitProvider = "google" | "openai";
+
 interface AiCommitSettings {
   apiKey: string;
   model: string;
+  baseUrl?: string;
 }
 
-export interface AiCommitInfo {
+interface AiCommitConfig {
+  provider: AiCommitProvider;
+  google: AiCommitSettings | null;
+  openai: AiCommitSettings | null;
+}
+
+interface AiCommitProfile {
   configured: boolean;
   model: string;
+  baseUrl: string;
+}
+
+export interface AiCommitInfo extends AiCommitProfile {
+  provider: AiCommitProvider;
+  profiles: Record<AiCommitProvider, AiCommitProfile>;
 }
 
 const file = () => configPath("ai-commit.json");
 const MAX_DIFF_BYTES = 8 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 120_000;
+const OPENAI_BASE_URL = "https://api.openai.com/v1";
+let settingsWriteQueue: Promise<unknown> = Promise.resolve();
 
 function failure(message: string, status = 400): Error & { status: number } {
   return Object.assign(new Error(message), { status });
 }
 
-async function readSettings(): Promise<AiCommitSettings | null> {
+function parseSettings(value: unknown): AiCommitSettings | null {
+  if (!value || typeof value !== "object") return null;
+  const parsed = value as Partial<AiCommitSettings>;
+  return typeof parsed.apiKey === "string" && typeof parsed.model === "string" && parsed.apiKey && parsed.model
+    ? { apiKey: parsed.apiKey, model: parsed.model, ...(typeof parsed.baseUrl === "string" ? { baseUrl: parsed.baseUrl } : {}) }
+    : null;
+}
+
+async function readSettings(recover = false): Promise<AiCommitConfig> {
   try {
     const parsed = JSON.parse(await fs.readFile(file(), "utf8"));
-    return typeof parsed?.apiKey === "string" && typeof parsed?.model === "string"
-      && parsed.apiKey && parsed.model ? { apiKey: parsed.apiKey, model: parsed.model } : null;
+    return {
+      provider: parseProvider(parsed?.provider),
+      google: parseSettings(parsed?.google ?? (parsed?.provider === undefined ? parsed : null)),
+      openai: parseSettings(parsed?.openai),
+    };
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((e as NodeJS.ErrnoException).code === "ENOENT" || (recover && e instanceof SyntaxError)) {
+      return { provider: "google", google: null, openai: null };
+    }
     throw failure("Couldn't read AI commit settings. Save them again in Actions → Set Up AI Commit Info.");
   }
 }
 
-export async function getAiCommitInfo(): Promise<AiCommitInfo> {
-  const settings = await readSettings();
-  return { configured: !!settings, model: settings?.model ?? "" };
+export function parseProvider(value: unknown = "google"): AiCommitProvider {
+  if (value !== "google" && value !== "openai") throw failure("Choose Google AI Studio or OpenAI Chat Completions.");
+  return value;
 }
 
-export async function setAiCommitInfo(apiKey: string, model: string): Promise<AiCommitInfo> {
-  const slug = model.trim().replace(/^models\//, "");
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(slug)) {
-    throw failure("Enter a model slug, such as gemini-2.5-flash, rather than a URL.");
+function normalizeBaseUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw failure("Enter a valid HTTP or HTTPS base URL.");
   }
-  const key = apiKey.trim() || (await readSettings())?.apiKey;
-  if (!key || !/^[\x21-\x7e]+$/.test(key)) throw failure("A valid API key is required.");
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw failure("Use an HTTP or HTTPS base URL without credentials, query parameters, or a fragment.");
+  }
+  url.search = "";
+  url.hash = "";
+  url.pathname = url.pathname.replace(/\/+$/, "").replace(/\/chat\/completions$/, "");
+  return url.toString().replace(/\/+$/, "");
+}
+
+function settingsInfo(config: AiCommitConfig): AiCommitInfo {
+  const profile = (provider: AiCommitProvider): AiCommitProfile => ({
+    configured: !!config[provider],
+    model: config[provider]?.model ?? "",
+    baseUrl: provider === "openai" ? config.openai?.baseUrl ?? OPENAI_BASE_URL : "",
+  });
+  return { ...profile(config.provider), provider: config.provider, profiles: { google: profile("google"), openai: profile("openai") } };
+}
+
+export async function getAiCommitInfo(): Promise<AiCommitInfo> {
+  return settingsInfo(await readSettings());
+}
+
+async function writeSettings(config: AiCommitConfig): Promise<void> {
+  if (!config.google && !config.openai) {
+    await fs.rm(file(), { force: true });
+    return;
+  }
   await ensureConfigDir();
   const target = file();
   const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await fs.writeFile(temporary, JSON.stringify({ apiKey: key, model: slug }, null, 2), {
+    await fs.writeFile(temporary, JSON.stringify(config, null, 2), {
       encoding: "utf8", mode: 0o600, flag: "wx",
     });
     await fs.rename(temporary, target);
   } finally {
     await fs.rm(temporary, { force: true });
   }
-  return { configured: true, model: slug };
 }
 
-export async function clearAiCommitInfo(): Promise<AiCommitInfo> {
-  await fs.rm(file(), { force: true });
-  return { configured: false, model: "" };
+function updateSettings(update: (config: AiCommitConfig) => void, recover = false): Promise<AiCommitInfo> {
+  const pending = settingsWriteQueue.then(async () => {
+    const config = await readSettings(recover);
+    update(config);
+    await writeSettings(config);
+    return settingsInfo(config);
+  });
+  settingsWriteQueue = pending.catch(() => undefined);
+  return pending;
+}
+
+export async function setAiCommitInfo(
+  apiKey: string,
+  model: string,
+  provider: AiCommitProvider = "google",
+  baseUrl = "",
+): Promise<AiCommitInfo> {
+  parseProvider(provider);
+  const slug = provider === "google" ? model.trim().replace(/^models\//, "") : model.trim();
+  if (provider === "google" && !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(slug)) {
+    throw failure("Enter a model slug, such as gemini-2.5-flash, rather than a URL.");
+  }
+  if (!slug || /[\s\u0000-\u001f\u007f]/.test(slug)) throw failure("A model slug without whitespace is required.");
+  const url = provider === "openai" ? normalizeBaseUrl(baseUrl) : "";
+  return updateSettings((config) => {
+    const saved = config[provider];
+    const sameEndpoint = provider === "google" || (saved?.baseUrl && normalizeBaseUrl(saved.baseUrl) === url);
+    const key = apiKey.trim() || (sameEndpoint ? saved?.apiKey : undefined);
+    if (!key || !/^[\x21-\x7e]+$/.test(key)) {
+      throw failure(provider === "openai" && saved && !sameEndpoint
+        ? "Re-enter the API key when changing the base URL."
+        : "A valid API key is required.");
+    }
+    config[provider] = { apiKey: key, model: slug, ...(provider === "openai" ? { baseUrl: url } : {}) };
+    config.provider = provider;
+  }, !!apiKey.trim());
+}
+
+export async function clearAiCommitInfo(provider?: AiCommitProvider): Promise<AiCommitInfo> {
+  return updateSettings((config) => {
+    config[parseProvider(provider ?? config.provider)] = null;
+  }, true);
 }
 
 export async function collectCommitDiff(root: string, amend: boolean) {
@@ -164,68 +259,91 @@ Describe only the selected source. For amend, the diff describes the whole repla
 There is no hard length limit for the description; give enough detail to explain the work.`;
 
 export async function generateAiCommitInfo(root: string, amend: boolean, signal?: AbortSignal) {
-  const settings = await readSettings();
+  const config = await readSettings();
+  const settings = config[config.provider];
   if (!settings) throw failure("Set up an API key and model in Actions → Set Up AI Commit Info first.");
+  const google = config.provider === "google";
+  const providerName = google ? "Google AI Studio" : "OpenAI Chat Completions";
   const context = await collectCommitDiff(root, amend);
   const requestSignal = AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), ...(signal ? [signal] : [])]);
+  const url = google
+    ? `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.model)}:generateContent`
+    : `${normalizeBaseUrl(settings.baseUrl ?? "")}/chat/completions`;
+  const headers: Record<string, string> = google
+    ? { "Content-Type": "application/json", "x-goog-api-key": settings.apiKey }
+    : { "Content-Type": "application/json", Authorization: `Bearer ${settings.apiKey}` };
+  const schema = {
+    type: "object",
+    properties: {
+      title: { type: "string", description: "Single-line commit title, at most 72 characters." },
+      description: { type: "string", description: "Detailed, evidence-based description of the changes." },
+    },
+    required: ["title", "description"],
+    additionalProperties: false,
+  };
+  const payload = google ? {
+    systemInstruction: { parts: [{ text: INSTRUCTIONS }] },
+    contents: [{ role: "user", parts: [{ text: context.serialized }] }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseJsonSchema: schema,
+    },
+  } : {
+    model: settings.model,
+    messages: [
+      { role: "system", content: INSTRUCTIONS },
+      { role: "user", content: context.serialized },
+    ],
+    stream: false,
+    response_format: {
+      type: "json_schema",
+      json_schema: { name: "commit_message", strict: true, schema },
+    },
+  };
   let response: Response;
   let body;
   try {
-    response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.model)}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": settings.apiKey },
-        signal: requestSignal,
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: INSTRUCTIONS }] },
-          contents: [{ role: "user", parts: [{ text: context.serialized }] }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseJsonSchema: {
-              type: "object",
-              properties: {
-                title: { type: "string", description: "Single-line commit title, at most 72 characters." },
-                description: { type: "string", description: "Detailed, evidence-based description of the changes." },
-              },
-              required: ["title", "description"],
-              additionalProperties: false,
-            },
-          },
-        }),
-      },
-    );
+    response = await fetch(url, {
+      method: "POST",
+      headers,
+      signal: requestSignal,
+      body: JSON.stringify(payload),
+      ...(google ? {} : { redirect: "error" as const }),
+    });
     body = await response.json();
   } catch {
     throw failure(requestSignal.aborted
       ? "AI commit generation was cancelled or timed out. Please try again."
-      : "Couldn't reach Google AI Studio or read its response. Please try again.", 502);
+      : `Couldn't reach ${providerName} or read its response. Please try again.`, 502);
   }
   if (!response.ok) {
     const detail = typeof body?.error?.message === "string"
       ? body.error.message.split(settings.apiKey).join("[redacted]") : "Check the API key and model slug.";
-    throw failure(`Google AI Studio (${response.status}): ${detail}`, 502);
+    throw failure(`${providerName} (${response.status}): ${detail}`, 502);
   }
-  const candidate = body?.candidates?.[0];
-  if (candidate?.finishReason !== "STOP" || !Array.isArray(candidate?.content?.parts)) {
-    throw failure("Google AI Studio did not return a complete commit message. The response may have been blocked or cut short.", 502);
+  const candidate = google ? body?.candidates?.[0] : body?.choices?.[0];
+  const complete = google
+    ? candidate?.finishReason === "STOP" && Array.isArray(candidate?.content?.parts)
+    : candidate?.finish_reason === "stop" && !candidate?.message?.refusal && typeof candidate?.message?.content === "string";
+  if (!complete) {
+    throw failure(`${providerName} did not return a complete commit message. The response may have been blocked or cut short.`, 502);
   }
   let result;
   try {
-    const text = candidate.content.parts
+    const text = google ? candidate.content.parts
       .filter((part: { thought?: boolean; text?: unknown }) => !part.thought && typeof part.text === "string")
-      .map((part: { text: string }) => part.text).join("");
+      .map((part: { text: string }) => part.text).join("") : candidate.message.content;
     result = JSON.parse(text);
   } catch {
-    throw failure("Google AI Studio returned invalid JSON. Please try generating again.", 502);
+    throw failure(`${providerName} returned invalid JSON. Please try generating again.`, 502);
   }
   if (typeof result?.title !== "string" || !result.title.trim()
     || typeof result?.description !== "string" || !result.description.trim()) {
-    throw failure("Google AI Studio returned an invalid title or description. Please try generating again.", 502);
+    throw failure(`${providerName} returned an invalid title or description. Please try generating again.`, 502);
   }
   const title = result.title.trim();
   if (title.length > 72 || /[\r\n\u0000]/.test(title)) {
-    throw failure("Google AI Studio returned a title longer than 72 characters or containing line breaks. Please try again.", 502);
+    throw failure(`${providerName} returned a title longer than 72 characters or containing line breaks. Please try again.`, 502);
   }
   if ((await collectCommitDiff(root, amend)).serialized !== context.serialized) {
     throw failure("The changes or branch changed during generation. Generate again for the current diff.", 409);

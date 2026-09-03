@@ -24,10 +24,19 @@ const message = { title: "Add an accurate commit draft", description: "Describe 
 const response = (value: unknown = message) => Response.json({
   candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(value) }] } }],
 });
+const chatBody = (value: unknown = message) => ({
+  choices: [{ finish_reason: "stop", message: { role: "assistant", content: JSON.stringify(value) } }],
+});
+let providerRequest: { authorization?: string; body: Record<string, unknown> } | null = null;
 
 beforeAll(async () => {
   setConfigDir(config);
-  server = createApp({ desktopToken: "ai-test-token" }).listen(0, "127.0.0.1");
+  const app = createApp({ desktopToken: "ai-test-token" });
+  app.post("/compatible/v1/chat/completions", (req, res) => {
+    providerRequest = { authorization: req.headers.authorization, body: req.body };
+    res.json(chatBody());
+  });
+  server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const address = server.address();
   base = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
@@ -68,16 +77,18 @@ async function ready() {
 
 describe("AI settings and API", () => {
   it("persists without exposing the key, retains it on model edits, and clears", async () => {
-    expect(await getAiCommitInfo()).toEqual({ configured: false, model: "" });
+    expect(await getAiCommitInfo()).toMatchObject({ configured: false, model: "", provider: "google" });
     expect(await setAiCommitInfo("  test-key  ", " models/gemini-test "))
-      .toEqual({ configured: true, model: "gemini-test" });
+      .toMatchObject({ configured: true, model: "gemini-test", provider: "google" });
     await setAiCommitInfo("", "gemini-next");
     expect(JSON.parse(await fs.readFile(path.join(config, "ai-commit.json"), "utf8")))
-      .toEqual({ apiKey: "test-key", model: "gemini-next" });
+      .toMatchObject({ provider: "google", google: { apiKey: "test-key", model: "gemini-next" } });
     const saved = await realFetch(base + "/api/ai-commit/settings", { headers });
-    expect(await saved.json()).toEqual({ configured: true, model: "gemini-next" });
+    const info = await saved.json();
+    expect(info).toMatchObject({ configured: true, model: "gemini-next" });
+    expect(JSON.stringify(info)).not.toContain("test-key");
     const cleared = await realFetch(base + "/api/ai-commit/settings", { method: "DELETE", headers });
-    expect(await cleared.json()).toEqual({ configured: false, model: "" });
+    expect(await cleared.json()).toMatchObject({ configured: false, model: "" });
     await expect(fs.stat(path.join(config, "ai-commit.json"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -107,6 +118,76 @@ describe("AI settings and API", () => {
     const error = await failed.text();
     expect(error).toContain("Google AI Studio (401)");
     expect(error).not.toContain("test-key");
+  });
+
+  it("loads legacy Google settings and keeps both provider profiles through switching and clearing", async () => {
+    await fs.mkdir(config, { recursive: true });
+    await fs.writeFile(path.join(config, "ai-commit.json"), JSON.stringify({ apiKey: "legacy-key", model: "gemini-legacy" }));
+    expect(await getAiCommitInfo()).toMatchObject({
+      provider: "google", configured: true, model: "gemini-legacy",
+      profiles: { google: { configured: true, model: "gemini-legacy" }, openai: { configured: false } },
+    });
+    await setAiCommitInfo("chat-key", "vendor/model:free", "openai", "https://provider.example/api/v1/");
+    const switched = await setAiCommitInfo("", "gemini-next", "google");
+    expect(switched).toMatchObject({
+      provider: "google", model: "gemini-next",
+      profiles: { openai: { configured: true, model: "vendor/model:free", baseUrl: "https://provider.example/api/v1" } },
+    });
+    const stored = JSON.parse(await fs.readFile(path.join(config, "ai-commit.json"), "utf8"));
+    expect(stored.google.apiKey).toBe("legacy-key");
+    expect(stored.openai.apiKey).toBe("chat-key");
+    expect(JSON.stringify(switched)).not.toContain("legacy-key");
+    expect(JSON.stringify(switched)).not.toContain("chat-key");
+    const cleared = await clearAiCommitInfo("google");
+    expect(cleared).toMatchObject({ configured: false, profiles: { openai: { configured: true } } });
+    expect(await setAiCommitInfo("", "vendor/new-model", "openai", "https://provider.example/api/v1/chat/completions/"))
+      .toMatchObject({ provider: "openai", configured: true, baseUrl: "https://provider.example/api/v1" });
+    await clearAiCommitInfo();
+    expect((await getAiCommitInfo()).profiles).toMatchObject({ google: { configured: false }, openai: { configured: false } });
+  });
+
+  it("never reuses a key across providers or a changed base URL", async () => {
+    await ready();
+    await expect(setAiCommitInfo("", "model", "openai", "https://provider.example/v1")).rejects.toThrow("API key");
+    await setAiCommitInfo("chat-key", "model", "openai", "https://provider.example/v1");
+    await expect(setAiCommitInfo("", "model", "openai", "https://other.example/v1")).rejects.toThrow("Re-enter");
+    expect(await getAiCommitInfo()).toMatchObject({ provider: "openai", baseUrl: "https://provider.example/v1" });
+    await setAiCommitInfo("replacement-key", "model", "openai", "https://other.example/v1");
+    const stored = JSON.parse(await fs.readFile(path.join(config, "ai-commit.json"), "utf8"));
+    expect(stored.openai.apiKey).toBe("replacement-key");
+    expect(stored.google.apiKey).toBe("test-key");
+  });
+
+  it("serializes concurrent profile updates and can replace corrupt legacy settings", async () => {
+    await Promise.all([
+      setAiCommitInfo("google-key", "gemini-test"),
+      setAiCommitInfo("chat-key", "model", "openai", "http://localhost:1234/v1"),
+    ]);
+    expect((await getAiCommitInfo()).profiles).toMatchObject({ google: { configured: true }, openai: { configured: true } });
+    await fs.writeFile(path.join(config, "ai-commit.json"), "{broken");
+    await expect(getAiCommitInfo()).rejects.toThrow("Couldn't read");
+    await setAiCommitInfo("new-key", "gemini-test");
+    expect(await getAiCommitInfo()).toMatchObject({ configured: true, provider: "google" });
+  });
+
+  it("validates provider settings through the API", async () => {
+    for (const baseUrl of ["", "not a URL", "file:///tmp/model", "https://user:pass@provider.example/v1", "https://provider.example/v1?key=secret", "https://provider.example/v1#fragment"]) {
+      await expect(setAiCommitInfo("key", "model", "openai", baseUrl)).rejects.toMatchObject({ status: 400 });
+    }
+    const invalid = await realFetch(base + "/api/ai-commit/settings", {
+      method: "POST", headers, body: JSON.stringify({ provider: "unknown", apiKey: "key", model: "model" }),
+    });
+    expect(invalid.status).toBe(400);
+    const saved = await realFetch(base + "/api/ai-commit/settings", {
+      method: "POST", headers,
+      body: JSON.stringify({ provider: "openai", apiKey: "key", model: "org/model:latest", baseUrl: "https://provider.example/api/v1/" }),
+    });
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({ provider: "openai", model: "org/model:latest", baseUrl: "https://provider.example/api/v1" });
+    const cleared = await realFetch(base + "/api/ai-commit/settings", {
+      method: "DELETE", headers, body: JSON.stringify({ provider: "openai" }),
+    });
+    expect((await cleared.json()).configured).toBe(false);
   });
 });
 
@@ -273,5 +354,108 @@ describe("Google AI Studio generation", () => {
     await ready();
     await expect(generateAiCommitInfo(root, false)).rejects.toMatchObject({ status: 502 });
     await clearAiCommitInfo();
+  });
+});
+
+describe("OpenAI-compatible Chat Completions generation", () => {
+  it("uses the configured endpoint, bearer key, model and messages over HTTP", async () => {
+    await ready();
+    await setAiCommitInfo("chat-key", "vendor/model:free", "openai", `${base}/compatible/v1/chat/completions/`);
+    providerRequest = null;
+    expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, source: "unstaged" });
+    expect(providerRequest).toMatchObject({
+      authorization: "Bearer chat-key",
+      body: {
+        model: "vendor/model:free", stream: false,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "commit_message", strict: true,
+            schema: {
+              type: "object",
+              properties: { title: { type: "string" }, description: { type: "string" } },
+              required: ["title", "description"], additionalProperties: false,
+            },
+          },
+        },
+        messages: [
+          { role: "system", content: expect.stringContaining("72 characters") },
+          { role: "user", content: expect.stringContaining("new content") },
+        ],
+      },
+    });
+    expect(JSON.stringify(providerRequest)).not.toContain("generationConfig");
+    expect(JSON.stringify(providerRequest)).not.toContain("test-key");
+  });
+
+  it("normalizes empty query and fragment delimiters before building the chat endpoint", async () => {
+    await ready();
+    for (const suffix of ["?", "#", "?#"]) {
+      await setAiCommitInfo("chat-key", "model", "openai", `${base}/compatible/v1${suffix}`);
+      expect((await getAiCommitInfo()).baseUrl).toBe(`${base}/compatible/v1`);
+      expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, source: "unstaged" });
+    }
+  });
+
+  it("reports unsupported JSON Schema output without weakening the request or retrying", async () => {
+    await ready();
+    await setAiCommitInfo("chat-key", "model", "openai", "https://provider.example/v1");
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      error: { param: "response_format", message: "json_schema is not supported by this model" },
+    }, { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generateAiCommitInfo(root, false)).rejects.toMatchObject({
+      status: 502, message: "OpenAI Chat Completions (400): json_schema is not supported by this model",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const first = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(first.response_format).toMatchObject({ type: "json_schema", json_schema: { strict: true } });
+    expect(fetchMock.mock.calls[0][1].redirect).toBe("error");
+  });
+
+  it.each([400, 401, 429, 500])("reports HTTP %i errors without retrying or exposing the key", async (status) => {
+    await ready();
+    await setAiCommitInfo("chat-key", "model", "openai", "https://provider.example/v1");
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ error: { message: "Request failed for chat-key" } }, { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generateAiCommitInfo(root, false)).rejects.toMatchObject({
+      status: 502, message: `OpenAI Chat Completions (${status}): Request failed for [redacted]`,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects invalid, refused and incomplete Chat Completions responses", async () => {
+    await ready();
+    await setAiCommitInfo("chat-key", "model", "openai", "https://provider.example/v1");
+    for (const body of [
+      chatBody({ title: "x".repeat(73), description: "Description" }),
+      chatBody({ title: "Title", description: "" }),
+      { choices: [{ finish_reason: "stop", message: { content: "not JSON" } }] },
+      { choices: [{ finish_reason: "length", message: { content: JSON.stringify(message) } }] },
+      { choices: [{ finish_reason: "stop", message: { content: JSON.stringify(message), refusal: "Refused" } }] },
+      { choices: [] },
+    ]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(body)));
+      await expect(generateAiCommitInfo(root, false)).rejects.toMatchObject({ status: 502 });
+    }
+  });
+
+  it("still rejects stale diffs and returns to the unchanged Google request format", async () => {
+    await ready();
+    await setAiCommitInfo("chat-key", "model", "openai", "https://provider.example/v1");
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => {
+      await fs.writeFile(path.join(root, "new.txt"), "newer content\n");
+      return Response.json(chatBody());
+    }));
+    await expect(generateAiCommitInfo(root, false)).rejects.toMatchObject({ status: 409 });
+    await setAiCommitInfo("", "gemini-test", "google");
+    const fetchMock = vi.fn().mockResolvedValue(response());
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, source: "unstaged" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent");
+    expect(init.headers["x-goog-api-key"]).toBe("test-key");
+    expect(init.headers.Authorization).toBeUndefined();
+    expect(JSON.parse(init.body).generationConfig.responseJsonSchema.required).toEqual(["title", "description"]);
   });
 });

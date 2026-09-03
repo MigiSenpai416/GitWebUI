@@ -372,9 +372,17 @@ export interface SelectedFile {
   status?: ChangeStatus;
 }
 
-export interface AiCommitInfo {
+export type AiCommitProvider = "google" | "openai";
+
+export interface AiCommitProfile {
   configured: boolean;
   model: string;
+  baseUrl: string;
+}
+
+export interface AiCommitInfo extends AiCommitProfile {
+  provider: AiCommitProvider;
+  profiles: Record<AiCommitProvider, AiCommitProfile>;
 }
 
 export interface AiCommitMessage {

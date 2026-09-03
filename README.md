@@ -72,16 +72,27 @@ them instead, and nothing in `server/` or `web/` is Windows-specific.
     **Stage All** / **Unstage All**.
 - Commit box: **Amend previous commit**, summary (with character budget) +
   description, one-click commit. **Actions → Set Up AI Commit Info** saves a
-  Google AI Studio API key and model slug. The AI buttons fill both fields from
+  Google AI Studio API key and model slug, or an **OpenAI Chat Completions**
+  compatible provider's base URL, API key, and model slug. Google is the default;
+  existing Google settings continue to work. Each provider's settings are saved
+  separately, so switching providers retains the other configuration.
+  The AI buttons fill both fields from
   staged changes, or unstaged changes (including new files) when nothing is
   staged. Amend describes the complete replacement commit. Titles stay within
   72 characters; descriptions have no app-imposed length limit.
-  Generation sends all diff hunks with nearby context to Google, plus new text
+  Generation sends all diff hunks with nearby context to the selected provider, plus new text
   files and change metadata; binary contents are not sent. Diffs over 8 MiB are
   rejected with an instruction to stage a smaller set, never silently truncated.
-  The key is stored in `ai-commit.json` in the host's config directory, in
+  The keys are stored in `ai-commit.json` in the host's config directory, in
   plaintext like the GitHub credential, and is never returned to the browser.
-  Use the setup dialog to change the model, replace the key, or clear both.
+  Use the setup dialog to change the model, replace the key, or clear the selected
+  provider's settings. For Chat Completions, use an API base URL such as
+  `https://api.openai.com/v1` or `http://localhost:1234/v1`; requests append
+  `/chat/completions` and use bearer authentication, system/user messages, and
+  strict JSON Schema structured output (`response_format.type: json_schema`).
+  The provider and model must support this format; unsupported requests show
+  an error without falling back to a weaker format. Changing the base URL
+  requires re-entering its key; saved Google keys are never reused for it.
 - **Password-protected access** — the web UI is gated by a single password
   (set on first run), with an optional **Remember me** (stays signed in for 7
   days). Useful when running on a headless/remote host reachable over the network.

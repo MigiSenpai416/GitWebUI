@@ -35,7 +35,7 @@ export interface AiCommitInfo extends AiCommitProfile {
 const file = () => configPath("ai-commit.json");
 const MAX_DIFF_BYTES = 8 * 1024 * 1024;
 const MAX_OUTPUT_TOKENS = 16384;
-const REQUEST_TIMEOUT_MS = 120_000;
+const REQUEST_TIMEOUT_MS = 5 * 60_000;
 const GENERATION_TIMEOUT_MS = 15 * 60_000;
 const MAX_GENERATION_REQUESTS = 256;
 const CHUNK_BYTES = 128 * 1024;

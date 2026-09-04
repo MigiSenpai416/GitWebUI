@@ -389,4 +389,5 @@ export interface AiCommitMessage {
   title: string;
   description: string;
   source: "staged" | "unstaged";
+  chunked: boolean;
 }

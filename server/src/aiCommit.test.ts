@@ -12,6 +12,7 @@ import { createApp } from "./app.js";
 import {
   clearAiCommitInfo, collectCommitDiff, generateAiCommitInfo, getAiCommitInfo, setAiCommitInfo,
 } from "./aiCommit.js";
+import type { CommitPart } from "./aiCommitChunks.js";
 
 const TMP = path.join(os.tmpdir(), `gitwebui-ai-${randomBytes(6).toString("hex")}`);
 const config = path.join(TMP, "config");
@@ -109,7 +110,7 @@ describe("AI settings and API", () => {
       method: "POST", headers: { ...headers, "X-Repo-Root": repo.root }, body: "{}",
     });
     expect(generated.status).toBe(200);
-    expect(await generated.json()).toEqual({ ...message, source: "unstaged" });
+    expect(await generated.json()).toEqual({ ...message, source: "unstaged", chunked: false });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: { message: "Invalid key test-key" } }, { status: 401 })));
     const failed = await realFetch(base + "/api/ai-commit/generate", {
       method: "POST", headers: { ...headers, "X-Repo-Root": repo.root }, body: "{}",
@@ -265,7 +266,7 @@ describe("complete commit diff selection", () => {
     expect(context.untracked).toContainEqual({ path: "new.txt", kind: "text", content: "new content\n" });
     expect(Buffer.byteLength(JSON.stringify(context))).toBeLessThan(1024);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response()));
-    expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, source: "unstaged" });
+    expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, source: "unstaged", chunked: false });
     await runGit(root, ["add", "--", "large.bin"]);
     const staged = (await collectCommitDiff(root, false)).serialized;
     expect(staged).toContain("Binary files");
@@ -292,7 +293,7 @@ describe("Google AI Studio generation", () => {
     const description = "Detailed change description.\n".repeat(500);
     const fetchMock = vi.fn().mockResolvedValue(response({ ...message, description }));
     vi.stubGlobal("fetch", fetchMock);
-    expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, description: description.trim(), source: "unstaged" });
+    expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, description: description.trim(), source: "unstaged", chunked: false });
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent");
     expect(init.headers["x-goog-api-key"]).toBe("test-key");
@@ -362,7 +363,7 @@ describe("OpenAI-compatible Chat Completions generation", () => {
     await ready();
     await setAiCommitInfo("chat-key", "vendor/model:free", "openai", `${base}/compatible/v1/chat/completions/`);
     providerRequest = null;
-    expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, source: "unstaged" });
+    expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, source: "unstaged", chunked: false });
     expect(providerRequest).toMatchObject({
       authorization: "Bearer chat-key",
       body: {
@@ -393,7 +394,7 @@ describe("OpenAI-compatible Chat Completions generation", () => {
     for (const suffix of ["?", "#", "?#"]) {
       await setAiCommitInfo("chat-key", "model", "openai", `${base}/compatible/v1${suffix}`);
       expect((await getAiCommitInfo()).baseUrl).toBe(`${base}/compatible/v1`);
-      expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, source: "unstaged" });
+      expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, source: "unstaged", chunked: false });
     }
   });
 
@@ -451,11 +452,201 @@ describe("OpenAI-compatible Chat Completions generation", () => {
     await setAiCommitInfo("", "gemini-test", "google");
     const fetchMock = vi.fn().mockResolvedValue(response());
     vi.stubGlobal("fetch", fetchMock);
-    expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, source: "unstaged" });
+    expect(await generateAiCommitInfo(root, false)).toEqual({ ...message, source: "unstaged", chunked: false });
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent");
     expect(init.headers["x-goog-api-key"]).toBe("test-key");
     expect(init.headers.Authorization).toBeUndefined();
     expect(JSON.parse(init.body).generationConfig.responseJsonSchema.required).toEqual(["title", "description"]);
+  });
+});
+
+describe("context-window fallback", () => {
+  const overflow = () => Response.json({ error: { code: "context_length_exceeded", message: "Input exceeds the context window" } }, { status: 400 });
+  const contentOf = (init: RequestInit) => {
+    const body = JSON.parse(init.body as string);
+    return JSON.parse(body.messages?.[1].content ?? body.contents[0].parts[0].text);
+  };
+  const largeChange = async () => {
+    await ready();
+    const text = Array.from({ length: 4000 }, (_, i) => `line ${i}: concrete changed behavior 😀\n`).join("");
+    await fs.writeFile(path.join(root, "new.txt"), text);
+    return text;
+  };
+
+  it.each(["google", "openai"] as const)("splits rejected %s requests and merges every chunk without losing source text", async (provider) => {
+    const text = await largeChange();
+    if (provider === "openai") await setAiCommitInfo("chat-key", "model", "openai", "https://provider.example/v1");
+    const accepted: CommitPart[] = [];
+    let summaries = 0;
+    let rejections = 0;
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      const payload = JSON.parse(init.body);
+      if (provider === "openai") expect(payload.response_format).toMatchObject({ type: "json_schema", json_schema: { strict: true } });
+      else expect(payload.generationConfig.responseMimeType).toBe("application/json");
+      if (Buffer.byteLength(init.body) > 24_000) {
+        rejections++;
+        return provider === "openai" ? overflow() : Response.json({ error: {
+          message: "The input token count (50000) exceeds the maximum number of tokens allowed (10000).", status: "INVALID_ARGUMENT",
+        } }, { status: 400 });
+      }
+      const data = contentOf(init);
+      expect(data).toMatchObject({ source: "unstaged", amend: false, branch: "main" });
+      let description: string;
+      if (data.changes) {
+        accepted.push(...data.changes);
+        description = `DETAIL-${summaries++}`;
+      } else {
+        description = data.summaries.map((part: CommitPart) => part.text).join("\n");
+      }
+      const value = { title: "Describe all changes", description };
+      return provider === "openai" ? Response.json(chatBody(value)) : response(value);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await generateAiCommitInfo(root, false);
+    expect(rejections).toBeGreaterThan(1);
+    expect(summaries).toBeGreaterThan(1);
+    expect(accepted.filter((p) => p.kind === "untracked").map((p) => p.text).join("")).toBe(text);
+    expect(accepted.filter((p) => p.kind === "status").map((p) => JSON.parse(p.text)))
+      .toEqual([{ path: "new.txt", status: "?", staged: false }]);
+    for (let i = 0; i < summaries; i++) expect(result.description.split("\n")).toContain(`DETAIL-${i}`);
+    expect(result.source).toBe("unstaged");
+    expect(result.chunked).toBe(true);
+    expect(contentOf(fetchMock.mock.calls.at(-1)![1]).summaries).toBeDefined();
+  });
+
+  it("reduces oversized intermediate summaries, including splitting a single long summary", async () => {
+    await largeChange();
+    let summaries = 0;
+    let rejectedMerges = 0;
+    let splitSummary = false;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async (_url, init) => {
+      const data = contentOf(init);
+      if (Buffer.byteLength(init.body) > 36_000) {
+        if (data.summaries) rejectedMerges++;
+        return overflow();
+      }
+      if (data.changes) return response({ title: "Describe a portion", description: `DETAIL-${summaries++}\n` + "x".repeat(40_000) });
+      splitSummary ||= data.summaries.some((p: CommitPart) => (p.offset ?? 0) > 0);
+      const details = data.summaries.flatMap((p: CommitPart) => p.text.match(/DETAIL-\d+/g) ?? []);
+      return response({ title: "Combine all changes", description: details.join("\n") || "Continuation of described changes" });
+    }));
+    const result = await generateAiCommitInfo(root, false);
+    expect(rejectedMerges).toBeGreaterThan(0);
+    expect(result.chunked).toBe(true);
+    expect(splitSummary).toBe(true);
+    for (let i = 0; i < summaries; i++) expect(result.description).toContain(`DETAIL-${i}`);
+  });
+
+  it("keeps amend's complete staged replacement diff and excludes unstaged edits throughout fallback", async () => {
+    await trackedFile();
+    await setAiCommitInfo("key", "model");
+    const added = "new staged content\n".repeat(1500);
+    await fs.writeFile(path.join(root, "tracked.txt"), "original\n" + added);
+    await runGit(root, ["add", "."]);
+    await fs.writeFile(path.join(root, "tracked.txt"), "unstaged private content\n");
+    const parts: CommitPart[] = [];
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      const data = contentOf(init);
+      expect(data).toMatchObject({ source: "staged", amend: true });
+      expect(init.body).not.toContain("unstaged private content");
+      if (fetchMock.mock.calls.length === 1) return overflow();
+      if (data.changes) parts.push(...data.changes);
+      return response();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    expect((await generateAiCommitInfo(root, true)).source).toBe("staged");
+    const diff = parts.filter((p) => p.kind === "diff").map((p) => p.text).join("");
+    expect(diff).toContain("+original\n");
+    expect(diff.match(/\+new staged content\n/g)).toHaveLength(1500);
+  });
+
+  it.each([
+    [400, "This model's maximum context length is 8192 tokens."],
+    [413, "prompt is too long: 9000 tokens > 8192 maximum"],
+    [422, "Input tokens exceed the limit of 8192"],
+  ])("recognizes explicit context errors with status %i", async (status, errorMessage) => {
+    await largeChange();
+    const fetchMock = vi.fn().mockImplementation(async () => fetchMock.mock.calls.length === 1
+      ? Response.json({ error: { message: errorMessage } }, { status }) : response());
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await generateAiCommitInfo(root, false)).toMatchObject(message);
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(2);
+  });
+
+  it.each([
+    [401, "Invalid key"], [429, "Input token limit exceeded for this minute"],
+    [400, "json_schema is not supported"], [413, "Request body too large"], [500, "Internal error"],
+  ])("does not chunk unrelated errors (%i: %s)", async (status, errorMessage) => {
+    await largeChange();
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ error: { message: errorMessage } }, { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generateAiCommitInfo(root, false)).rejects.toThrow(errorMessage);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops on a failed chunk without publishing or merging partial results", async () => {
+    await largeChange();
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      if (fetchMock.mock.calls.length === 1) return overflow();
+      if (fetchMock.mock.calls.length === 2) return response();
+      return Response.json({ error: { message: "Rate limited" } }, { status: 429 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generateAiCommitInfo(root, false)).rejects.toThrow("Rate limited");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.every((call) => !contentOf(call[1]).summaries)).toBe(true);
+  });
+
+  it("honors cancellation between chunks and before a pre-cancelled request", async () => {
+    await largeChange();
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      if (fetchMock.mock.calls.length === 1) return overflow();
+      controller.abort();
+      return response();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generateAiCommitInfo(root, false, controller.signal)).rejects.toThrow("cancelled");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(generateAiCommitInfo(root, false, controller.signal)).rejects.toThrow("cancelled");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a stale final merge after the selected diff changes", async () => {
+    await largeChange();
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      if (fetchMock.mock.calls.length === 1) return overflow();
+      if (contentOf(init).summaries) await fs.writeFile(path.join(root, "new.txt"), "changed while generating\n");
+      return response();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generateAiCommitInfo(root, false)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("terminates when even the smallest chunks are rejected", async () => {
+    await largeChange();
+    const fetchMock = vi.fn().mockImplementation(overflow);
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generateAiCommitInfo(root, false)).rejects.toThrow("context window is too small");
+    expect(fetchMock.mock.calls.length).toBeLessThan(12);
+  });
+
+  it("bounds requests when a large diff needs too many tiny chunks", async () => {
+    await ready();
+    await fs.writeFile(path.join(root, "new.txt"), "a".repeat(2 * 1024 * 1024));
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => Buffer.byteLength(init.body) > 8_000 ? overflow() : response());
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generateAiCommitInfo(root, false)).rejects.toThrow("too many requests");
+    expect(fetchMock).toHaveBeenCalledTimes(256);
+  });
+
+  it("bounds reduction when the model repeatedly expands summaries instead of compressing them", async () => {
+    await largeChange();
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => Buffer.byteLength(init.body) > 24_000
+      ? overflow() : response({ title: "Describe changes", description: "x".repeat(40_000) }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generateAiCommitInfo(root, false)).rejects.toThrow("context window is too small");
+    expect(fetchMock.mock.calls.length).toBeLessThan(256);
   });
 });

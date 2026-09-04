@@ -15,6 +15,101 @@ interface AiProviderTestState {
   requests: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }>;
 }
 
+interface AiChunkTestState {
+  chunks: number;
+  failMerge: boolean;
+  release?: () => void;
+}
+
+test("context fallback applies only the final merged draft and preserves edits on failure or cancellation", async () => {
+  const repoDir = makeRepo();
+  let started: TestApp | undefined;
+  try {
+    await fs.writeFile(path.join(repoDir, "new.txt"), "A concrete new behavior\n".repeat(2000));
+    started = await launchApp();
+    const app = started.app;
+    const window = await app.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+    await window.getByRole("button", { name: "Open", exact: true }).first().click();
+    await window.locator(".picker-form input").fill(repoDir);
+    await window.locator(".picker-form button[type=submit]").click();
+    await expect(window.locator(".changes-title")).toContainText("1 file change");
+    await app.evaluate(() => {
+      const state: AiChunkTestState = { chunks: 0, failMerge: false };
+      (globalThis as unknown as { aiChunkTest: AiChunkTestState }).aiChunkTest = state;
+      const original = globalThis.fetch;
+      globalThis.fetch = async (input, init) => {
+        if (!String(input).startsWith("https://generativelanguage.googleapis.com/")) return original(input, init);
+        const content = JSON.parse(JSON.parse(String(init?.body)).contents[0].parts[0].text);
+        if (!content.changes && !content.summaries) {
+          return Response.json({ error: { message: "Input token count exceeds the maximum allowed tokens" } }, { status: 400 });
+        }
+        if (content.changes) state.chunks++;
+        else {
+          await new Promise<void>((resolve) => { state.release = resolve; });
+          state.release = undefined;
+          if (state.failMerge) return Response.json({ error: { message: "Merge rate limited" } }, { status: 429 });
+        }
+        return Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify({
+          title: content.changes ? "Partial summary" : "Describe the complete change",
+          description: content.changes ? "Details from one portion" : "Combine all portions into the final description.",
+        }) }] } }] });
+      };
+    });
+    await window.locator(".ai-btn").click();
+    const dialog = window.getByRole("dialog", { name: "Set Up AI Commit Info" });
+    await dialog.getByLabel("API key").fill("test-key");
+    await dialog.getByLabel("Model slug").fill("gemini-test");
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const summary = window.getByPlaceholder("Commit summary");
+    const description = window.getByPlaceholder("Description", { exact: true });
+    await summary.fill("Existing draft");
+    await description.fill("Existing description");
+    const waitForMerge = async () => {
+      await expect.poll(() => app.evaluate(() => !!(globalThis as unknown as { aiChunkTest: AiChunkTestState }).aiChunkTest.release)).toBe(true);
+    };
+    const release = () => app.evaluate(() => (globalThis as unknown as { aiChunkTest: AiChunkTestState }).aiChunkTest.release?.());
+    await window.locator(".compose-ai").click();
+    await waitForMerge();
+    expect(await app.evaluate(() => (globalThis as unknown as { aiChunkTest: AiChunkTestState }).aiChunkTest.chunks)).toBeGreaterThan(1);
+    await expect(summary).toHaveValue("Existing draft");
+    await expect(description).toHaveValue("Existing description");
+    await expect(window.locator(".compose-ai")).toContainText("Generating");
+    const chunkedNotice = window.getByText("AI commit information generated using chunked summaries.", { exact: true });
+    await expect(chunkedNotice).toBeHidden();
+    await release();
+    await expect(summary).toHaveValue("Describe the complete change");
+    await expect(description).toHaveValue("Combine all portions into the final description.");
+    await expect(chunkedNotice).toBeVisible();
+    await window.getByRole("status").filter({ hasText: "AI commit information generated using chunked summaries." })
+      .getByRole("button", { name: "Dismiss", exact: true }).click();
+    await expect(chunkedNotice).toBeHidden();
+
+    await app.evaluate(() => { (globalThis as unknown as { aiChunkTest: AiChunkTestState }).aiChunkTest.failMerge = true; });
+    await window.locator(".compose-ai").click();
+    await waitForMerge();
+    await release();
+    await expect(window.getByText(/Merge rate limited/)).toBeVisible();
+    await expect(chunkedNotice).toBeHidden();
+    await expect(summary).toHaveValue("Describe the complete change");
+    await expect(description).toHaveValue("Combine all portions into the final description.");
+
+    await app.evaluate(() => { (globalThis as unknown as { aiChunkTest: AiChunkTestState }).aiChunkTest.failMerge = false; });
+    await window.locator(".compose-ai").click();
+    await waitForMerge();
+    await summary.fill("My replacement draft");
+    await release();
+    await expect(window.locator(".compose-ai")).toBeEnabled();
+    await expect(summary).toHaveValue("My replacement draft");
+    await expect(chunkedNotice).toBeHidden();
+  } finally {
+    await started?.app.close().catch(() => undefined);
+    if (started) await cleanupApp(started);
+    await removeRepo(repoDir);
+  }
+});
+
 test("AI settings persist and all compose controls populate the current draft safely", async () => {
   const repoDir = makeRepo();
   let started: TestApp | undefined;
@@ -70,6 +165,7 @@ test("AI settings persist and all compose controls populate the current draft sa
       await window.locator(selector).click();
       await expect(summary).toHaveValue(`Describe feature changes ${index + 1}`);
       await expect(description).toHaveValue(/implementation details/);
+      await expect(window.getByText("AI commit information generated normally from the full diff.", { exact: true })).toBeVisible();
     }
     const firstDiff = await app.evaluate(() => {
       const state = (globalThis as unknown as { aiTest: AiTestState }).aiTest;

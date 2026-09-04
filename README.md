@@ -83,6 +83,22 @@ them instead, and nothing in `server/` or `web/` is Windows-specific.
   Generation sends all diff hunks with nearby context to the selected provider, plus new text
   files and change metadata; binary contents are not sent. Diffs over 8 MiB are
   rejected with an instruction to stage a smaller set, never silently truncated.
+  This byte limit is not a token limit. If the provider explicitly rejects a
+  request for exceeding its context window, generation automatically splits the
+  changes at file/hunk boundaries, summarizes each portion, and merges all the
+  summaries into one commit message. Oversized hunks and new files are split by
+  line, or by Unicode-safe text fragments for very long lines, retaining file
+  metadata and addition/deletion context. Fallback batches target at most
+  128 KiB of input data and shrink further on context errors; this is a sizing
+  heuristic, not a provider-specific token count. Oversized merges are reduced
+  in multiple passes. This takes additional requests, time, and potentially cost,
+  and summaries can lose nuance compared with one full-diff request.
+  Only the final successful message fills the fields. Its success toast indicates
+  whether generation used the full diff normally or chunked summaries. Other errors stop generation
+  without applying partial summaries. Each request has a two-minute timeout;
+  a generation is limited to 15 minutes, 256 requests, and 12 levels of splitting
+  or reduction. If the model still cannot handle the input, stage fewer changes
+  or use a larger-context model. Cancellation and stale-change checks still apply.
   The keys are stored in `ai-commit.json` in the host's config directory, in
   plaintext like the GitHub credential, and is never returned to the browser.
   Use the setup dialog to change the model, replace the key, or clear the selected

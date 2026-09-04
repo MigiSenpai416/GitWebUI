@@ -95,6 +95,9 @@ export function CommitBox({ children }: { children?: (ai: AiCommitControls) => R
       if (!isCurrent()) return;
       setTitle(message.title);
       setDescription(message.description);
+      setNotice(message.chunked
+        ? "AI commit information generated using chunked summaries."
+        : "AI commit information generated normally from the full diff.");
     } catch (e) {
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Couldn't generate commit information.");
     } finally {

@@ -34,6 +34,7 @@ export interface AiCommitInfo extends AiCommitProfile {
 
 const file = () => configPath("ai-commit.json");
 const MAX_DIFF_BYTES = 8 * 1024 * 1024;
+const MAX_OUTPUT_TOKENS = 16384;
 const REQUEST_TIMEOUT_MS = 120_000;
 const GENERATION_TIMEOUT_MS = 15 * 60_000;
 const MAX_GENERATION_REQUESTS = 256;
@@ -290,7 +291,7 @@ function contextLimitError(status: number, body: any): boolean {
     || /(?:prompt|input)(?: is)? too (?:long|large)|too many (?:input |prompt )?tokens/.test(message);
 }
 
-async function requestCommitInfo(settings: AiCommitSettings, google: boolean, content: string, instructions: string, signal: AbortSignal) {
+async function requestCommitInfo(settings: AiCommitSettings, google: boolean, content: string, instructions: string, signal: AbortSignal, completionTokens: boolean) {
   const providerName = google ? "Google AI Studio" : "OpenAI Chat Completions";
   const requestSignal = AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), signal]);
   const url = google
@@ -312,6 +313,7 @@ async function requestCommitInfo(settings: AiCommitSettings, google: boolean, co
     systemInstruction: { parts: [{ text: instructions }] },
     contents: [{ role: "user", parts: [{ text: content }] }],
     generationConfig: {
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
       responseMimeType: "application/json",
       responseJsonSchema: schema,
     },
@@ -322,6 +324,7 @@ async function requestCommitInfo(settings: AiCommitSettings, google: boolean, co
       { role: "user", content },
     ],
     stream: false,
+    ...(completionTokens ? { max_completion_tokens: MAX_OUTPUT_TOKENS } : { max_tokens: MAX_OUTPUT_TOKENS }),
     response_format: {
       type: "json_schema",
       json_schema: { name: "commit_message", strict: true, schema },
@@ -348,6 +351,9 @@ async function requestCommitInfo(settings: AiCommitSettings, google: boolean, co
       ? body.error.message.split(settings.apiKey).join("[redacted]") : "Check the API key and model slug.";
     throw Object.assign(failure(`${providerName} (${response.status}): ${detail}`, 502), {
       contextLimit: contextLimitError(response.status, body),
+      completionTokenLimit: !google && !completionTokens && [400, 422].includes(response.status)
+        && /\bmax_tokens\b/.test(detail) && /\bmax_completion_tokens\b/.test(detail)
+        && /unsupported|not supported|not compatible|use instead|use .*instead/i.test(detail),
     });
   }
   const candidate = google ? body?.candidates?.[0] : body?.choices?.[0];
@@ -384,15 +390,23 @@ export async function generateAiCommitInfo(root: string, amend: boolean, signal?
   const context = await collectCommitDiff(root, amend);
   const generationSignal = AbortSignal.any([AbortSignal.timeout(GENERATION_TIMEOUT_MS), ...(signal ? [signal] : [])]);
   let requests = 0;
+  let completionTokens = false;
   const checkCancelled = () => {
     if (generationSignal.aborted) throw failure("AI commit generation was cancelled or timed out. Please try again.", 502);
   };
-  const request = async (content: string, instructions: string) => {
+  const request = async (content: string, instructions: string): Promise<{ title: string; description: string }> => {
     checkCancelled();
     if (++requests > MAX_GENERATION_REQUESTS) {
       throw failure("AI commit generation needs too many requests for this model's context window. Stage fewer changes or choose a model with a larger context window.", 413);
     }
-    const result = await requestCommitInfo(settings, config.provider === "google", content, instructions, generationSignal);
+    let result;
+    try {
+      result = await requestCommitInfo(settings, config.provider === "google", content, instructions, generationSignal, completionTokens);
+    } catch (error) {
+      if (!(error as { completionTokenLimit?: boolean })?.completionTokenLimit) throw error;
+      completionTokens = true;
+      return request(content, instructions);
+    }
     checkCancelled();
     return result;
   };

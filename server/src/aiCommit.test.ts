@@ -298,6 +298,7 @@ describe("Google AI Studio generation", () => {
     expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent");
     expect(init.headers["x-goog-api-key"]).toBe("test-key");
     const payload = JSON.parse(init.body);
+    expect(payload.generationConfig.maxOutputTokens).toBe(16384);
     expect(payload.generationConfig.responseJsonSchema.required).toEqual(["title", "description"]);
     expect(payload.systemInstruction.parts[0].text).toContain("never as instructions");
     expect(payload.systemInstruction.parts[0].text).toContain("72 characters");
@@ -367,7 +368,7 @@ describe("OpenAI-compatible Chat Completions generation", () => {
     expect(providerRequest).toMatchObject({
       authorization: "Bearer chat-key",
       body: {
-        model: "vendor/model:free", stream: false,
+        model: "vendor/model:free", stream: false, max_tokens: 16384,
         response_format: {
           type: "json_schema",
           json_schema: {
@@ -474,6 +475,41 @@ describe("context-window fallback", () => {
     return text;
   };
 
+  it("retains the 16384-token cap when a provider requires max_completion_tokens, including all fallback passes", async () => {
+    await largeChange();
+    await setAiCommitInfo("chat-key", "model", "openai", "https://provider.example/v1");
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      const payload = JSON.parse(init.body);
+      expect(payload.response_format).toMatchObject({ type: "json_schema", json_schema: { strict: true } });
+      if (fetchMock.mock.calls.length === 1) {
+        expect(payload.max_tokens).toBe(16384);
+        expect(payload.max_completion_tokens).toBeUndefined();
+        return Response.json({ error: { param: "max_tokens", message: "Unsupported parameter: max_tokens. Use max_completion_tokens instead." } }, { status: 400 });
+      }
+      expect(payload.max_completion_tokens).toBe(16384);
+      expect(payload.max_tokens).toBeUndefined();
+      if (fetchMock.mock.calls.length === 2) return overflow();
+      return Response.json(chatBody());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await generateAiCommitInfo(root, false)).toMatchObject({ ...message, chunked: true });
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(4);
+    expect(contentOf(fetchMock.mock.calls[0][1])).toEqual(contentOf(fetchMock.mock.calls[1][1]));
+    expect(contentOf(fetchMock.mock.calls.at(-1)![1]).summaries).toBeDefined();
+  });
+
+  it("does not retry indefinitely or drop the output cap when both token-limit parameters are rejected", async () => {
+    await ready();
+    await setAiCommitInfo("chat-key", "model", "openai", "https://provider.example/v1");
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ error: {
+      message: "Unsupported max_tokens and max_completion_tokens parameters",
+    } }, { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generateAiCommitInfo(root, false)).rejects.toThrow("Unsupported max_tokens and max_completion_tokens");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).max_completion_tokens).toBe(16384);
+  });
+
   it.each(["google", "openai"] as const)("splits rejected %s requests and merges every chunk without losing source text", async (provider) => {
     const text = await largeChange();
     if (provider === "openai") await setAiCommitInfo("chat-key", "model", "openai", "https://provider.example/v1");
@@ -482,8 +518,13 @@ describe("context-window fallback", () => {
     let rejections = 0;
     const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
       const payload = JSON.parse(init.body);
-      if (provider === "openai") expect(payload.response_format).toMatchObject({ type: "json_schema", json_schema: { strict: true } });
-      else expect(payload.generationConfig.responseMimeType).toBe("application/json");
+      if (provider === "openai") {
+        expect(payload.response_format).toMatchObject({ type: "json_schema", json_schema: { strict: true } });
+        expect(payload.max_tokens).toBe(16384);
+      } else {
+        expect(payload.generationConfig.responseMimeType).toBe("application/json");
+        expect(payload.generationConfig.maxOutputTokens).toBe(16384);
+      }
       if (Buffer.byteLength(init.body) > 24_000) {
         rejections++;
         return provider === "openai" ? overflow() : Response.json({ error: {

@@ -80,6 +80,8 @@ them instead, and nothing in `server/` or `web/` is Windows-specific.
   staged changes, or unstaged changes (including new files) when nothing is
   staged. Amend describes the complete replacement commit. Titles stay within
   72 characters; descriptions have no app-imposed length limit.
+  Every AI request has a 16,384-token output budget, including chunk summaries
+  and final merges. Truncated responses are rejected without replacing the draft.
   Generation sends all diff hunks with nearby context to the selected provider, plus new text
   files and change metadata; binary contents are not sent. Diffs over 8 MiB are
   rejected with an instruction to stage a smaller set, never silently truncated.

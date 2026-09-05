@@ -12,7 +12,7 @@ import { createApp } from "./app.js";
 import {
   clearAiCommitInfo, collectCommitDiff, generateAiCommitInfo, getAiCommitInfo, setAiCommitInfo,
 } from "./aiCommit.js";
-import type { CommitPart } from "./aiCommitChunks.js";
+import { commitParts, type CommitPart } from "./aiCommitChunks.js";
 
 const TMP = path.join(os.tmpdir(), `gitwebui-ai-${randomBytes(6).toString("hex")}`);
 const config = path.join(TMP, "config");
@@ -204,11 +204,15 @@ describe("complete commit diff selection", () => {
       { path: "empty.txt", kind: "text", content: "" },
       { path: "binary.bin", kind: "binary", content: null },
     ]));
+    expect(context.inventory).toEqual(expect.arrayContaining([
+      { path: "new file.txt", status: "A" }, { path: "empty.txt", status: "A" }, { path: "binary.bin", status: "A" },
+    ]));
     await runGit(root, ["add", "--", "new file.txt"]);
     const staged = JSON.parse((await collectCommitDiff(root, false)).serialized);
     expect(staged.source).toBe("staged");
     expect(staged.diff).toContain("+all new content");
     expect(staged.untracked).toEqual([]);
+    expect(staged.inventory).toEqual([{ path: "new file.txt", status: "A" }]);
   });
 
   it("describes only index content for partially staged files", async () => {
@@ -242,6 +246,9 @@ describe("complete commit diff selection", () => {
     expect(context.diff).toContain("rename from tracked.txt");
     expect(context.diff).toContain("deleted file mode");
     expect(context.diff).toContain("Binary files");
+    expect(context.inventory).toEqual(expect.arrayContaining([
+      { path: "renamed.txt", oldPath: "tracked.txt", status: "R" }, { path: "delete.txt", status: "D" },
+    ]));
   });
 
   it("includes the original commit and staged additions when amending, including a root commit", async () => {
@@ -250,11 +257,14 @@ describe("complete commit diff selection", () => {
     await runGit(root, ["add", "."]);
     let context = JSON.parse((await collectCommitDiff(root, true)).serialized);
     expect(context.diff).toContain("+original");
+    expect(context.inventory).toEqual([{ path: "tracked.txt", status: "A" }]);
     expect(context.diff).toContain("+new staged line");
     await runGit(root, ["commit", "-m", "Second"]);
     context = JSON.parse((await collectCommitDiff(root, true)).serialized);
     expect(context.diff).toContain("+new staged line");
     expect(context.diff).not.toContain("+original");
+    expect(context.files).toEqual([{ path: "tracked.txt", status: "M", staged: true }]);
+    expect(context.inventory).toEqual([{ path: "tracked.txt", status: "M" }]);
   });
 
   it("includes large new binaries as metadata while retaining the text payload limit", async () => {
@@ -278,6 +288,16 @@ describe("complete commit diff selection", () => {
     await fs.writeFile(path.join(root, "unicode.txt"), content);
     const context = JSON.parse((await collectCommitDiff(root, false)).serialized);
     expect(context.untracked).toContainEqual({ path: "unicode.txt", kind: "text", content });
+  });
+
+  it.each([0, 8000])("retains legacy-encoded new source with non-UTF-8 bytes at offset %i", async (offset) => {
+    const data = Buffer.concat([Buffer.alloc(offset, 32), Buffer.from([47, 47, 32, 0xb0, 0xa1, 10]), Buffer.from("void calibration() {}\n")]);
+    await fs.writeFile(path.join(root, "test.cpp"), data);
+    const context = JSON.parse((await collectCommitDiff(root, false)).serialized);
+    expect(context.untracked).toContainEqual({ path: "test.cpp", kind: "text", content: data.toString("utf8") });
+    await runGit(root, ["add", "test.cpp"]);
+    const staged = JSON.parse((await collectCommitDiff(root, false)).serialized);
+    expect(staged.diff).toContain(data.toString("utf8").split("\n").filter(Boolean).map((line) => `+${line}\n`).join(""));
   });
 
   it("rejects empty and oversized changes instead of silently dropping content", async () => {
@@ -556,13 +576,117 @@ describe("context-window fallback", () => {
     expect(contentOf(fetchMock.mock.calls.at(-1)![1]).summaries).toBeDefined();
   });
 
+  it.each([
+    [false, false], [true, false], [false, true],
+  ])("retains unstaged test moves and additions through fallback (intent to add: %s, legacy text: %s)", async (intentToAdd, legacyText) => {
+    await setAiCommitInfo("key", "model");
+    await fs.mkdir(path.join(root, "Server", "tests"), { recursive: true });
+    const code = Array.from({ length: 1500 }, (_, i) => `void calibration${i}() {}\n`).join("");
+    const data = Buffer.concat([Buffer.from(code), legacyText ? Buffer.from([47, 47, 32, 0xb0, 0xa1, 10]) : Buffer.alloc(0)]);
+    const moved = data.toString("utf8");
+    await fs.writeFile(path.join(root, "Server", "BotRealPlayerCalibrationTest.cpp"), data);
+    await runGit(root, ["add", "."]);
+    await runGit(root, ["commit", "-m", "Add calibration tests"]);
+    await fs.rename(path.join(root, "Server", "BotRealPlayerCalibrationTest.cpp"),
+      path.join(root, "Server", "tests", "BotRealPlayerCalibrationTest.cpp"));
+    const added = Array.from({ length: 1500 }, (_, i) => `void platformSmoke${i}() {}\n`).join("");
+    await fs.writeFile(path.join(root, "Server", "tests", "PlatformCoreSmoke.cpp"), added);
+    if (intentToAdd) await runGit(root, ["add", "-N", "Server/tests"]);
+    const context = await collectCommitDiff(root, false);
+    expect(context.source).toBe("unstaged");
+    const accepted: CommitPart[] = [];
+    const descriptions: string[] = [];
+    let rejections = 0;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async (_url, init) => {
+      const data = contentOf(init);
+      expect(data).toMatchObject({ source: "unstaged", amend: false });
+      if (Buffer.byteLength(init.body) > 16_000) {
+        rejections++;
+        return overflow();
+      }
+      let description: string;
+      if (data.changes) {
+        accepted.push(...data.changes);
+        description = `DETAIL-${descriptions.length}`;
+        descriptions.push(description);
+      } else {
+        expect(data.inventory).toEqual(context.context.inventory);
+        description = data.summaries.map((part: CommitPart) => part.text).join("\n");
+      }
+      return response({ title: "Move calibration tests and add platform tests", description });
+    }));
+    const result = await generateAiCommitInfo(root, false);
+    expect(result).toMatchObject({ source: "unstaged", chunked: true });
+    expect(rejections).toBeGreaterThan(1);
+    expect(result.description.split("\n")).toEqual(descriptions);
+    expect(accepted.filter((p) => p.kind === "status").map((p) => JSON.parse(p.text)))
+      .toEqual(context.context.files);
+    if (intentToAdd) {
+      expect(accepted.filter((p) => p.kind === "diff").map((p) => p.text).join(""))
+        .toBe(commitParts(context.context).filter((p) => p.kind === "diff").map((p) => p.text).join(""));
+      expect(accepted.some((p) => p.header?.includes("Server/tests/BotRealPlayerCalibrationTest.cpp"))).toBe(true);
+      expect(accepted.some((p) => p.text.includes("+void platformSmoke0() {}"))).toBe(true);
+    } else {
+      for (const [file, content] of [["BotRealPlayerCalibrationTest.cpp", moved], ["PlatformCoreSmoke.cpp", added]]) {
+        expect(accepted.filter((p) => p.kind === "untracked" && JSON.parse(p.header!).path === `Server/tests/${file}`)
+          .map((p) => p.text).join("")).toBe(content);
+      }
+      expect(accepted.filter((p) => p.kind === "diff").map((p) => p.text).join(""))
+        .toBe(moved.split("\n").filter(Boolean).map((line) => `-${line}\n`).join(""));
+    }
+  });
+
+  it.each(["google", "openai"] as const)("shrinks repeatedly rejected %s source and merge requests without losing changes", async (provider) => {
+    const text = await largeChange();
+    if (provider === "openai") await setAiCommitInfo("chat-key", "model", "openai", "https://provider.example/v1");
+    const accepted: CommitPart[] = [];
+    let previousRejectedSize = 0;
+    let sourceRejections = 0;
+    let mergeRejections = 0;
+    let summaries = 0;
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      const size = Buffer.byteLength(init.body);
+      const data = contentOf(init);
+      if (previousRejectedSize) expect(size).toBeLessThan(previousRejectedSize);
+      previousRejectedSize = 0;
+      if (size > 16_000) {
+        previousRejectedSize = size;
+        if (data.summaries) mergeRejections++;
+        else sourceRejections++;
+        return overflow();
+      }
+      let description: string;
+      if (data.changes) {
+        accepted.push(...data.changes);
+        description = `DETAIL-${summaries++}\n` + "evidence ".repeat(500);
+      } else {
+        expect(data.inventory).toEqual([{ path: "new.txt", status: "A" }]);
+        description = data.summaries.flatMap((p: CommitPart) => p.text.match(/DETAIL-\d+/g) ?? []).join("\n") || "Continuation";
+      }
+      const value = { title: "Describe all selected changes", description };
+      return provider === "openai" ? Response.json(chatBody(value)) : response(value);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await generateAiCommitInfo(root, false);
+    expect(result).toMatchObject({ source: "unstaged", chunked: true });
+    expect(sourceRejections).toBeGreaterThan(2);
+    expect(mergeRejections).toBeGreaterThan(2);
+    expect(accepted.filter((p) => p.kind === "untracked").map((p) => p.text).join("")).toBe(text);
+    expect(accepted.filter((p) => p.kind === "status").map((p) => JSON.parse(p.text)))
+      .toEqual([{ path: "new.txt", status: "?", staged: false }]);
+    for (let i = 0; i < summaries; i++) expect(result.description.split("\n")).toContain(`DETAIL-${i}`);
+    expect(contentOf(fetchMock.mock.calls.at(-1)![1]).summaries).toBeDefined();
+  });
+
   it("reduces oversized intermediate summaries, including splitting a single long summary", async () => {
     await largeChange();
+    const inventory = (await collectCommitDiff(root, false)).context.inventory;
     let summaries = 0;
     let rejectedMerges = 0;
     let splitSummary = false;
     vi.stubGlobal("fetch", vi.fn().mockImplementation(async (_url, init) => {
       const data = contentOf(init);
+      if (data.summaries) expect(data.inventory).toEqual(inventory);
       if (Buffer.byteLength(init.body) > 36_000) {
         if (data.summaries) rejectedMerges++;
         return overflow();
@@ -577,6 +701,59 @@ describe("context-window fallback", () => {
     expect(result.chunked).toBe(true);
     expect(splitSummary).toBe(true);
     for (let i = 0; i < summaries; i++) expect(result.description).toContain(`DETAIL-${i}`);
+  });
+
+  it("reduces summaries when the complete inventory is larger than the summary text", async () => {
+    await largeChange();
+    for (let i = 0; i < 200; i++) await fs.writeFile(path.join(root, `empty-${i}.txt`), "");
+    const inventory = (await collectCommitDiff(root, false)).context.inventory;
+    let merges = 0;
+    let summaries = 0;
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      const data = contentOf(init);
+      if (fetchMock.mock.calls.length === 1) return overflow();
+      if (data.changes) return response({ title: "Describe a portion", description: `DETAIL-${summaries++}\n` + "x".repeat(1500) });
+      expect(data.inventory).toEqual(inventory);
+      if (++merges === 1) {
+        expect(Buffer.byteLength(JSON.stringify(data.summaries))).toBeLessThan(Buffer.byteLength(JSON.stringify(inventory)));
+        return overflow();
+      }
+      const details = data.summaries.flatMap((p: CommitPart) => p.text.match(/DETAIL-\d+/g) ?? []);
+      return response({ title: "Combine changes", description: details.join("\n") || "Continuation" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await generateAiCommitInfo(root, false);
+    expect(merges).toBeGreaterThan(2);
+    for (let i = 0; i < summaries; i++) expect(result.description).toContain(`DETAIL-${i}`);
+  });
+
+  it("uses replacement-commit statuses when staged amend edits revert or modify HEAD changes", async () => {
+    await trackedFile();
+    await setAiCommitInfo("key", "model");
+    await fs.writeFile(path.join(root, "tracked.txt"), "HEAD change\n");
+    await fs.writeFile(path.join(root, "added.txt"), "HEAD addition\n");
+    await runGit(root, ["add", "."]);
+    await runGit(root, ["commit", "-m", "Change existing file and add another"]);
+    await fs.writeFile(path.join(root, "tracked.txt"), "original\n");
+    await fs.writeFile(path.join(root, "added.txt"), "replacement addition\n".repeat(1000));
+    await runGit(root, ["add", "."]);
+    const context = await collectCommitDiff(root, true);
+    expect(context.context.inventory).toEqual([{ path: "added.txt", status: "A" }]);
+    expect(context.context.files).toEqual([{ path: "added.txt", status: "A", staged: true }]);
+    const parts: CommitPart[] = [];
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      const data = contentOf(init);
+      expect(data).toMatchObject({ source: "staged", amend: true });
+      expect(init.body).not.toContain("tracked.txt");
+      if (fetchMock.mock.calls.length === 1) return overflow();
+      if (data.changes) parts.push(...data.changes);
+      if (data.summaries) expect(data.inventory).toEqual(context.context.inventory);
+      return response();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await generateAiCommitInfo(root, true)).toMatchObject({ source: "staged", chunked: true });
+    expect(parts.filter((p) => p.kind === "status").map((p) => JSON.parse(p.text)))
+      .toEqual(context.context.files);
   });
 
   it("keeps amend's complete staged replacement diff and excludes unstaged edits throughout fallback", async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import {
   countConflicts,
@@ -36,8 +36,9 @@ export function ConflictResolver() {
   const [busy, setBusy] = useState(false);
 
   const topRef = useRef<HTMLDivElement>(null);
+  const theirRef = useRef<HTMLDivElement>(null);
   const outRef = useRef<HTMLDivElement>(null);
-  const syncing = useRef(false);
+  const scrollPositions = useRef(new WeakMap<HTMLElement, { top: number; left: number }>());
 
   useEffect(() => {
     setChoices(Array.from({ length: total }, () => []));
@@ -46,11 +47,38 @@ export function ConflictResolver() {
 
   const rows = useMemo(() => buildGrid(parts, choices), [parts, choices]);
 
+  useLayoutEffect(() => {
+    const panes = [topRef.current, theirRef.current, outRef.current];
+    if (panes.some((pane) => !pane)) return;
+    const grids = panes as HTMLDivElement[];
+    const measure = () => {
+      let overflow = 0;
+      const previousLeft = Math.max(...grids.map((grid) => grid.scrollLeft));
+      for (const grid of grids) {
+        for (const text of grid.querySelectorAll<HTMLElement>(".cr-tx")) {
+          const gutter = text.previousElementSibling!.getBoundingClientRect().width;
+          const width = Math.ceil(text.getBoundingClientRect().width + gutter);
+          overflow = Math.max(overflow, width - grid.clientWidth);
+        }
+      }
+      for (const grid of grids) {
+        grid.style.setProperty("--cr-overflow", `${overflow}px`);
+        grid.scrollLeft = Math.min(previousLeft, overflow);
+        scrollPositions.current.set(grid, { top: grid.scrollTop, left: grid.scrollLeft });
+      }
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    grids.forEach((grid) => observer.observe(grid));
+    return () => observer.disconnect();
+  }, [rows, loading]);
+
   const scrollToConflict = (idx: number) => {
     const el = topRef.current?.querySelector<HTMLElement>(`[data-ch="${idx}"]`);
     if (!el || !topRef.current) return;
     const top = Math.max(0, el.offsetTop - 48);
     topRef.current.scrollTop = top;
+    if (theirRef.current) theirRef.current.scrollTop = top;
     if (outRef.current) outRef.current.scrollTop = top;
   };
 
@@ -68,18 +96,18 @@ export function ConflictResolver() {
     return () => document.removeEventListener("keydown", onKey);
   }, [busy, close]);
 
-  // Keep the Output pane's vertical scroll locked to the A/B pane and back.
-  const syncScroll = (from: "top" | "out") => {
-    if (syncing.current) return;
-    const src = from === "top" ? topRef.current : outRef.current;
-    const dst = from === "top" ? outRef.current : topRef.current;
-    if (!src || !dst) return;
-    syncing.current = true;
-    dst.scrollTop = src.scrollTop;
-    dst.scrollLeft = src.scrollLeft;
-    requestAnimationFrame(() => {
-      syncing.current = false;
-    });
+  // Mirror changed axes separately so a clamped vertical scroll cannot reset columns.
+  const syncScroll = (src: HTMLDivElement) => {
+    const previous = scrollPositions.current.get(src) ?? { top: 0, left: 0 };
+    const topChanged = src.scrollTop !== previous.top;
+    const leftChanged = src.scrollLeft !== previous.left;
+    scrollPositions.current.set(src, { top: src.scrollTop, left: src.scrollLeft });
+    for (const dst of [topRef.current, theirRef.current, outRef.current]) {
+      if (!dst || dst === src) continue;
+      if (topChanged) dst.scrollTop = src.scrollTop;
+      if (leftChanged) dst.scrollLeft = src.scrollLeft;
+      scrollPositions.current.set(dst, { top: dst.scrollTop, left: dst.scrollLeft });
+    }
   };
 
   const toggle = (idx: number, side: Side) => {
@@ -167,10 +195,21 @@ export function ConflictResolver() {
                 </span>
               </div>
             </div>
-            <div className="cr-grid" ref={topRef} onScroll={() => syncScroll("top")}>
-              {rows.map((r, i) => (
-                <TopRow key={i} row={r} choices={choices} onToggle={toggle} />
-              ))}
+            <div className="cr-sides-grids">
+              <div className="cr-grid" ref={topRef} onScroll={(e) => syncScroll(e.currentTarget)}>
+                <div className="cr-grid-content">
+                  {rows.map((r, i) => (
+                    <TopRow key={i} row={r} choices={choices} onToggle={toggle} side="ours" />
+                  ))}
+                </div>
+              </div>
+              <div className="cr-grid" ref={theirRef} onScroll={(e) => syncScroll(e.currentTarget)}>
+                <div className="cr-grid-content">
+                  {rows.map((r, i) => (
+                    <TopRow key={i} row={r} choices={choices} onToggle={toggle} side="theirs" />
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -189,10 +228,12 @@ export function ConflictResolver() {
                 </button>
               </div>
             </div>
-            <div className="cr-grid cr-out-grid" ref={outRef} onScroll={() => syncScroll("out")}>
-              {rows.map((r, i) => (
-                <OutRow key={i} row={r} />
-              ))}
+            <div className="cr-grid cr-out-grid" ref={outRef} onScroll={(e) => syncScroll(e.currentTarget)}>
+              <div className="cr-grid-content">
+                {rows.map((r, i) => (
+                  <OutRow key={i} row={r} />
+                ))}
+              </div>
             </div>
           </div>
         </>
@@ -277,41 +318,35 @@ function TopRow({
   row,
   choices,
   onToggle,
+  side,
 }: {
   row: GridRow;
   choices: Side[][];
   onToggle: (idx: number, side: Side) => void;
+  side: Side;
 }) {
   if (row.kind === "header") {
     const idx = row.cidx!;
-    const ourOn = choices[idx]?.includes("ours") ?? false;
-    const theirOn = choices[idx]?.includes("theirs") ?? false;
+    const on = choices[idx]?.includes(side) ?? false;
+    const label = side === "ours" ? "A" : "B";
     return (
       <div className="cr-row cr-hrow" data-ch={idx}>
         <button
-          className={"cr-cell cr-pick ours" + (ourOn ? " on" : "")}
-          onClick={() => onToggle(idx, "ours")}
-          title={ourOn ? "Remove side A" : "Keep side A"}
+          className={"cr-cell cr-pick " + side + (on ? " on" : "")}
+          onClick={() => onToggle(idx, side)}
+          title={on ? `Remove side ${label}` : `Keep side ${label}`}
         >
-          <span className="cr-box">{ourOn && <IconCheck width={11} height={11} />}</span>
-          Conflict {idx + 1}
-        </button>
-        <button
-          className={"cr-cell cr-pick theirs" + (theirOn ? " on" : "")}
-          onClick={() => onToggle(idx, "theirs")}
-          title={theirOn ? "Remove side B" : "Keep side B"}
-        >
-          <span className="cr-box">{theirOn && <IconCheck width={11} height={11} />}</span>
+          <span className="cr-box">{on && <IconCheck width={11} height={11} />}</span>
           Conflict {idx + 1}
         </button>
       </div>
     );
   }
   const conflict = row.kind === "conflict";
+  const cell = side === "ours" ? row.a : row.b;
   return (
     <div className="cr-row">
-      <CodeCell cell={row.a} cls={conflict ? (row.a ? "ours" : "absent") : ""} />
-      <CodeCell cell={row.b} cls={conflict ? (row.b ? "theirs" : "absent") : ""} />
+      <CodeCell cell={cell} cls={conflict ? (cell ? side : "absent") : ""} />
     </div>
   );
 }

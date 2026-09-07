@@ -18,6 +18,7 @@ export interface ConflictPart {
   ours?: string[];
   theirs?: string[];
   base?: string[];
+  markerEol?: "\n" | "\r\n";
 }
 
 export function parseConflicts(text: string): ConflictPart[] {
@@ -36,6 +37,7 @@ export function parseConflicts(text: string): ConflictPart[] {
     const line = lines[i];
     if (line.startsWith("<<<<<<<")) {
       flush();
+      const markerEol = line.endsWith("\r") ? "\r\n" : "\n";
       const ours: string[] = [];
       const theirs: string[] = [];
       const base: string[] = [];
@@ -59,7 +61,7 @@ export function parseConflicts(text: string): ConflictPart[] {
         i++;
       }
       if (i < lines.length && startsMarker(lines[i], ">>>>>>>")) i++;
-      parts.push({ kind: "conflict", lines: [], ours, theirs, ...(hasBase ? { base } : {}) });
+      parts.push({ kind: "conflict", lines: [], ours, theirs, markerEol, ...(hasBase ? { base } : {}) });
     } else {
       textBuf.push(line);
       i++;
@@ -71,7 +73,7 @@ export function parseConflicts(text: string): ConflictPart[] {
 
 // A marker is the token at line start, either alone or followed by a space+label.
 function startsMarker(line: string, token: string): boolean {
-  return line === token || line.startsWith(token + " ");
+  return line === token || line === token + "\r" || line.startsWith(token + " ");
 }
 
 export function countConflicts(parts: ConflictPart[]): number {
@@ -106,7 +108,8 @@ export function reconstruct(parts: ConflictPart[], choices: Side[][]): string {
       if (choice.length > 0) {
         out.push(...chosenLines(part, choice));
       } else {
-        out.push("<<<<<<< HEAD", ...(part.ours ?? []), "=======", ...(part.theirs ?? []), ">>>>>>> incoming");
+        const cr = part.markerEol === "\r\n" ? "\r" : "";
+        out.push(`<<<<<<< HEAD${cr}`, ...(part.ours ?? []), `=======${cr}`, ...(part.theirs ?? []), `>>>>>>> incoming${cr}`);
       }
     }
   }

@@ -100,6 +100,14 @@
   background: var(--bg-panel-2);
   border-bottom: 1px solid var(--border);
 }
+.cr-sides-grids {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.cr-sides-grids > .cr-grid + .cr-grid {
+  border-left: 1px solid var(--border);
+}
 .cr-pane-head {
   flex: 1;
   min-width: 0;
@@ -189,10 +197,14 @@
 .cr-grid {
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
   font-family: var(--font-mono);
   font-size: 12.5px;
+}
+.cr-grid-content {
+  width: calc(100% + var(--cr-overflow, 0px));
   padding-bottom: 45vh; /* allow the last conflict to scroll into view */
 }
 .cr-row {
@@ -211,9 +223,6 @@
   overflow: hidden;
   white-space: pre;
 }
-.cr-cell + .cr-cell {
-  border-left: 1px solid var(--border);
-}
 .cr-ln {
   flex-shrink: 0;
   width: var(--cr-gutter);
@@ -224,10 +233,8 @@
   font-variant-numeric: tabular-nums;
 }
 .cr-tx {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: clip;
+  flex: 0 0 auto;
+  width: max-content;
   padding-right: 10px;
 }
 

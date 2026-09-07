@@ -90,12 +90,94 @@
   max-height: min(230px, 34vh);
   overflow-y: auto;
   overscroll-behavior: contain;
-  white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
-  color: var(--text-dim);
+  color: var(--text-strong);
   line-height: 1.5;
+}
+.cd-body p,
+.cd-body ul,
+.cd-body ol,
+.cd-body pre,
+.cd-body blockquote,
+.cd-body table,
+.cd-body h1,
+.cd-body h2,
+.cd-body h3,
+.cd-body h4,
+.cd-body h5,
+.cd-body h6 {
+  margin: 0 0 10px;
+}
+.cd-body > :last-child {
+  margin-bottom: 0;
+}
+.cd-body h1,
+.cd-body h2,
+.cd-body h3,
+.cd-body h4,
+.cd-body h5,
+.cd-body h6 {
+  font-size: inherit;
+  font-weight: 600;
+}
+.cd-body p {
+  white-space: pre-wrap;
+}
+.cd-body ul,
+.cd-body ol {
+  padding-left: 22px;
+}
+.cd-body li > p {
+  margin-bottom: 4px;
+}
+.cd-body li > ul,
+.cd-body li > ol {
+  margin-bottom: 0;
+}
+.cd-body pre,
+.cd-body code {
+  font-family: inherit;
+  font-size: inherit;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+}
+.cd-body code {
+  padding: 1px 3px;
+}
+.cd-body pre {
+  padding: 8px;
+  white-space: pre-wrap;
+}
+.cd-body pre code {
+  padding: 0;
+}
+.cd-body blockquote {
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+.cd-body a {
+  color: inherit;
+  text-decoration: underline;
+}
+.cd-body img {
+  max-width: 100%;
+  height: auto;
+}
+.cd-body table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.cd-body th,
+.cd-body td {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+}
+.cd-body hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 10px 0;
 }
 .cd-meta {
   flex-shrink: 0;

@@ -1,3 +1,6 @@
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { openExternal } from "../desktop";
 import { useStore } from "../state/store";
 import type { CommitFile } from "../types";
 import { ChangedFiles } from "./ChangedFiles";
@@ -57,7 +60,45 @@ export function CommitDetails() {
 
       <div className="cd-message">
         <div className="cd-subject">{commit.subject}</div>
-        {commit.body && <pre className="cd-body">{commit.body}</pre>}
+        {commit.body && (
+          <div className="cd-body">
+            <Markdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                a: ({ node, href, children, ...props }) => (
+                  <a
+                    {...props}
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (!href) return;
+                      if (href.startsWith("#")) {
+                        let id: string;
+                        try {
+                          id = decodeURIComponent(href.slice(1));
+                        } catch {
+                          return;
+                        }
+                        const body = e.currentTarget.closest(".cd-body");
+                        const target = Array.from(body?.querySelectorAll("[id]") ?? [])
+                          .find((element) => element.id === id);
+                        target?.scrollIntoView({ block: "nearest" });
+                        return;
+                      }
+                      openExternal(href);
+                    }}
+                  >
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {commit.body}
+            </Markdown>
+          </div>
+        )}
       </div>
 
       <div className="cd-meta">

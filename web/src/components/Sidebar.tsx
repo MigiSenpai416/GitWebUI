@@ -3,6 +3,7 @@ import { localRef, useStore } from "../state/store";
 import { writeClipboard } from "../desktop";
 import type { Branch, RemoteBranch, Worktree } from "../types";
 import { buildTree, type TreeNode } from "./fileTree";
+import { PullRequests } from "./PullRequests";
 import {
   IconBranch,
   IconChevron,
@@ -222,6 +223,8 @@ export function Sidebar() {
         )}
       </Section>
 
+      {repo && <PullRequests key={repo.root} />}
+
       {repo && <div className="sb-repo" title={repo.root}>{repo.root}</div>}
 
       {rbMenu && (
@@ -266,7 +269,7 @@ interface SectionProps {
   children: React.ReactNode;
 }
 
-function Section({ icon, label, count, open, onToggle, actions, children }: SectionProps) {
+export function Section({ icon, label, count, open, onToggle, actions, children }: SectionProps) {
   const hasActions = !!actions && actions.length > 0;
   return (
     <section className={"sb-section" + (hasActions ? " has-action" : "")}>

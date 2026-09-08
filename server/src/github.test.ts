@@ -1387,7 +1387,7 @@ describe("createPullRequest", () => {
     globalThis.fetch = realFetch;
   });
 
-  it("posts to the base repo and keeps a fork's head qualified", async () => {
+  it("posts to the base repo and identifies a fork owned by the same organization", async () => {
     let seen: { url: string; init: RequestInit } | null = null;
     globalThis.fetch = (async (url: string, init: RequestInit) => {
       seen = { url: String(url), init };
@@ -1404,7 +1404,8 @@ describe("createPullRequest", () => {
       repo: "repo",
       title: "t",
       body: "why",
-      head: "me:feature",
+      head: "up:feature",
+      headRepo: "fork",
       base: "main",
       draft: true,
     });
@@ -1415,7 +1416,8 @@ describe("createPullRequest", () => {
     expect(JSON.parse(String(seen!.init.body))).toEqual({
       title: "t",
       body: "why",
-      head: "me:feature",
+      head: "up:feature",
+      head_repo: "fork",
       base: "main",
       draft: true,
     });

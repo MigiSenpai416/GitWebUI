@@ -84,7 +84,7 @@ export function ToastStack() {
 }
 
 /** One message. It retreats the way it arrived — after five seconds, or when dismissed. */
-function Toast({ toast, onClose }: { toast: ToastItem; onClose: () => void }) {
+export function Toast({ toast, onClose }: { toast: ToastItem; onClose: () => void }) {
   const [leaving, setLeaving] = useState(false);
   // Held in a ref so the exit timer isn't restarted by the parent re-rendering.
   const close = useRef(onClose);

@@ -25,6 +25,10 @@ import type {
   MergeStrategy,
   PrContext,
   PrMeta,
+  PullRequestSummary,
+  PullRequestDetails,
+  PrActivity,
+  PrChecks,
   PushForce,
   RepoInfo,
   Remote,
@@ -375,7 +379,19 @@ export const api = {
     ),
 
   // Pull requests (GitHub)
-  prContext: () => req<PrContext>("/api/pr/context"),
+  prContext: (signal?: AbortSignal, branch?: string) => req<PrContext>(`/api/pr/context${branch ? `?branch=${encodeURIComponent(branch)}` : ""}`, { signal }),
+  prList: (repo: string, state: string, page: number, signal?: AbortSignal) =>
+    req<{ items: PullRequestSummary[]; hasMore: boolean }>(`/api/pr/list?repo=${encodeURIComponent(repo)}&state=${state}&page=${page}`, { signal }),
+  prDetails: (repo: string, number: number, signal?: AbortSignal) =>
+    req<PullRequestDetails>(`/api/pr/details?repo=${encodeURIComponent(repo)}&number=${number}`, { signal }),
+  prActivity: (repo: string, number: number, kind: string, page: number, signal?: AbortSignal) =>
+    req<{ items: PrActivity[]; hasMore: boolean; sha?: string }>(`/api/pr/activity?repo=${encodeURIComponent(repo)}&number=${number}&kind=${kind}&page=${page}`, { signal }),
+  prChecks: (repo: string, number: number, page: number, signal?: AbortSignal) =>
+    req<PrChecks>(`/api/pr/checks?repo=${encodeURIComponent(repo)}&number=${number}&page=${page}`, { signal }),
+  prAction: (repo: string, number: number, input: Record<string, unknown>) =>
+    req<{ ok: boolean }>("/api/pr/action", { method: "POST", body: JSON.stringify({ ...input, repo, number }) }),
+  prReply: (repo: string, number: number, commentId: number, body: string) =>
+    req<{ ok: boolean; reply: PrActivity }>("/api/pr/action", { method: "POST", body: JSON.stringify({ action: "reply", repo, number, commentId, body }) }),
   prBranches: (repo: string) =>
     req<{ branches: string[] }>(`/api/pr/branches?repo=${encodeURIComponent(repo)}`),
   prMeta: (repo: string) => req<PrMeta>(`/api/pr/meta?repo=${encodeURIComponent(repo)}`),

@@ -1264,6 +1264,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   async createPullRequest(input: CreatePrInput) {
     // Errors propagate so the dialog can show them inline.
+    const root = get().repo?.root;
+    if (!root) throw new Error("The repository is no longer active.");
+    if (get().remoteBusy) throw new Error("Wait for the current remote operation to finish.");
     set({ remoteBusy: true, busyAction: "pr" });
     try {
       const created = await api.prCreate(input);
@@ -1272,9 +1275,9 @@ export const useStore = create<AppState>((set, get) => ({
       // window.open would be caught by the window-open handler anyway, and
       // without one it would put github.com inside a privileged window.
       openExternal(created.htmlUrl);
-      await refreshRepoData(get, set);
+      await refreshRepoData(get, set, root);
       const warn = created.warnings.length > 0 ? ` — ${created.warnings.join("; ")}` : "";
-      raise(set, "notice", `Opened pull request #${created.number}${warn}`);
+      if (isActiveRepo(get, root)) raise(set, "notice", `Opened pull request #${created.number}${warn}`);
       return created;
     } finally {
       set({ remoteBusy: false, busyAction: null });

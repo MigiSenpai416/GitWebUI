@@ -20,6 +20,9 @@ export function PullRequestDialog() {
   const headBranchHint = useStore((s) => s.prHeadBranch);
   const commits = useStore((s) => s.commits);
   const githubStatus = useStore((s) => s.githubStatus);
+  const root = useStore((s) => s.repo?.root);
+  const remotes = useStore((s) => s.remotes);
+  const remoteKey = remotes.map((r) => `${r.name}:${r.url}`).join("|");
   const openGitHubDialog = useStore((s) => s.openGitHubDialog);
   const openAddRemote = useStore((s) => s.openAddRemote);
   const ensureBranchPushed = useStore((s) => s.ensureBranchPushed);
@@ -51,24 +54,39 @@ export function PullRequestDialog() {
   const [hint, setHint] = useState<string | null>(null);
 
   const connected = Boolean(githubStatus?.user);
+  const templateRequest = useRef(0);
+  const initialized = useRef(false);
+  const dialogRoot = useRef(root);
+  const currentBody = useRef(body);
+  currentBody.current = body;
 
-  // Load the dialog's context once per open.
   useEffect(() => {
-    if (!open) return;
+    if (open && dialogRoot.current !== root) close();
+    dialogRoot.current = root;
+  }, [open, root, close]);
+
+  // Resolve the source repository for the selected branch.
+  useEffect(() => {
+    if (!open || !connected) return;
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
     api
-      .prContext()
+      .prContext(undefined, headBranch || headBranchHint || undefined)
       .then((data) => {
         if (cancelled) return;
         setCtx(data);
-        const head = headBranchHint ?? data.head.branch;
+        const head = data.head.branch;
         setHeadRepo(data.head.repo?.fullName ?? "");
         setHeadBranch(head);
-        setBaseRepo(data.defaults.baseRepo ?? "");
-        setBaseBranch(data.defaults.baseBranch ?? "");
-        setTitle(defaultTitle(commits, head));
+        if (!initialized.current || !data.baseCandidates.some((r) => r.fullName === baseRepo)) {
+          setBaseRepo(data.defaults.baseRepo ?? "");
+          setBaseBranch(data.defaults.baseBranch ?? "");
+        }
+        if (!initialized.current) {
+          setTitle(defaultTitle(commits, head));
+          initialized.current = true;
+        }
       })
       .catch((e) => {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : "Couldn't load repositories.");
@@ -81,7 +99,7 @@ export function PullRequestDialog() {
     };
     // `commits` is only read for the initial title — deliberately not a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, headBranchHint]);
+  }, [open, headBranchHint, headBranch, connected, githubStatus?.user?.login, root, remoteKey]);
 
   // Target repo drives the base-branch list and the reviewer/label options.
   useEffect(() => {
@@ -116,6 +134,12 @@ export function PullRequestDialog() {
   // Reset everything when the dialog closes so the next open starts clean.
   useEffect(() => {
     if (open) return;
+    initialized.current = false;
+    templateRequest.current += 1;
+    setHeadBranch("");
+    setHeadRepo("");
+    setBaseRepo("");
+    setBaseBranch("");
     setCtx(null);
     setTemplatePath("");
     setAppliedTemplate("");
@@ -148,6 +172,7 @@ export function PullRequestDialog() {
   if (!open) return null;
 
   const pickTemplate = async (path: string) => {
+    const request = ++templateRequest.current;
     setHint(null);
     setTemplatePath(path);
     if (!path) {
@@ -158,13 +183,15 @@ export function PullRequestDialog() {
     }
     try {
       const { body: text } = await api.prTemplate(path);
-      if (body.trim() === "" || body === appliedTemplate) {
+      if (request !== templateRequest.current) return;
+      if (currentBody.current.trim() === "" || currentBody.current === appliedTemplate) {
         setBody(text);
         setAppliedTemplate(text);
       } else {
         setHint("Kept your description — clear it to use the template.");
       }
     } catch (e) {
+      if (request !== templateRequest.current) return;
       setError(e instanceof Error ? e.message : "Couldn't read the template.");
     }
   };
@@ -180,10 +207,6 @@ export function PullRequestDialog() {
       setError("Enter a title for the pull request.");
       return;
     }
-    if (headRepo === baseRepo && headBranch === baseBranch) {
-      setError("The source and target branches are the same.");
-      return;
-    }
     setBusy(true);
     try {
       const check = await ensureBranchPushed(headBranch);
@@ -191,11 +214,24 @@ export function PullRequestDialog() {
         if (check.reason) setError(check.reason);
         return;
       }
+      if (useStore.getState().repo?.root !== root) throw new Error("The repository changed. Reopen the pull request dialog.");
+      const source = await api.prContext(undefined, headBranch);
+      if (useStore.getState().repo?.root !== root) throw new Error("The repository changed. Reopen the pull request dialog.");
+      if (useStore.getState().githubStatus?.user?.login !== githubStatus?.user?.login) throw new Error("The GitHub account changed. Try again with the connected account.");
+      const branch = source.head.branches.find((b) => b.name === headBranch);
+      const prefix = `${source.head.remote}/`;
+      if (source.head.repo?.fullName !== headRepo || !branch?.upstream?.startsWith(prefix) || branch.upstreamGone || branch.ahead !== 0) {
+        throw new Error("The source remote changed or the branch is not pushed. Check the source repository and try again.");
+      }
+      const remoteBranch = branch.upstream.slice(prefix.length);
+      if (headRepo.toLowerCase() === baseRepo.toLowerCase() && remoteBranch === baseBranch) {
+        throw new Error("The source and target branches are the same.");
+      }
       await createPullRequest({
         baseRepo,
         base: baseBranch,
         headRepo,
-        head: headBranch,
+        head: remoteBranch,
         title: title.trim(),
         body,
         draft,

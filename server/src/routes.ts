@@ -50,6 +50,7 @@ import {
   type PushForce,
 } from "./git/remote.js";
 import * as github from "./github.js";
+import * as pullRequests from "./pullRequests.js";
 import {
   githubRemotes,
   findPullRequestTemplates,
@@ -721,15 +722,71 @@ function repoParam(v: unknown): { owner: string; repo: string } {
   return { owner, repo };
 }
 
+function prTarget(req: Request) {
+  requireRepoRoot(req);
+  const slug = String(req.query.repo ?? req.body?.repo ?? "");
+  if (!/^[\w.-]+\/[\w.-]+$/.test(slug) || slug.split("/").some((s) => s === "." || s === "..")) {
+    throw Object.assign(new Error("A valid repository (owner/name) is required"), { status: 400 });
+  }
+  const number = Number(req.query.number ?? req.body?.number);
+  const page = Number(req.query.page ?? 1);
+  if (!Number.isSafeInteger(page) || page < 1 || page > 10000) {
+    throw Object.assign(new Error("Invalid page"), { status: 400 });
+  }
+  return { slug, number, page };
+}
+
+function requirePrNumber(number: number) {
+  if (!Number.isSafeInteger(number) || number < 1) {
+    throw Object.assign(new Error("Invalid pull request number"), { status: 400 });
+  }
+}
+
+api.get("/pr/list", gh(async (req, res) => {
+  const { slug, page } = prTarget(req);
+  const state = String(req.query.state ?? "open");
+  if (!["open", "closed", "all"].includes(state)) {
+    res.status(400).json({ error: "Invalid pull request state" });
+    return;
+  }
+  res.json(await pullRequests.listPullRequests(await requireGitHubToken(), slug, state, page));
+}));
+
+api.get("/pr/details", gh(async (req, res) => {
+  const { slug, number } = prTarget(req);
+  requirePrNumber(number);
+  res.json(await pullRequests.pullRequestDetails(await requireGitHubToken(), slug, number));
+}));
+
+api.get("/pr/activity", gh(async (req, res) => {
+  const { slug, number, page } = prTarget(req);
+  requirePrNumber(number);
+  res.json(await pullRequests.pullRequestActivity(await requireGitHubToken(), slug, number, String(req.query.kind), page));
+}));
+
+api.get("/pr/checks", gh(async (req, res) => {
+  const { slug, number, page } = prTarget(req);
+  requirePrNumber(number);
+  res.json(await pullRequests.pullRequestChecks(await requireGitHubToken(), slug, number, page));
+}));
+
+api.post("/pr/action", gh(async (req, res) => {
+  const { slug, number } = prTarget(req);
+  requirePrNumber(number);
+  res.json(await pullRequests.actOnPullRequest(await requireGitHubToken(), slug, number, req.body));
+}));
+
 api.get("/pr/context", gh(async (req, res) => {
   const root = requireRepoRoot(req);
   const token = await requireGitHubToken();
-  const [remotes, branches, templates, branch] = await Promise.all([
-    githubRemotes(root),
+  const [branches, templates, branch] = await Promise.all([
     getBranches(root),
     findPullRequestTemplates(root),
     currentBranch(root),
   ]);
+  const selectedBranch = typeof req.query.branch === "string" ? req.query.branch : branch;
+  const upstreamRemote = branches.find((b) => b.name === selectedBranch)?.upstream?.split("/")[0] ?? null;
+  const remotes = await githubRemotes(root, upstreamRemote);
 
   // Resolve each GitHub remote against the API; an inaccessible one is skipped
   // rather than failing the whole dialog.
@@ -759,7 +816,6 @@ api.get("/pr/context", gh(async (req, res) => {
   }
 
   // Prefer the remote the current branch tracks, then origin, then whatever exists.
-  const upstreamRemote = branches.find((b) => b.current)?.upstream?.split("/")[0] ?? null;
   const headEntry =
     live.find((x) => x.remote === upstreamRemote) ??
     live.find((x) => x.remote === "origin") ??
@@ -772,7 +828,7 @@ api.get("/pr/context", gh(async (req, res) => {
   res.json({
     viewer: (await github.status()).user,
     head: {
-      branch,
+      branch: selectedBranch,
       branches,
       repo: headRef,
       remote: headEntry?.remote ?? null,
@@ -841,6 +897,7 @@ api.post("/pr/create", gh(async (req, res) => {
     title,
     body: String(req.body?.body ?? ""),
     head: sameRepo ? headBranch : `${head.owner}:${headBranch}`,
+    ...(!sameRepo ? { headRepo: head.repo } : {}),
     base: baseBranch,
     draft: Boolean(req.body?.draft),
   });

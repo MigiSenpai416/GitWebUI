@@ -123,7 +123,8 @@ them instead, and nothing in `server/` or `web/` is Windows-specific.
 - **Pull requests** — open a GitHub PR from the branch menu: pick the source and
   target repo/branch (forks target their upstream by default), fill the title and
   description from a repo **PR template**, add reviewers, assignees and labels,
-  and optionally **submit as draft**.
+  and optionally **submit as draft**. Browse PRs in the left sidebar and open a
+  detail modal to read changes, comment, review, edit, close/reopen, or merge.
 - **GitHub remotes** — a **LOCAL / REMOTE** left sidebar (checkout branches;
   right-click a remote branch to check it out or **delete it on the remote**;
   hover **REMOTE** for a green + to add a remote). Connect with GitHub OAuth or
@@ -322,6 +323,39 @@ branch. The dialog reads the repo's GitHub remotes, so:
   **push it first**.
 
 The created PR opens in a new browser tab.
+
+The sidebar's **Pull Requests** section lists PRs for a selected GitHub remote
+or its fork parent. **Open** is the default; **Closed**, **Merged**, and **All
+states** are also available. Expand **My Pull Requests** (authored by you),
+**Assigned to Me**, **Review Requested** (requested directly from you), or
+**All Pull Requests**. A PR may appear in several groups. Team review requests
+are visible in PR details. Search and group counts cover the loaded pages;
+use **Load more pull requests** for older results and the refresh button to
+check for updates. The + button opens the existing creation dialog.
+
+Click a PR to open its detail modal, with Markdown description, people, labels,
+**Conversation**, **Commits**, **Checks**, and **Files changed** tabs. Conversation
+combines general comments and reviews in chronological order, with code snippets
+and replies grouped under their review. The merge box appears below the timeline.
+Submit a review through **Files changed → Review changes**, using Comment,
+Approve, or Request changes; general PR comments stay in Conversation.
+In **Files changed**, expand a file and use the **+** beside a diff line to
+post an **Add single comment** immediately. Removed lines use the old side;
+added and context lines use the new side. These comments appear as threads in
+Conversation. Draft text survives tab switches and refreshes; reselect a line
+after refreshing. New PR commits require a fresh diff before posting.
+Each activity tab supports pagination. Missing check permissions and GitHub's
+large-PR limits are shown explicitly, with GitHub links for full details.
+Images open through a link, and code-comment threads can be read in the modal;
+inline replies can be posted directly in their code-comment thread. Draft
+readiness changes are available through **Open in GitHub**.
+
+The modal supports posting comments and reviews, editing the title/description,
+closing/reopening, and merging using the repository's enabled merge methods.
+Controls reflect your account's repository permissions; GitHub still enforces
+token scopes, branch protection, and review rules. Merge and review submissions
+include the inspected head commit. Failed submissions preserve your text.
+Reviews, close/reopen, and merges require confirmation within the app.
 
 Git commands, including those in the terminal panel, receive the connected account's
 token through a temporary credential helper scoped to HTTPS `github.com`. This also

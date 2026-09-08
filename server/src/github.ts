@@ -332,7 +332,7 @@ export async function deleteToken(): Promise<void> {
   await remove;
 }
 
-function ghHeaders(token: string): Record<string, string> {
+export function ghHeaders(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
@@ -341,7 +341,7 @@ function ghHeaders(token: string): Record<string, string> {
   };
 }
 
-function ghError(status: number, body: string): Error & { status: number } {
+export function ghError(status: number, body: string): Error & { status: number } {
   let message = `GitHub API error (${status})`;
   try {
     const j = JSON.parse(body);
@@ -1297,6 +1297,7 @@ export async function createPullRequest(
     title: string;
     body: string;
     head: string;
+    headRepo?: string;
     base: string;
     draft: boolean;
   },
@@ -1308,6 +1309,7 @@ export async function createPullRequest(
       title: opts.title,
       body: opts.body || undefined,
       head: opts.head,
+      head_repo: opts.headRepo,
       base: opts.base,
       draft: opts.draft,
     }),

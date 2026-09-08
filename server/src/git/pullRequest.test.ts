@@ -72,6 +72,23 @@ describe("readPullRequestTemplate", () => {
 });
 
 describe("githubRemotes", () => {
+  it("keeps the selected tracking alias when multiple remotes share a repository", async () => {
+    await runGit(ROOT, ["init", "-b", "main"]);
+    await runGit(ROOT, ["remote", "add", "alias", "https://github.com/me/repo.git"]);
+    await runGit(ROOT, ["remote", "add", "origin", "git@github.com:me/repo.git"]);
+    expect((await githubRemotes(ROOT)).map((r) => r.remote)).toEqual(["origin"]);
+    expect((await githubRemotes(ROOT, "alias")).map((r) => r.remote)).toEqual(["alias"]);
+  });
+
+  it("puts the selected upstream ahead of the repository lookup cap", async () => {
+    await runGit(ROOT, ["init", "-b", "main"]);
+    for (const name of ["origin", "a", "b", "c", "d", "upstream"]) {
+      await runGit(ROOT, ["remote", "add", name, `https://github.com/me/${name}.git`]);
+    }
+    const remotes = await githubRemotes(ROOT, "upstream");
+    expect(remotes.slice(0, 5).map((r) => r.remote)).toEqual(["upstream", "origin", "a", "b", "c"]);
+  });
+
   it("keeps GitHub remotes (origin first) and drops the rest", async () => {
     await runGit(ROOT, ["init", "-b", "main"]);
     await runGit(ROOT, ["remote", "add", "upstream", "https://github.com/up/repo.git"]);

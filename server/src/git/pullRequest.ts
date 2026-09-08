@@ -47,12 +47,13 @@ const TEMPLATE_BASENAMES = [
 const TEMPLATE_EXTENSIONS = [".md", ".markdown", ".txt"];
 
 /**
- * The repo's GitHub remotes, de-duplicated by owner/repo with `origin` first —
- * the order the From/To repo pickers present them in. Non-GitHub remotes are
- * dropped.
+ * The repo's GitHub remotes, de-duplicated by owner/repo with the preferred
+ * tracking remote first, then `origin`. Non-GitHub remotes are dropped.
  */
-export async function githubRemotes(root: string): Promise<GitHubRemote[]> {
+export async function githubRemotes(root: string, preferredRemote?: string | null): Promise<GitHubRemote[]> {
   const remotes = await getRemotes(root);
+  const rank = (name: string) => name === preferredRemote ? 0 : name === "origin" ? 1 : 2;
+  remotes.sort((a, b) => rank(a.name) - rank(b.name));
   const seen = new Set<string>();
   const out: GitHubRemote[] = [];
   for (const r of remotes) {
@@ -63,7 +64,6 @@ export async function githubRemotes(root: string): Promise<GitHubRemote[]> {
     seen.add(key);
     out.push({ remote: r.name, owner: slug.owner, repo: slug.repo, url: r.url });
   }
-  out.sort((a, b) => Number(b.remote === "origin") - Number(a.remote === "origin"));
   return out;
 }
 

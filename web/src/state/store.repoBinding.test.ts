@@ -3,6 +3,8 @@ import { api } from "../api/client";
 import type { RepoInfo, StatusResult } from "../types";
 import { useStore } from "./store";
 
+vi.mock("../desktop", () => ({ openExternal: vi.fn() }));
+
 const REPO_A: RepoInfo = { root: "C:/repos/a", branch: "main", head: "aaa" };
 const REPO_B: RepoInfo = { root: "C:/repos/b", branch: "trunk", head: "bbb" };
 const STATUS_A: StatusResult = { staged: [{ path: "a.txt", status: "M", staged: true }], unstaged: [] };
@@ -50,6 +52,33 @@ beforeEach(() => {
 });
 
 describe("repo-bound core mutations", () => {
+  it("does not refresh another repository after creating a pull request", async () => {
+    const created = deferred<Awaited<ReturnType<typeof api.prCreate>>>();
+    vi.spyOn(api, "prCreate").mockImplementation(() => created.promise);
+    const remoteBranches = vi.spyOn(api, "remoteBranches");
+    const operation = useStore.getState().createPullRequest({
+      baseRepo: "owner/a", base: "main", headRepo: "owner/a", head: "feature",
+      title: "Feature", body: "", draft: false, reviewers: [], assignees: [], labels: [],
+    });
+    activate(REPO_B, STATUS_B);
+    created.resolve({ number: 1, htmlUrl: "https://github.com/owner/a/pull/1", warnings: [] });
+    await operation;
+    expect(remoteBranches).not.toHaveBeenCalled();
+    expect(useStore.getState().repo).toEqual(REPO_B);
+    expect(useStore.getState().toasts).toEqual([]);
+  });
+
+  it("does not create a pull request during another remote operation", async () => {
+    useStore.setState({ remoteBusy: true, busyAction: "push" });
+    const create = vi.spyOn(api, "prCreate");
+    await expect(useStore.getState().createPullRequest({
+      baseRepo: "owner/a", base: "main", headRepo: "owner/a", head: "feature",
+      title: "Feature", body: "", draft: false, reviewers: [], assignees: [], labels: [],
+    })).rejects.toThrow("Wait for the current remote operation");
+    expect(create).not.toHaveBeenCalled();
+    expect(useStore.getState().busyAction).toBe("push");
+  });
+
   it.each(["pull", "force"] as const)(
     "does not run a rejected push's %s follow-up after switching repositories",
     async (choice) => {

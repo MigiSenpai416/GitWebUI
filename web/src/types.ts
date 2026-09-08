@@ -380,6 +380,82 @@ export interface AiCommitProfile {
   baseUrl: string;
 }
 
+export interface PullRequestSummary {
+  number: number;
+  title: string;
+  body: string;
+  htmlUrl: string;
+  state: string;
+  draft: boolean;
+  author: string;
+  assignees: string[];
+  reviewers: string[];
+  teams: string[];
+  labels: string[];
+  updatedAt: string;
+  head: string;
+  base: string;
+  sha: string;
+}
+
+export interface PullRequestDetails extends PullRequestSummary {
+  mergeable: boolean | null;
+  mergeableState: string;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  commits: number;
+  canEdit: boolean;
+  canMerge: boolean;
+  canComment: boolean;
+  canReview: boolean;
+  mergeMethods: string[];
+}
+
+export interface PrActivity {
+  id?: number;
+  user?: { login: string };
+  body?: string;
+  state?: string;
+  submitted_at?: string;
+  created_at?: string;
+  html_url?: string;
+  path?: string;
+  line?: number | null;
+  diff_hunk?: string;
+  pull_request_review_id?: number;
+  in_reply_to_id?: number;
+  original_line?: number | null;
+  start_line?: number | null;
+  filename?: string;
+  previous_filename?: string;
+  status?: string;
+  additions?: number;
+  deletions?: number;
+  patch?: string;
+  sha?: string;
+  commit?: { message: string; author: { name: string; date: string } };
+}
+
+export interface PrCheck {
+  id: number;
+  name?: string;
+  context?: string;
+  status?: string;
+  state?: string;
+  conclusion?: string | null;
+  details_url?: string | null;
+  target_url?: string | null;
+}
+
+export interface PrChecks {
+  sha: string;
+  checks: PrCheck[];
+  statuses: PrCheck[];
+  hasMore: boolean;
+  errors: string[];
+}
+
 export interface AiCommitInfo extends AiCommitProfile {
   provider: AiCommitProvider;
   profiles: Record<AiCommitProvider, AiCommitProfile>;

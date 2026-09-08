@@ -54,6 +54,7 @@ export function Sidebar() {
   const [localOpen, setLocalOpen] = useState(true);
   const [remoteOpen, setRemoteOpen] = useState(true);
   const [worktreeOpen, setWorktreeOpen] = useState(true);
+  const [pullRequestsOpen, setPullRequestsOpen] = useState(true);
   const [wtMenu, setWtMenu] = useState<{ wt: Worktree; x: number; y: number } | null>(null);
   const [rbMenu, setRbMenu] = useState<{ branch: RemoteBranch; x: number; y: number } | null>(null);
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
@@ -223,7 +224,7 @@ export function Sidebar() {
         )}
       </Section>
 
-      {repo && <PullRequests key={repo.root} />}
+      {repo && <PullRequests key={repo.root} open={pullRequestsOpen} onToggle={() => setPullRequestsOpen((v) => !v)} />}
 
       {repo && <div className="sb-repo" title={repo.root}>{repo.root}</div>}
 

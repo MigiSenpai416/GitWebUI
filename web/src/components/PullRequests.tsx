@@ -7,14 +7,13 @@ import { Section } from "./Sidebar";
 import { PullRequestViewer } from "./PullRequestViewer";
 import "./PullRequests.css";
 
-export function PullRequests() {
+export function PullRequests({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const login = useStore((s) => s.githubStatus?.user?.login);
   const connect = useStore((s) => s.openGitHubDialog);
   const create = useStore((s) => s.openPullRequest);
   const creating = useStore((s) => s.prDialogOpen);
   const remotes = useStore((s) => s.remotes);
   const remoteKey = remotes.map((r) => `${r.name}:${r.url}`).join("|");
-  const [open, setOpen] = useState(true);
   const [ctx, setCtx] = useState<PrContext | null>(null);
   const [repo, setRepo] = useState("");
   const [state, setState] = useState("open");
@@ -101,7 +100,7 @@ export function PullRequests() {
   return (
     <>
       <Section icon={<IconPullRequest width={15} height={15} />} label="Pull Requests" count={visible.length}
-        open={open} onToggle={() => setOpen((v) => !v)} actions={[
+        open={open} onToggle={onToggle} actions={[
           { title: "Refresh pull requests", icon: <IconRefresh width={14} height={14} />, onClick: refresh },
           { title: "Create pull request", icon: <IconPlus width={15} height={15} />, onClick: () => create(), tone: "green" },
         ]}>

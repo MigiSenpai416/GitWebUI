@@ -385,7 +385,7 @@ export const api = {
   prDetails: (repo: string, number: number, signal?: AbortSignal) =>
     req<PullRequestDetails>(`/api/pr/details?repo=${encodeURIComponent(repo)}&number=${number}`, { signal }),
   prActivity: (repo: string, number: number, kind: string, page: number, signal?: AbortSignal) =>
-    req<{ items: PrActivity[]; hasMore: boolean; sha?: string }>(`/api/pr/activity?repo=${encodeURIComponent(repo)}&number=${number}&kind=${kind}&page=${page}`, { signal }),
+    req<{ items: PrActivity[]; hasMore: boolean; sha?: string; warning?: string }>(`/api/pr/activity?repo=${encodeURIComponent(repo)}&number=${number}&kind=${kind}&page=${page}`, { signal }),
   prChecks: (repo: string, number: number, page: number, signal?: AbortSignal) =>
     req<PrChecks>(`/api/pr/checks?repo=${encodeURIComponent(repo)}&number=${number}&page=${page}`, { signal }),
   prAction: (repo: string, number: number, input: Record<string, unknown>) =>

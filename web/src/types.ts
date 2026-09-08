@@ -414,7 +414,29 @@ export interface PullRequestDetails extends PullRequestSummary {
 
 export interface PrActivity {
   id?: number;
-  user?: { login: string };
+  node_id?: string;
+  is_resolved?: boolean;
+  is_outdated?: boolean;
+  is_collapsed?: boolean;
+  check_state?: string;
+  event?: string;
+  user?: { login: string; avatar_url?: string; type?: string };
+  actor?: { login: string; avatar_url?: string; type?: string };
+  author?: { name?: string; email?: string; date?: string };
+  committer?: { name?: string; email?: string; date?: string };
+  message?: string;
+  commit_id?: string;
+  commit_url?: string;
+  author_association?: string;
+  reactions?: Record<string, number | string>;
+  label?: { name: string };
+  milestone?: { title: string };
+  assignee?: { login: string };
+  requested_reviewer?: { login: string };
+  requested_team?: { name?: string; slug: string };
+  rename?: { from: string; to: string };
+  dismissed_review?: { dismissal_message?: string };
+  source?: { issue?: { number: number; title: string; html_url: string; state: string; draft?: boolean; pull_request?: { merged_at?: string | null } } };
   body?: string;
   state?: string;
   submitted_at?: string;

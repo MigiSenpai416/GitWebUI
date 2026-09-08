@@ -38,6 +38,10 @@ export function PullRequestDialog() {
   const [baseBranch, setBaseBranch] = useState("");
   const [baseBranches, setBaseBranches] = useState<string[]>([]);
   const [meta, setMeta] = useState<PrMeta>(EMPTY_META);
+  const [loadedBaseRepo, setLoadedBaseRepo] = useState("");
+  const [loadedMetaRepo, setLoadedMetaRepo] = useState("");
+  const [baseError, setBaseError] = useState<string | null>(null);
+  const [baseRevision, setBaseRevision] = useState(0);
 
   const [templatePath, setTemplatePath] = useState("");
   /** The template text currently in the description, so we never clobber edits. */
@@ -54,6 +58,7 @@ export function PullRequestDialog() {
   const [hint, setHint] = useState<string | null>(null);
 
   const connected = Boolean(githubStatus?.user);
+  const defaultBaseBranch = ctx?.baseCandidates.find((r) => r.fullName === baseRepo)?.defaultBranch;
   const templateRequest = useRef(0);
   const initialized = useRef(false);
   const dialogRoot = useRef(root);
@@ -103,8 +108,13 @@ export function PullRequestDialog() {
 
   // Target repo drives the base-branch list and the reviewer/label options.
   useEffect(() => {
-    if (!open || !baseRepo) return;
+    if (!open || !baseRepo || !connected) return;
     let cancelled = false;
+    setLoadedBaseRepo("");
+    setLoadedMetaRepo("");
+    setBaseError(null);
+    setBaseBranches([]);
+    setMeta(EMPTY_META);
     setReviewers([]);
     setAssignees([]);
     setLabels([]);
@@ -113,23 +123,27 @@ export function PullRequestDialog() {
       .then(({ branches }) => {
         if (cancelled) return;
         setBaseBranches(branches);
+        setLoadedBaseRepo(baseRepo);
         setBaseBranch((cur) => {
           if (cur && branches.includes(cur)) return cur;
-          const target = ctx?.baseCandidates.find((r) => r.fullName === baseRepo);
-          return target?.defaultBranch ?? branches[0] ?? cur;
+          return defaultBaseBranch && branches.includes(defaultBaseBranch) ? defaultBaseBranch : branches[0] ?? "";
         });
       })
-      .catch(() => {
-        if (!cancelled) setBaseBranches([]);
+      .catch((e) => {
+        if (!cancelled) setBaseError(e instanceof Error ? e.message : "Couldn't load target branches.");
       });
     api
       .prMeta(baseRepo)
-      .then((m) => !cancelled && setMeta(m))
+      .then((m) => {
+        if (cancelled) return;
+        setMeta(m);
+        setLoadedMetaRepo(baseRepo);
+      })
       .catch(() => !cancelled && setMeta(EMPTY_META));
     return () => {
       cancelled = true;
     };
-  }, [open, baseRepo, ctx]);
+  }, [open, baseRepo, defaultBaseBranch, connected, githubStatus?.user?.login, baseRevision]);
 
   // Reset everything when the dialog closes so the next open starts clean.
   useEffect(() => {
@@ -151,6 +165,9 @@ export function PullRequestDialog() {
     setLabels([]);
     setMeta(EMPTY_META);
     setBaseBranches([]);
+    setLoadedBaseRepo("");
+    setLoadedMetaRepo("");
+    setBaseError(null);
     setError(null);
     setHint(null);
   }, [open]);
@@ -205,6 +222,10 @@ export function PullRequestDialog() {
     }
     if (!title.trim()) {
       setError("Enter a title for the pull request.");
+      return;
+    }
+    if (loadedBaseRepo !== baseRepo || !baseBranches.includes(baseBranch)) {
+      setError("Wait for the target branches to load and select a branch.");
       return;
     }
     setBusy(true);
@@ -332,10 +353,10 @@ export function PullRequestDialog() {
                 <select
                   value={baseBranch}
                   onChange={(e) => setBaseBranch(e.target.value)}
-                  disabled={busy || baseBranches.length === 0}
+                  disabled={busy || loadedBaseRepo !== baseRepo || baseBranches.length === 0}
                 >
-                  {baseBranches.length === 0 && <option value={baseBranch}>{baseBranch}</option>}
-                  {baseBranches.map((b) => (
+                  {loadedBaseRepo !== baseRepo && <option value={baseBranch}>Loading branches…</option>}
+                  {loadedBaseRepo === baseRepo && baseBranches.map((b) => (
                     <option key={b} value={b}>
                       {b}
                     </option>
@@ -343,6 +364,13 @@ export function PullRequestDialog() {
                 </select>
               </Field>
             </div>
+
+            {baseError && (
+              <div className="acct-error">
+                {baseError}{" "}
+                <button className="dialog-btn" onClick={() => setBaseRevision((v) => v + 1)} disabled={busy}>Retry</button>
+              </div>
+            )}
 
             {(ctx?.templates.length ?? 0) > 0 && (
               <div className="acct-field">
@@ -404,7 +432,7 @@ export function PullRequestDialog() {
                 options={accountOptions(meta.collaborators)}
                 selected={reviewers}
                 onChange={setReviewers}
-                disabled={busy}
+                disabled={busy || loadedMetaRepo !== baseRepo}
               />
             </div>
             <div className="acct-field">
@@ -414,7 +442,7 @@ export function PullRequestDialog() {
                 options={accountOptions(meta.assignees)}
                 selected={assignees}
                 onChange={setAssignees}
-                disabled={busy}
+                disabled={busy || loadedMetaRepo !== baseRepo}
               />
             </div>
             <div className="acct-field">
@@ -424,7 +452,7 @@ export function PullRequestDialog() {
                 options={labelOptions(meta.labels)}
                 selected={labels}
                 onChange={setLabels}
-                disabled={busy}
+                disabled={busy || loadedMetaRepo !== baseRepo}
               />
             </div>
 
@@ -445,7 +473,7 @@ export function PullRequestDialog() {
               <button className="dialog-btn" onClick={close} disabled={busy}>
                 Cancel
               </button>
-              <button className="dialog-btn dialog-btn-primary" onClick={submit} disabled={busy}>
+              <button className="dialog-btn dialog-btn-primary" onClick={submit} disabled={busy || loadedBaseRepo !== baseRepo || !baseBranches.includes(baseBranch)}>
                 {busy ? <BusyLabel>Creating…</BusyLabel> : "Create Pull Request"}
               </button>
             </div>
@@ -503,6 +531,10 @@ function MultiSelect({ placeholder, options, selected, onChange, disabled }: Mul
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+
+  useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
@@ -535,7 +567,7 @@ function MultiSelect({ placeholder, options, selected, onChange, disabled }: Mul
         </span>
         <IconCaretDown className="pr-multi-caret" width={14} height={14} />
       </button>
-      {open && (
+      {open && !disabled && (
         <div className="pr-multi-menu">
           {options.length === 0 ? (
             <div className="pr-multi-empty">None available</div>

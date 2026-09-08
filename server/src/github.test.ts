@@ -15,6 +15,10 @@ const {
   listRepos,
   parseGitHubSlug,
   createPullRequest,
+  listCollaborators,
+  listAssignableUsers,
+  listLabels,
+  listBranchNames,
   beginOAuthDeviceFlow,
   pollOAuthDeviceFlow,
   cancelOAuthDeviceFlow,
@@ -1378,6 +1382,40 @@ describe("parseGitHubSlug", () => {
     expect(parseGitHubSlug("https://github.com/owner")).toBeNull();
     expect(parseGitHubSlug("C:\\repos\\local")).toBeNull();
     expect(parseGitHubSlug("")).toBeNull();
+  });
+});
+
+describe("pull request metadata", () => {
+  it("includes target branches after the fifth page", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const page = Number(new URL(String(url)).searchParams.get("page"));
+      return Response.json(page <= 5
+        ? Array.from({ length: 100 }, (_, i) => ({ name: `feature-${page}-${i}` }))
+        : [{ name: "main" }]);
+    });
+    const branches = await listBranchNames("ghp_x", "owner", "repo");
+    expect(branches).toHaveLength(501);
+    expect(branches[500]).toBe("main");
+    expect(fetch).toHaveBeenCalledTimes(6);
+  });
+
+  it.each([
+    ["collaborators", listCollaborators],
+    ["assignees", listAssignableUsers],
+    ["labels", listLabels],
+  ] as const)("loads %s beyond the first page", async (endpoint, load) => {
+    const fetch = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json(Array.from({ length: 100 }, (_, i) => ({ login: `user${i}`, name: `label${i}`, color: "abcdef" }))))
+      .mockResolvedValueOnce(Response.json([{ login: "last-user", name: "last-label", color: "123456" }]));
+    const items = await load("ghp_x", "owner", "repo");
+    expect(items).toHaveLength(101);
+    expect(items[100]).toMatchObject(endpoint === "labels" ? { name: "last-label" } : { login: "last-user" });
+    expect(fetch.mock.calls[1][0]).toBe(`https://api.github.com/repos/owner/repo/${endpoint}?per_page=100&page=2`);
+  });
+
+  it("still treats inaccessible optional metadata as unavailable", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ message: "Forbidden" }, { status: 403 }));
+    expect(await listCollaborators("ghp_x", "owner", "repo")).toEqual([]);
   });
 });
 

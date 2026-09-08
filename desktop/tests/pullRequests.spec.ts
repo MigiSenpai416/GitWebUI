@@ -32,10 +32,16 @@ test("pull request pagination, refresh failures and late details keep repository
     await window.getByRole("button", { name: "Open", exact: true }).first().click();
     await window.locator(".picker-form input").fill(repo);
     await window.locator(".picker-form button[type=submit]").click();
+    await expect(window.locator(".prs-group")).toHaveCount(4);
+    await expect(window.locator(".prs-group[aria-expanded=true]")).toHaveCount(0);
+    await expect(window.locator(".prs-item")).toHaveCount(0);
+    await window.getByRole("button", { name: "All Pull Requests" }).click();
     await expect(window.locator(".prs-item")).toHaveCount(1);
     await window.getByRole("button", { name: "Load more pull requests" }).click();
     await expect(window.locator(".prs-item")).toHaveCount(2);
     await window.getByLabel("Pull request repository").selectOption("example/second");
+    await expect(window.locator(".prs-group[aria-expanded=true]")).toHaveCount(0);
+    await window.getByRole("button", { name: "All Pull Requests" }).click();
     await expect(window.locator(".prs-item")).toHaveCount(1);
     await expect(window.locator(".prs-item")).toContainText("second change 1");
     await window.getByRole("button", { name: "Refresh pull requests" }).click({ force: true });
@@ -51,6 +57,8 @@ test("pull request pagination, refresh failures and late details keep repository
     await expect(window.getByRole("dialog", { name: "Pull request #1" })).toContainText("Loading pull request");
     await window.getByRole("button", { name: "Close pull request dialog" }).click();
     await window.getByLabel("Pull request repository").selectOption("example/first");
+    await expect(window.locator(".prs-group[aria-expanded=true]")).toHaveCount(0);
+    await window.getByRole("button", { name: "All Pull Requests" }).click();
     release?.();
     await expect(window.locator(".prs-item")).toContainText("first change 1");
     await expect(window.getByRole("dialog", { name: "Pull request #1" })).toHaveCount(0);
@@ -79,7 +87,7 @@ test("pull requests browse, review, edit, close, reopen and merge through the lo
       const comments: unknown[] = [];
       (globalThis as unknown as { prFixture: typeof pr }).prFixture = pr;
       const replies: unknown[] = [];
-      const reviews: unknown[] = [{ id: 50, user: { login: "reviewer" }, body: "Please check the navigation behavior.", state: "COMMENTED", submitted_at: "2026-09-08T01:00:00Z" }];
+      const reviews: unknown[] = [{ id: 50, user: { login: "reviewer" }, body: "Please check the navigation behavior.\n\n<details><summary>Review context</summary>\n\nExtra review details.\n\n</details><script>window.prUnsafe = true</script>", state: "COMMENTED", submitted_at: "2026-09-08T01:00:00Z" }];
       let checkRequests = 0;
       const original = globalThis.fetch;
       globalThis.fetch = async (input, init) => {
@@ -87,6 +95,11 @@ test("pull requests browse, review, edit, close, reopen and merge through the lo
         if (!url.startsWith("https://api.github.com/")) return original(input, init);
         const path = new URL(url).pathname;
         const body = init?.body ? JSON.parse(String(init.body)) : {};
+        if (path === "/graphql") return Response.json({ data: { repository: { pullRequest: { reviewThreads: {
+          nodes: [{ isResolved: false, isOutdated: false, isCollapsed: false, comments: { nodes: [{ id: "comment-1000" }] } },
+            { isResolved: true, isOutdated: true, isCollapsed: true, comments: { nodes: [{ id: "comment-1002" }] } }],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        } } } } });
         if (path === "/user") return Response.json({ login: "viewer", id: 1 });
         if (path === "/user/emails") return Response.json([]);
         if (path === "/repos/example/project") return Response.json({ full_name: "example/project", name: "project", owner: { login: "example" }, default_branch: "main", private: false, fork: false, permissions: { push: true }, allow_squash_merge: true, allow_merge_commit: true });
@@ -98,6 +111,14 @@ test("pull requests browse, review, edit, close, reopen and merge through the lo
           if (init?.method === "PATCH") Object.assign(pr, body);
           return Response.json(pr);
         }
+        if (path.endsWith("/issues/7/timeline")) return Response.json([
+          { event: "committed", sha: "b".repeat(40), message: "Add sidebar structure", author: { name: "Contributor" } },
+          { event: "committed", sha: "c".repeat(40), message: "Refine navigation", author: { name: "Contributor" } },
+          { event: "cross-referenced", actor: { login: "contributor" }, source: { issue: { number: 8, title: "Follow-up navigation work", html_url: "https://github.com/example/project/pull/8", state: "open", draft: true } } },
+          { event: "ready_for_review", id: 60, actor: { login: "contributor" } },
+          ...reviews.map((item) => ({ ...(item as object), event: "reviewed" })),
+          ...comments.map((item) => ({ ...(item as object), event: "commented" })),
+        ]);
         if (path.endsWith("/issues/7/comments")) {
           if (init?.method === "POST" && body.body === "Rejected comment") return Response.json({ message: "Comment could not be saved" }, { status: 422 });
           if (init?.method === "POST") comments.push({ id: comments.length + 1, user: { login: "viewer" }, body: body.body, created_at: "2026-09-08T01:01:00Z" });
@@ -136,8 +157,9 @@ test("pull requests browse, review, edit, close, reopen and merge through the lo
           return Response.json(comment);
         }
         if (path.endsWith("/pulls/7/comments")) return Response.json([
-          { id: 1000, pull_request_review_id: 50, user: { login: "reviewer" }, path: "navigation.ts", line: 1, diff_hunk: "@@ -1 +1 @@\n+const enabled = true;", body: "Keep keyboard focus visible.", created_at: "2026-09-08T01:00:00Z" },
+          { id: 1000, node_id: "comment-1000", pull_request_review_id: 50, user: { login: "reviewer" }, path: "navigation.ts", line: 1, diff_hunk: "@@ -1 +1 @@\n+const enabled = true;", body: "Keep keyboard focus visible.", created_at: "2026-09-08T01:00:00Z" },
           { id: 1001, in_reply_to_id: 1000, user: { login: "contributor" }, body: "Focus is preserved after switching tabs.", created_at: "2026-09-08T01:01:00Z" },
+          { id: 1002, node_id: "comment-1002", pull_request_review_id: 50, user: { login: "reviewer" }, path: "resolved.ts", body: "Already addressed.", created_at: "2026-09-08T01:01:00Z" },
           ...replies,
         ]);
         return Response.json({ message: `Unexpected GitHub request: ${path}` }, { status: 404 });
@@ -153,6 +175,7 @@ test("pull requests browse, review, edit, close, reopen and merge through the lo
     await window.getByRole("button", { name: "Open", exact: true }).first().click();
     await window.locator(".picker-form input").fill(repo);
     await window.locator(".picker-form button[type=submit]").click();
+    await window.getByRole("button", { name: "All Pull Requests" }).click();
     await expect(window.getByRole("button", { name: "#7 Improve sidebar navigation", exact: true })).toBeVisible();
     await window.getByRole("button", { name: "Assigned to Me" }).click();
     await expect(window.getByRole("button", { name: "#7 Improve sidebar navigation", exact: true })).toHaveCount(2);
@@ -160,8 +183,19 @@ test("pull requests browse, review, edit, close, reopen and merge through the lo
     const dialog = window.getByRole("dialog", { name: "Pull request #7", exact: true });
     await expect(dialog.getByText("Make navigation easier.")).toBeVisible();
     await expect(dialog.getByRole("tab")).toHaveText(["Conversation", "Commits (1)", "Checks", "Files changed (1)"]);
-    await expect(dialog.locator(".prv-timeline-review .prv-code-thread")).toContainText("Keep keyboard focus visible.");
-    await expect(dialog.locator(".prv-timeline-review .prv-code-thread")).toContainText("Focus is preserved after switching tabs.");
+    await expect(dialog.locator(".prv-timeline-entry").nth(0)).toContainText("added 2 commits");
+    await expect(dialog.locator(".prv-timeline-entry").nth(1)).toContainText("Follow-up navigation work");
+    await expect(dialog.locator(".prv-timeline-entry").nth(2)).toContainText("marked this pull request as ready for review");
+    await expect(dialog.locator(".prv-timeline-entry").nth(3)).toContainText("Please check the navigation behavior.");
+    await expect(dialog.getByText("Extra review details.")).not.toBeVisible();
+    await dialog.locator("summary").filter({ hasText: "Review context" }).click();
+    await expect(dialog.getByText("Extra review details.")).toBeVisible();
+    expect(await window.evaluate(() => (window as unknown as { prUnsafe?: boolean }).prUnsafe)).toBeUndefined();
+    await expect(dialog.locator(".prv-timeline-review .prv-code-thread").first()).toContainText("Keep keyboard focus visible.");
+    await expect(dialog.locator(".prv-timeline-review .prv-code-thread").first()).toContainText("Focus is preserved after switching tabs.");
+    await expect(dialog.locator(".prv-code-thread").nth(1)).toContainText("Resolved");
+    await expect(dialog.locator(".prv-code-thread").nth(1)).not.toHaveAttribute("open");
+    await expect(dialog.getByText("Already addressed.")).not.toBeVisible();
     const thread = dialog.locator(".prv-code-thread").first();
     await thread.getByLabel("Reply to code comment").fill("Rejected reply");
     await thread.getByRole("button", { name: "Reply", exact: true }).click();
@@ -249,6 +283,74 @@ test("pull requests browse, review, edit, close, reopen and merge through the lo
     await expect(window.locator(".prs-item").first()).toContainText("Polish sidebar navigation");
     await window.getByLabel("Search pull requests").fill("not present");
     await expect(window.locator(".prs-item")).toHaveCount(0);
+  } finally {
+    if (started) { await started.app.close(); await cleanupApp(started); }
+    await removeRepo(repo);
+  }
+});
+
+test("conversation pagination keeps native event order and waits for a review before attaching threads", async () => {
+  const repo = makeRepo();
+  let started: TestApp | undefined;
+  try {
+    started = await launchApp();
+    const window = await started.app.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+    const pr = { number: 1, title: "Timeline ordering", body: "Description", state: "open", draft: false, author: "author", assignees: [], reviewers: [], teams: [], labels: [], updatedAt: "2026-09-08T00:00:00Z", head: "topic", base: "main", sha: "a".repeat(40), mergeable: false, mergeableState: "dirty", canEdit: false, canMerge: false, canComment: true, canReview: false, mergeMethods: [], changedFiles: 0, commits: 2 };
+    let fail = true;
+    await window.route("**/api/github/status", (route) => route.fulfill({ json: { configured: true, user: { login: "viewer" } } }));
+    await window.route("**/api/pr/context", (route) => route.fulfill({ json: { baseCandidates: [{ fullName: "example/project", name: "project", owner: "example" }], defaults: { baseRepo: "example/project" } } }));
+    await window.route("**/api/pr/list?**", (route) => route.fulfill({ json: { items: [pr], hasMore: false } }));
+    await window.route("**/api/pr/details?**", (route) => route.fulfill({ json: pr }));
+    await window.route("**/api/pr/activity?**", (route) => {
+      const params = new URL(route.request().url()).searchParams;
+      const kind = params.get("kind");
+      const page = Number(params.get("page"));
+      if (kind === "thread-states") return route.fulfill({ status: 403, json: { error: "Thread metadata unavailable" } });
+      if (kind === "threads") return route.fulfill({ json: { items: [{ id: 10, pull_request_review_id: 2, path: "later.ts", body: "Later code discussion" }], hasMore: false } });
+      if (page === 2 && fail) return route.fulfill({ status: 503, json: { error: "Timeline temporarily unavailable" } });
+      return route.fulfill({ json: { items: page === 1 ? [
+        { event: "committed", sha: "a", message: "First change", author: { name: "Author" } },
+        { event: "cross-referenced", created_at: "2026-09-08T00:00:00Z", source: { issue: { number: 9, title: "Related work", html_url: "https://github.com/example/project/pull/9", state: "open" } } },
+      ] : [{ event: "ready_for_review", id: 1, actor: { login: "author" } }, { event: "reviewed", id: 2, user: { login: "reviewer" }, state: "approved", body: "" }], hasMore: page === 1 } });
+    });
+    await window.reload();
+    await window.getByRole("button", { name: "Open", exact: true }).first().click();
+    await window.locator(".picker-form input").fill(repo);
+    await window.locator(".picker-form button[type=submit]").click();
+    await window.getByRole("button", { name: "All Pull Requests" }).click();
+    await window.getByRole("button", { name: "#1 Timeline ordering", exact: true }).click();
+    const dialog = window.getByRole("dialog", { name: "Pull request #1", exact: true });
+    await expect(dialog.locator(".prv-timeline-entry")).toHaveCount(2);
+    await expect(dialog.getByText("Later code discussion")).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Load more activity" }).click();
+    await expect(dialog.getByRole("alert")).toContainText("Timeline temporarily unavailable");
+    await expect(dialog.locator(".prv-timeline-entry")).toHaveCount(2);
+    fail = false;
+    await dialog.getByRole("button", { name: "Retry conversation" }).click();
+    await expect(dialog.locator(".prv-timeline-entry")).toHaveCount(4);
+    await expect(dialog.locator(".prv-timeline-entry").nth(0)).toContainText("First change");
+    await expect(dialog.locator(".prv-timeline-entry").nth(1)).toContainText("Related work");
+    await expect(dialog.locator(".prv-timeline-entry").nth(2)).toContainText("ready for review");
+    await expect(dialog.locator(".prv-timeline-entry").nth(3)).toContainText("approved these changes");
+    await expect(dialog.locator(".prv-timeline-review")).toContainText("Later code discussion");
+    await expect(dialog.getByText(/Thread resolution status unavailable/)).toBeVisible();
+    let releaseReply: (() => Promise<void>) | undefined;
+    await window.route("**/api/pr/action", async (route) => {
+      await new Promise<void>((resolve) => {
+        releaseReply = async () => {
+          await route.fulfill({ json: { ok: true, reply: { id: 11, in_reply_to_id: 10, user: { login: "viewer" }, body: "Reply survives loading", created_at: "2026-09-08T01:00:00Z" } } });
+          resolve();
+        };
+      });
+    });
+    await dialog.getByRole("textbox", { name: "Reply to code comment" }).fill("Reply survives loading");
+    await dialog.getByRole("button", { name: "Reply", exact: true }).click();
+    await expect.poll(() => !!releaseReply).toBe(true);
+    await expect(dialog.getByRole("button", { name: "Retry thread status" })).toBeDisabled();
+    await releaseReply!();
+    await expect(dialog.getByText("Reply survives loading", { exact: true })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Retry thread status" })).toBeEnabled();
   } finally {
     if (started) { await started.app.close(); await cleanupApp(started); }
     await removeRepo(repo);

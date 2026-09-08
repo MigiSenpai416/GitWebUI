@@ -52,13 +52,34 @@ test("creating from a different branch uses its fork alias and actual upstream b
     await window.getByRole("button", { name: "Open", exact: true }).first().click();
     await window.locator(".picker-form input").fill(repo);
     await window.locator(".picker-form button[type=submit]").click();
+    await window.route("**/api/pr/meta?**", (route) => route.fulfill({ json: { collaborators: [], assignees: [], labels: [{ name: "needs-review", color: "abcdef" }] } }));
     await window.getByRole("button", { name: "Actions", exact: true }).click();
     await window.getByRole("button", { name: "Create pull request…" }).click();
     const dialog = window.locator(".pr-dialog");
     await expect(dialog.locator(".pr-repos select").nth(0)).toHaveValue("team/project");
+    await dialog.getByRole("button", { name: "Add labels…" }).click();
+    await dialog.getByRole("checkbox", { name: "needs-review" }).check();
+    await dialog.getByLabel("Title", { exact: true }).click();
     await dialog.locator(".pr-repos select").nth(2).selectOption("local-feature");
     await expect(dialog.locator(".pr-repos select").nth(0)).toHaveValue("team/fork");
+    await expect(dialog.locator(".pr-chip")).toHaveText(["needs-review"]);
     await dialog.getByLabel("Title", { exact: true }).fill("Add feature from fork");
+    let releaseBranches: (() => Promise<void>) | undefined;
+    await window.route("**/api/pr/branches?**", async (route) => {
+      if (new URL(route.request().url()).searchParams.get("repo") !== "team/fork") return route.continue();
+      await new Promise<void>((resolve) => {
+        releaseBranches = async () => { await route.fulfill({ json: { branches: ["fork-main"] } }); resolve(); };
+      });
+    });
+    await dialog.locator(".pr-repos select").nth(1).selectOption("team/fork");
+    await expect(dialog.getByRole("button", { name: "Create Pull Request", exact: true })).toBeDisabled();
+    await expect(dialog.locator(".pr-repos select").nth(3)).toBeDisabled();
+    await expect(dialog.locator(".pr-repos select").nth(3).locator("option")).toHaveText(["Loading branches…"]);
+    await expect.poll(() => !!releaseBranches).toBe(true);
+    await releaseBranches!();
+    await expect(dialog.locator(".pr-repos select").nth(3)).toHaveValue("fork-main");
+    await dialog.locator(".pr-repos select").nth(1).selectOption("team/project");
+    await expect(dialog.locator(".pr-repos select").nth(3)).toHaveValue("main");
     await dialog.getByRole("button", { name: "Create Pull Request", exact: true }).click();
     await expect(dialog).toBeHidden();
     await expect(window.getByRole("status").filter({ hasText: "Opened pull request #9" })).toBeVisible();

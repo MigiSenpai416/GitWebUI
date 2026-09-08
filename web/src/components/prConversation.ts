@@ -6,23 +6,32 @@ export interface PrThread {
 }
 
 export interface PrConversationEntry {
-  kind: "comment" | "review" | "thread";
+  kind: "comment" | "review" | "thread" | "event" | "commits";
   item: PrActivity;
   threads: PrThread[];
+  commits?: PrActivity[];
 }
 
-function time(item: PrActivity): number {
-  return Date.parse(item.submitted_at || item.created_at || "") || 0;
+export function activityKey(item: PrActivity): string {
+  return `${item.event ?? "thread"}:${item.node_id ?? item.id ?? item.sha ?? (item.source?.issue ? JSON.stringify([item.source.issue.html_url, item.created_at, item.actor?.login]) : JSON.stringify(item))}`;
 }
 
-export function buildConversation(comments: PrActivity[], reviews: PrActivity[], codeComments: PrActivity[]): PrConversationEntry[] {
+export function buildConversation(timeline: PrActivity[], codeComments: PrActivity[], complete = true): PrConversationEntry[] {
   const threads = new Map<number, PrThread>();
-  const entries: PrConversationEntry[] = comments.map((item) => ({ kind: "comment", item, threads: [] }));
+  const entries: PrConversationEntry[] = [];
   const reviewEntries = new Map<number, PrConversationEntry>();
-  for (const item of reviews) {
-    const entry: PrConversationEntry = { kind: "review", item, threads: [] };
+  for (const item of timeline) {
+    if (["mentioned", "subscribed", "unsubscribed"].includes(item.event ?? "")) continue;
+    const kind = item.event === "commented" ? "comment" : item.event === "reviewed" ? "review" : item.event === "committed" ? "commits" : "event";
+    const previous = entries[entries.length - 1];
+    if (kind === "commits" && previous?.kind === "commits"
+      && (previous.item.author?.email ?? previous.item.author?.name) === (item.author?.email ?? item.author?.name)) {
+      previous.commits!.push(item);
+      continue;
+    }
+    const entry: PrConversationEntry = { kind, item, threads: [], ...(kind === "commits" ? { commits: [item] } : {}) };
     entries.push(entry);
-    if (item.id !== undefined) reviewEntries.set(item.id, entry);
+    if (kind === "review" && item.id !== undefined) reviewEntries.set(item.id, entry);
   }
   for (const comment of codeComments) {
     if (comment.id !== undefined && !comment.in_reply_to_id) threads.set(comment.id, { comment, replies: [] });
@@ -34,10 +43,10 @@ export function buildConversation(comments: PrActivity[], reviews: PrActivity[],
     else if (comment.id !== undefined) threads.set(comment.id, { comment, replies: [] });
   }
   for (const thread of threads.values()) {
-    thread.replies.sort((a, b) => time(a) - time(b));
+    thread.replies.sort((a, b) => Date.parse(a.created_at ?? "") - Date.parse(b.created_at ?? ""));
     const review = reviewEntries.get(thread.comment.pull_request_review_id ?? -1);
     if (review) review.threads.push(thread);
-    else entries.push({ kind: "thread", item: thread.comment, threads: [thread] });
+    else if (complete) entries.push({ kind: "thread", item: thread.comment, threads: [thread] });
   }
-  return entries.sort((a, b) => time(a.item) - time(b.item));
+  return entries;
 }

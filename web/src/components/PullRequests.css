@@ -117,6 +117,7 @@
 .prv-description > .prv-markdown, .prv-description > .prv-edit { padding: 16px; }
 .prv-comment { border: 1px solid var(--border-strong); border-radius: var(--radius); overflow: hidden; }
 .prv-comment > .prv-markdown { padding: 16px; }
+.prv-reactions:not(:empty) { padding: 0 16px 12px; }
 .prv-comment-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 14px; background: var(--bg-panel-2); border-bottom: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-dim); }
 .prv-comment-head strong { color: var(--text-strong); }
 .prv-comment-head .prv-label { margin: 0 0 0 auto; }
@@ -127,6 +128,18 @@
 .prv-review-event { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 0 14px; color: var(--text-dim); font-size: var(--fs-sm); }
 .prv-review-event strong { color: var(--text); }
 .prv-review-event time { margin-left: auto; }
+.prv-timeline-avatar img { width: 100%; height: 100%; border-radius: 50%; }
+.prv-reference { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.prv-reference > .pr-link { flex: 1; text-align: left; font-weight: 600; overflow-wrap: anywhere; }
+.prv-reference .prv-badge { font-size: var(--fs-xs); }
+.prv-timeline-commit { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
+.prv-timeline-commit > svg { flex-shrink: 0; color: var(--text-dim); }
+.prv-timeline-commit .pr-link { font: var(--fs-sm)/1.5 var(--font-mono); text-align: left; overflow-wrap: anywhere; }
+.prv-timeline-commit .pr-link:last-child { margin-left: auto; flex-shrink: 0; }
+.prv-commit-avatar { width: 20px; height: 20px; border-radius: 50%; }
+.prv-commit-check { margin-left: auto; }
+.prv-commit-check + .pr-link:last-child { margin-left: 0; }
+.prv-event-commit { font-family: var(--font-mono); }
 .prv-code-thread { margin-top: 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); overflow: hidden; }
 .prv-code-thread summary { padding: 12px 14px; background: var(--bg-panel-2); cursor: pointer; overflow-wrap: anywhere; }
 .prv-code-thread summary strong { font-family: var(--font-mono); font-size: var(--fs-sm); }
@@ -152,6 +165,8 @@
 .prv-markdown pre, .prv-markdown code { font-family: var(--font-mono); font-size: var(--fs-sm); background: var(--bg-input); }
 .prv-markdown pre { padding: 10px; overflow: auto; }
 .prv-markdown h1, .prv-markdown h2, .prv-markdown h3 { font-size: var(--fs-lg); }
+.prv-markdown h1, .prv-markdown h2 { padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.prv-markdown details > summary { cursor: pointer; }
 .prv-markdown blockquote { border-left: 2px solid var(--border); margin-left: 0; padding-left: 12px; color: var(--text-dim); }
 .prv-markdown table { border-collapse: collapse; display: block; overflow: auto; }
 .prv-markdown td, .prv-markdown th { border: 1px solid var(--border); padding: 4px 8px; }

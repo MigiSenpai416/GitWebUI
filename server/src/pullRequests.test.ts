@@ -12,6 +12,44 @@ const pull = {
 afterEach(() => vi.restoreAllMocks());
 
 describe("pull request browsing", () => {
+  it("enriches timeline commits with GitHub authors and check results without reordering", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json([{ event: "committed", node_id: "commit-node", sha: "a" }, { event: "ready_for_review", id: 1 }]))
+      .mockResolvedValueOnce(Response.json({ data: { nodes: [{ oid: "a", author: { user: { login: "author", avatarUrl: "https://avatars.githubusercontent.com/u/1" } }, statusCheckRollup: { state: "FAILURE" } }] } }));
+    expect(await pullRequestActivity("token", "owner/repo", 7, "timeline", 1)).toMatchObject({ items: [
+      { event: "committed", user: { login: "author" }, check_state: "FAILURE" }, { event: "ready_for_review" },
+    ] });
+  });
+
+  it("keeps the timeline readable when additional commit metadata is inaccessible", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json([{ event: "committed", node_id: "commit-node", sha: "a" }]))
+      .mockResolvedValueOnce(Response.json({ errors: [{ message: "Checks permission denied" }] }));
+    expect(await pullRequestActivity("token", "owner/repo", 7, "timeline", 1)).toMatchObject({ items: [{ sha: "a" }], warning: "Commit details unavailable: Checks permission denied" });
+  });
+
+  it("loads persisted thread state across GraphQL pages using comment node IDs", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ isResolved: true, isOutdated: false, isCollapsed: true, comments: { nodes: [{ id: "comment-1" }] } }], pageInfo: { hasNextPage: true, endCursor: "next" } } } } } }))
+      .mockResolvedValueOnce(Response.json({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ isResolved: false, isOutdated: true, isCollapsed: false, comments: { nodes: [{ id: "comment-2" }] } }], pageInfo: { hasNextPage: false, endCursor: null } } } } } }));
+    expect(await pullRequestActivity("token", "owner/repo", 7, "thread-states", 1)).toEqual({ items: [
+      { node_id: "comment-1", is_resolved: true, is_outdated: false, is_collapsed: true },
+      { node_id: "comment-2", is_resolved: false, is_outdated: true, is_collapsed: false },
+    ], hasMore: false });
+    expect(JSON.parse(String(fetch.mock.calls[1][1]?.body)).variables).toEqual({ owner: "owner", name: "repo", number: 7, cursor: "next" });
+  });
+
+  it("reports GraphQL errors instead of treating unknown thread states as unresolved", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ errors: [{ message: "Access denied" }] }));
+    await expect(pullRequestActivity("token", "owner/repo", 7, "thread-states", 1)).rejects.toThrow("Access denied");
+  });
+
+  it("returns the native timeline in upstream order including ID-less commits and references", async () => {
+    const items = [{ event: "committed", sha: "a" }, { event: "cross-referenced", source: { issue: { number: 8 } } }, { event: "ready_for_review", id: 1 }];
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json(items));
+    expect(await pullRequestActivity("token", "owner/repo", 7, "timeline", 2)).toEqual({ items, hasMore: false });
+    expect(fetch.mock.calls[0][0]).toBe("https://api.github.com/repos/owner/repo/issues/7/timeline?per_page=100&page=2");
+  });
   it("maps merged PRs and people and preserves pagination", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json(Array(100).fill(pull)));
     const result = await listPullRequests("token", "owner/repo", "closed", 2);

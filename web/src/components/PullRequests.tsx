@@ -29,7 +29,7 @@ export function PullRequests() {
   const [revision, setRevision] = useState(0);
   const [contextRevision, setContextRevision] = useState(0);
   const [selected, setSelected] = useState<number | null>(null);
-  const [groups, setGroups] = useState<Record<string, boolean>>({ all: true });
+  const [groups, setGroups] = useState<Record<string, boolean>>({});
   const wasCreating = useRef(creating);
   const refresh = () => {
     setPage(1);
@@ -50,6 +50,7 @@ export function PullRequests() {
     setPage(1);
     setHasMore(false);
     setSelected(null);
+    setGroups({});
     setContextError("");
     if (!login) return;
     setContextLoading(true);
@@ -111,7 +112,7 @@ export function PullRequests() {
           : <>
             <div className="prs-filters">
               <div className="prs-scope">
-              <select className="prs-repository" title={repo} aria-label="Pull request repository" value={repo} onChange={(e) => { setRepo(e.target.value); setPage(1); setSelected(null); setItems([]); }}>
+              <select className="prs-repository" title={repo} aria-label="Pull request repository" value={repo} onChange={(e) => { setRepo(e.target.value); setPage(1); setSelected(null); setItems([]); setGroups({}); }}>
                 {ctx.baseCandidates.map((r) => <option key={r.fullName}>{r.fullName}</option>)}
               </select>
               <select className={`prs-state prs-${state}`} aria-label="Pull request state" value={state} onChange={(e) => { setState(e.target.value); setPage(1); setItems([]); }}>

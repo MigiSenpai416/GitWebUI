@@ -1204,18 +1204,17 @@ export async function fetchRepo(token: string, owner: string, repo: string): Pro
   return toRepoRef(await res.json());
 }
 
-/** Branch names of a repository (paginated up to a sane cap). */
+/** Branch names of a repository, including every page. */
 export async function listBranchNames(
   token: string,
   owner: string,
   repo: string,
 ): Promise<string[]> {
   const perPage = 100;
-  const maxPages = 5;
   const names: string[] = [];
-  for (let page = 1; page <= maxPages; page++) {
+  for (let page = 1; ; page++) {
     const url = `${API}/repos/${owner}/${repo}/branches?per_page=${perPage}&page=${page}`;
-    const res = await fetch(url, { headers: ghHeaders(token) });
+    const res = await fetch(url, { headers: ghHeaders(token), signal: AbortSignal.timeout(30_000) });
     if (!res.ok) throw ghError(res.status, await res.text());
     const batch = (await res.json()) as Array<{ name: string }>;
     for (const b of batch) names.push(b.name);
@@ -1231,10 +1230,15 @@ export async function listBranchNames(
  */
 async function listOrEmpty<T>(token: string, path: string): Promise<T[]> {
   try {
-    const res = await fetch(`${API}${path}`, { headers: ghHeaders(token) });
-    if (!res.ok) return [];
-    const j = await res.json();
-    return Array.isArray(j) ? (j as T[]) : [];
+    const items: T[] = [];
+    for (let page = 1; ; page++) {
+      const res = await fetch(`${API}${path}&page=${page}`, { headers: ghHeaders(token), signal: AbortSignal.timeout(30_000) });
+      if (!res.ok) return [];
+      const batch = await res.json();
+      if (!Array.isArray(batch)) return [];
+      items.push(...batch as T[]);
+      if (batch.length < 100) return items;
+    }
   } catch {
     return [];
   }

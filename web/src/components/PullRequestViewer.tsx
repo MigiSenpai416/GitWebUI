@@ -2,14 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import { api } from "../api/client";
 import { openExternal } from "../desktop";
 import { useStore, type ToastItem } from "../state/store";
 import { Toast } from "./ToastStack";
-import { buildConversation } from "./prConversation";
+import { activityKey, buildConversation } from "./prConversation";
 import { PrFilePatch, type PrLineComment } from "./PrFilePatch";
 import type { PrActivity, PrChecks, PullRequestDetails } from "../types";
-import { BusyLabel, IconPullRequest, IconRefresh, IconExternal } from "./icons";
+import { BusyLabel, IconPullRequest, IconRefresh, IconExternal, IconCommit, IconEye, IconBranch } from "./icons";
 import "./AccountDialogs.css";
 
 export function PullRequestViewer({ repo, number, onClose, onChanged }: {
@@ -246,7 +248,7 @@ function PrMarkdown({ text, baseUrl }: { text: string; baseUrl: string }) {
       /* invalid Markdown URL */
     }
   };
-  return <div className="prv-markdown"><Markdown remarkPlugins={[remarkGfm]} components={{
+  return <div className="prv-markdown"><Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize]} components={{
     a: ({ href, children }) => <a href={href} onClick={(e) => { e.preventDefault(); if (href) openLink(href); }}>{children}</a>,
     img: ({ alt, src }) => <button className="pr-link" onClick={() => { if (src) openLink(src); }}>View image{alt ? `: ${alt}` : ""}</button>,
   }}>{text}</Markdown></div>;
@@ -256,11 +258,59 @@ function PrComment({ item, baseUrl }: { item: PrActivity; baseUrl: string }) {
   return <div className="prv-comment">
     <div className="prv-comment-head">
       <strong>{item.user?.login ?? "ghost"}</strong><span>commented</span>
+      {item.user?.type === "Bot" && <span className="prv-label">Bot</span>}
       {item.created_at && <time>{new Date(item.created_at).toLocaleString()}</time>}
+      {item.author_association && !["NONE", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR"].includes(item.author_association) && <span className="prv-label">{item.author_association.toLowerCase()}</span>}
       {item.html_url && <button className="pr-link" onClick={() => openExternal(item.html_url!)}>Open on GitHub</button>}
     </div>
     <PrMarkdown text={item.body || "No message."} baseUrl={baseUrl} />
+    {item.reactions && <div className="prv-reactions">{Object.entries({ "+1": "👍", "-1": "👎", laugh: "😄", hooray: "🎉", confused: "😕", heart: "❤️", rocket: "🚀", eyes: "👀" }).map(([name, emoji]) => Number(item.reactions?.[name]) > 0 && <span className="prv-label" key={name} title={name}>{emoji} {item.reactions![name]}</span>)}</div>}
   </div>;
+}
+
+function PrTimelineEvent({ item, baseUrl }: { item: PrActivity; baseUrl: string }) {
+  const source = item.source?.issue;
+  const commitRepo = /^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)\/(?:git\/)?commits\//.exec(item.commit_url ?? "")?.[1];
+  const labels: Record<string, string> = {
+    ready_for_review: "marked this pull request as ready for review", convert_to_draft: "marked this pull request as draft",
+    "cross-referenced": "mentioned this pull request", referenced: "referenced this pull request in a commit",
+    head_ref_force_pushed: "force-pushed the head branch", head_ref_deleted: "deleted the head branch", head_ref_restored: "restored the head branch",
+    base_ref_changed: "changed the base branch", closed: "closed this pull request", reopened: "reopened this pull request", merged: "merged this pull request",
+    review_requested: "requested a review from", review_request_removed: "removed the review request for", review_dismissed: "dismissed a review",
+    labeled: "added the label", unlabeled: "removed the label", assigned: "assigned", unassigned: "unassigned",
+    milestoned: "added this to the milestone", demilestoned: "removed this from the milestone", renamed: "changed the title",
+    locked: "locked this conversation", unlocked: "unlocked this conversation", connected: "linked this pull request", disconnected: "unlinked this pull request",
+    auto_merge_enabled: "enabled auto-merge", auto_merge_disabled: "disabled auto-merge", deployed: "deployed these changes",
+  };
+  return <>
+    <div className="prv-review-event">
+      <strong>{item.actor?.login ?? item.user?.login ?? "ghost"}</strong>
+      <span>{labels[item.event ?? ""] ?? item.event?.replaceAll("_", " ")}</span>
+      {item.requested_reviewer && <strong>{item.requested_reviewer.login}</strong>}
+      {item.requested_team && <strong>{item.requested_team.name ?? item.requested_team.slug}</strong>}
+      {item.assignee && <strong>{item.assignee.login}</strong>}
+      {item.label && <span className="prv-label">{item.label.name}</span>}
+      {item.milestone && <strong>{item.milestone.title}</strong>}
+      {item.rename && <span><del>{item.rename.from}</del> → <strong>{item.rename.to}</strong></span>}
+      {item.created_at && <time>{new Date(item.created_at).toLocaleString()}</time>}
+    </div>
+    {source && <div className="prv-reference"><button className="pr-link" onClick={() => openExternal(source.html_url)}>{source.title} <span>#{source.number}</span></button><span className={`prv-badge prs-${source.draft ? "draft" : source.pull_request?.merged_at ? "merged" : source.state}`}>{source.draft ? "Draft" : source.pull_request?.merged_at ? "Merged" : source.state}</span></div>}
+    {item.commit_id && <button className="pr-link prv-event-commit" onClick={() => openExternal(commitRepo ? `https://github.com/${commitRepo}/commit/${item.commit_id}` : `${baseUrl}/commits/${item.commit_id}`)}>{item.commit_id.slice(0, 7)}</button>}
+    {item.dismissed_review?.dismissal_message && <PrMarkdown text={item.dismissed_review.dismissal_message} baseUrl={baseUrl} />}
+  </>;
+}
+
+function PrCommitGroup({ items, repo }: { items: PrActivity[]; repo: string }) {
+  return <>
+    {items.length > 1 && <div className="prv-review-event"><strong>{items[0].user?.login ?? items[0].author?.name ?? "Contributor"}</strong><span>added {items.length} commits</span></div>}
+    {items.map((item) => <div className="prv-timeline-commit" key={activityKey(item)}>
+      <IconCommit width={16} height={16} />
+      {item.user?.avatar_url && <img className="prv-commit-avatar" src={item.user.avatar_url} alt={item.user.login} title={item.user.login} />}
+      <button className="pr-link" onClick={() => openExternal(item.html_url ?? `https://github.com/${repo}/commit/${item.sha}`)}>{item.message?.split("\n")[0] ?? item.sha}</button>
+      {item.check_state && <span className={`prv-commit-check ${item.check_state === "SUCCESS" ? "prs-open" : ["FAILURE", "ERROR"].includes(item.check_state) ? "prs-closed" : "prv-muted"}`} title={`Checks: ${item.check_state.toLowerCase()}`} aria-label={`Checks: ${item.check_state.toLowerCase()}`}>{item.check_state === "SUCCESS" ? "✓" : ["FAILURE", "ERROR"].includes(item.check_state) ? "✕" : "●"}</span>}
+      <button className="pr-link" onClick={() => openExternal(item.html_url ?? `https://github.com/${repo}/commit/${item.sha}`)}>{item.sha?.slice(0, 7)}</button>
+    </div>)}
+  </>;
 }
 
 function PrThreadReply({ commentId, draft, disabled, onDraft, onReply }: {
@@ -285,7 +335,9 @@ function PrConversation({ repo, number, canReply, busy, drafts, onDraft, onReply
   repo: string; number: number; canReply: boolean; busy: boolean; drafts: Record<number, string>;
   onDraft: (id: number, text: string) => void; onReply: (id: number, body: string) => Promise<PrActivity>;
 }) {
-  const [data, setData] = useState<PrActivity[][]>([[], [], []]);
+  const [data, setData] = useState<PrActivity[][]>([[], []]);
+  const [threadStateError, setThreadStateError] = useState("");
+  const [timelineWarning, setTimelineWarning] = useState("");
   const [page, setPage] = useState(1);
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -295,13 +347,32 @@ function PrConversation({ repo, number, canReply, busy, drafts, onDraft, onReply
     const controller = new AbortController();
     setLoading(true);
     setError("");
-    Promise.all(["comments", "reviews", "threads"].map((kind) => api.prActivity(repo, number, kind, page, controller.signal)))
+    const loadThreads = async () => {
+      const items: PrActivity[] = [];
+      for (let threadPage = 1; !controller.signal.aborted; threadPage++) {
+        const result = await api.prActivity(repo, number, "threads", threadPage, controller.signal);
+        items.push(...result.items);
+        if (!result.hasMore) break;
+      }
+      if (!items.length || controller.signal.aborted) return items;
+      try {
+        const states = await api.prActivity(repo, number, "thread-states", 1, controller.signal);
+        const byId = new Map(states.items.map((item) => [item.node_id, item]));
+        if (!controller.signal.aborted) setThreadStateError("");
+        return items.map((item) => ({ ...item, ...(item.node_id ? byId.get(item.node_id) : undefined) }));
+      } catch (e) {
+        if (!controller.signal.aborted) setThreadStateError(e instanceof Error ? e.message : "Couldn't load thread state.");
+        return items;
+      }
+    };
+    Promise.all([api.prActivity(repo, number, "timeline", page, controller.signal), page === 1 ? loadThreads() : Promise.resolve(null)])
       .then((results) => {
         if (controller.signal.aborted) return;
-        setData((prev) => results.map((result, i) => [...new Map([
-          ...(page === 1 ? [] : prev[i]), ...result.items,
-        ].map((item) => [item.id, item])).values()]));
-        setMore(results.some((result) => result.hasMore));
+        setData((prev) => [[...new Map([
+          ...(page === 1 ? [] : prev[0]), ...results[0].items,
+        ].map((item) => [activityKey(item), item])).values()], results[1] ?? prev[1]]);
+        setMore(results[0].hasMore);
+        setTimelineWarning((prev) => results[0].warning ?? (page === 1 ? "" : prev));
       }).catch((e) => {
         if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Couldn't load the conversation.");
       }).finally(() => {
@@ -309,20 +380,20 @@ function PrConversation({ repo, number, canReply, busy, drafts, onDraft, onReply
       });
     return () => controller.abort();
   }, [repo, number, page, retry]);
-  const entries = buildConversation(data[0], data[1], data[2]);
+  const entries = buildConversation(data[0], data[1], !more);
   const baseUrl = `https://github.com/${repo}/pull/${number}`;
   return <div className="prv-timeline" role="tabpanel" aria-label="Conversation">
-    {entries.map((entry) => <article className={`prv-timeline-entry prv-timeline-${entry.kind}`} key={`${entry.kind}:${entry.item.id}`}>
-      <span className="prv-timeline-avatar" aria-hidden="true">{(entry.item.user?.login ?? "?").slice(0, 1).toUpperCase()}</span>
-      {entry.kind === "comment" ? <PrComment item={entry.item} baseUrl={baseUrl} /> : <>
+    {entries.map((entry) => <article className={`prv-timeline-entry prv-timeline-${entry.kind}`} key={activityKey(entry.item)}>
+      <span className="prv-timeline-avatar" aria-hidden="true">{entry.kind === "commits" ? <IconCommit width={16} height={16} /> : entry.kind === "review" || entry.item.event === "ready_for_review" || entry.item.event === "review_requested" ? <IconEye width={16} height={16} /> : entry.item.event === "cross-referenced" ? <IconExternal width={16} height={16} /> : entry.kind === "event" ? <IconBranch width={16} height={16} /> : entry.item.user?.avatar_url ? <img src={entry.item.user.avatar_url} alt="" /> : (entry.item.user?.login ?? "?").slice(0, 1).toUpperCase()}</span>
+      {entry.kind === "commits" ? <PrCommitGroup items={entry.commits!} repo={repo} /> : entry.kind === "event" ? <PrTimelineEvent item={entry.item} baseUrl={baseUrl} /> : entry.kind === "comment" ? <PrComment item={entry.item} baseUrl={baseUrl} /> : <>
         <div className="prv-review-event">
           <strong>{entry.item.user?.login ?? "ghost"}</strong>
-          <span>{entry.kind === "thread" ? "commented on code" : ({ APPROVED: "approved these changes", CHANGES_REQUESTED: "requested changes", COMMENTED: "reviewed", DISMISSED: "had their review dismissed", PENDING: "has a pending review" }[entry.item.state ?? ""] ?? "reviewed")}</span>
+          <span>{entry.kind === "thread" ? "commented on code" : ({ APPROVED: "approved these changes", CHANGES_REQUESTED: "requested changes", COMMENTED: "reviewed", DISMISSED: "had their review dismissed", PENDING: "has a pending review" }[entry.item.state?.toUpperCase() ?? ""] ?? "reviewed")}</span>
           {(entry.item.submitted_at || entry.item.created_at) && <time>{new Date(entry.item.submitted_at || entry.item.created_at!).toLocaleString()}</time>}
         </div>
         {entry.kind === "review" && entry.item.body && <PrComment item={{ ...entry.item, created_at: entry.item.submitted_at }} baseUrl={baseUrl} />}
-        {entry.threads.map((thread) => <details className="prv-code-thread" key={thread.comment.id} open>
-          <summary><strong>{thread.comment.path}</strong><span>{thread.comment.line ? `Line ${thread.comment.line}` : thread.comment.original_line ? `Original line ${thread.comment.original_line}` : "Code comment"}</span></summary>
+        {entry.threads.map((thread) => <details className="prv-code-thread" key={thread.comment.id} open={!thread.comment.is_collapsed}>
+          <summary><strong>{thread.comment.path}</strong><span>{thread.comment.line ? `Line ${thread.comment.line}` : thread.comment.original_line ? `Original line ${thread.comment.original_line}` : "Code comment"}</span>{thread.comment.is_resolved && <span className="prv-label">Resolved</span>}{thread.comment.is_outdated && <span className="prv-label">Outdated</span>}</summary>
           {thread.comment.diff_hunk && <pre className="prv-patch">{thread.comment.diff_hunk.split("\n").map((line, i) => <div key={i} className={line.startsWith("+") ? "prv-added" : line.startsWith("-") ? "prv-removed" : ""}>{line || " "}</div>)}</pre>}
           <PrComment item={thread.comment} baseUrl={baseUrl} />
           {thread.replies.map((reply) => <PrComment key={reply.id} item={reply} baseUrl={baseUrl} />)}
@@ -330,15 +401,17 @@ function PrConversation({ repo, number, canReply, busy, drafts, onDraft, onReply
             commentId={(thread.comment.in_reply_to_id ?? thread.comment.id)!} draft={drafts[(thread.comment.in_reply_to_id ?? thread.comment.id)!] ?? ""}
             disabled={busy || loading} onDraft={onDraft} onReply={async (id, body) => {
               const posted = await onReply(id, body);
-              setData((prev) => [prev[0], prev[1], [...prev[2].filter((item) => item.id !== posted.id), posted]]);
+              setData((prev) => [prev[0], [...prev[1].filter((item) => item.id !== posted.id), posted]]);
             }} />}
         </details>)}
       </>}
     </article>)}
     {loading && <p className="prv-muted">Loading conversation…</p>}
-    {error && <div className="acct-error" role="alert">{error} <button className="pr-link" onClick={() => setRetry((v) => v + 1)}>Retry conversation</button></div>}
+    {timelineWarning && <p className="prv-muted">{timelineWarning}</p>}
+    {threadStateError && <p className="prv-muted">Thread resolution status unavailable: {threadStateError} <button className="pr-link" disabled={busy || loading} onClick={() => { setPage(1); setRetry((v) => v + 1); }}>Retry thread status</button></p>}
+    {error && <div className="acct-error" role="alert">{error} <button className="pr-link" disabled={busy || loading} onClick={() => setRetry((v) => v + 1)}>Retry conversation</button></div>}
     {!entries.length && !loading && !error && <p className="prv-muted">No conversation activity yet.</p>}
-    {more && !error && !loading && <div className="prv-conversation-more"><p className="prv-muted">More conversation activity is available. Review threads may expand as additional pages load.</p><button className="dialog-btn" disabled={busy} onClick={() => setPage((v) => v + 1)}>Load more activity</button></div>}
+    {more && !error && !loading && <div className="prv-conversation-more"><button className="dialog-btn" disabled={busy} onClick={() => setPage((v) => v + 1)}>Load more activity</button></div>}
   </div>;
 }
 

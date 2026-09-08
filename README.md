@@ -328,15 +328,21 @@ The sidebar's **Pull Requests** section lists PRs for a selected GitHub remote
 or its fork parent. **Open** is the default; **Closed**, **Merged**, and **All
 states** are also available. Expand **My Pull Requests** (authored by you),
 **Assigned to Me**, **Review Requested** (requested directly from you), or
-**All Pull Requests**. A PR may appear in several groups. Team review requests
+**All Pull Requests**. All four groups start collapsed, including when switching
+repositories. A PR may appear in several groups. Team review requests
 are visible in PR details. Search and group counts cover the loaded pages;
 use **Load more pull requests** for older results and the refresh button to
 check for updates. The + button opens the existing creation dialog.
 
 Click a PR to open its detail modal, with Markdown description, people, labels,
 **Conversation**, **Commits**, **Checks**, and **Files changed** tabs. Conversation
-combines general comments and reviews in chronological order, with code snippets
-and replies grouped under their review. The merge box appears below the timeline.
+uses GitHub's timeline order for commits, references, status changes, comments,
+and reviews, with code snippets and replies grouped under their review. Consecutive
+commits are grouped and notification-only bookkeeping is hidden. The merge box
+appears below the timeline. GitHub's public timeline does not expose every detail
+of the website's presentation, such as exact push batches. Review-thread resolved,
+outdated, and collapsed states are read through GitHub GraphQL; a status message
+appears if that additional data cannot be loaded.
 Submit a review through **Files changed → Review changes**, using Comment,
 Approve, or Request changes; general PR comments stay in Conversation.
 In **Files changed**, expand a file and use the **+** beside a diff line to

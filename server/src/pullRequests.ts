@@ -77,8 +77,41 @@ export async function pullRequestDetails(token: string, slug: string, number: nu
 }
 
 export async function pullRequestActivity(token: string, slug: string, number: number, kind: string, page: number) {
+  if (kind === "thread-states") {
+    const [owner, name] = slug.split("/");
+    const items: Array<{ node_id: string; is_resolved: boolean; is_outdated: boolean; is_collapsed: boolean }> = [];
+    let cursor: string | null = null;
+    do {
+      const result: { data?: { repository?: { pullRequest?: { reviewThreads: {
+        nodes: Array<{ isResolved: boolean; isOutdated: boolean; isCollapsed: boolean; comments: { nodes: Array<{ id: string }> } }>;
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      } } } }; errors?: Array<{ message: string }> } = await request(token, "/graphql", "POST", {
+        query: `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+          repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+            reviewThreads(first: 100, after: $cursor) {
+              nodes { isResolved isOutdated isCollapsed comments(first: 1) { nodes { id } } }
+              pageInfo { hasNextPage endCursor }
+            }
+          } }
+        }`,
+        variables: { owner, name, number, cursor },
+      });
+      if (result.errors?.length) throw new Error(result.errors.map((e) => e.message).join("; "));
+      const threads = result.data?.repository?.pullRequest?.reviewThreads;
+      if (!threads) throw new Error("GitHub did not return review thread state.");
+      for (const thread of threads.nodes) {
+        const root = thread.comments.nodes[0];
+        if (root) items.push({ node_id: root.id, is_resolved: thread.isResolved, is_outdated: thread.isOutdated, is_collapsed: thread.isCollapsed });
+      }
+      if (!threads.pageInfo.hasNextPage) break;
+      if (!threads.pageInfo.endCursor || threads.pageInfo.endCursor === cursor) throw new Error("GitHub did not advance review thread pagination.");
+      cursor = threads.pageInfo.endCursor;
+    } while (cursor);
+    return { items, hasMore: false };
+  }
   const path = `/repos/${slug}`;
   const endpoints: Record<string, string> = {
+    timeline: `${path}/issues/${number}/timeline`,
     comments: `${path}/issues/${number}/comments`, reviews: `${path}/pulls/${number}/reviews`,
     threads: `${path}/pulls/${number}/comments`, files: `${path}/pulls/${number}/files`, commits: `${path}/pulls/${number}/commits`,
   };
@@ -86,6 +119,26 @@ export async function pullRequestActivity(token: string, slug: string, number: n
   const endpoint = endpoints[kind];
   const before = kind === "files" ? await request<Pull>(token, `${path}/pulls/${number}`) : null;
   const items = await request<unknown[]>(token, `${endpoint}?per_page=100&page=${page}`);
+  if (kind === "timeline") {
+    const commits = (items as Array<{ event?: string; node_id?: string; sha?: string }>).filter((item) => item.event === "committed" && item.node_id);
+    if (commits.length) {
+      try {
+        const result = await request<{ data?: { nodes: Array<{ oid: string; author?: { user?: { login: string; avatarUrl: string } }; statusCheckRollup?: { state: string } } | null> }; errors?: Array<{ message: string }> }>(token, "/graphql", "POST", {
+          query: `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Commit { oid author { user { login avatarUrl } } statusCheckRollup { state } } } }`,
+          variables: { ids: commits.map((item) => item.node_id) },
+        });
+        if (result.errors?.length) throw new Error(result.errors.map((e) => e.message).join("; "));
+        if (!result.data) throw new Error("GitHub did not return commit details.");
+        const bySha = new Map(result.data.nodes.filter((node) => node !== null).map((node) => [node.oid, node]));
+        return { items: (items as Array<{ event?: string; sha?: string }>).map((item) => {
+          const commit = item.event === "committed" ? bySha.get(item.sha ?? "") : undefined;
+          return commit ? { ...item, user: commit.author?.user ? { login: commit.author.user.login, avatar_url: commit.author.user.avatarUrl } : undefined, check_state: commit.statusCheckRollup?.state } : item;
+        }), hasMore: items.length === 100 };
+      } catch (e) {
+        return { items, hasMore: items.length === 100, warning: `Commit details unavailable: ${e instanceof Error ? e.message : "Couldn't load commit details."}` };
+      }
+    }
+  }
   if (before) {
     const after = await request<Pull>(token, `${path}/pulls/${number}`);
     if (before.head.sha !== after.head.sha) throw Object.assign(new Error("The pull request changed while loading files. Refresh and try again."), { status: 409 });

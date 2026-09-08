@@ -91,8 +91,8 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   word-break: break-word;
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
   color: var(--text-strong);
   line-height: 1.5;
 }
@@ -138,7 +138,7 @@
 }
 .cd-body pre,
 .cd-body code {
-  font-family: inherit;
+  font-family: var(--font-mono);
   font-size: inherit;
   background: var(--bg-input);
   border-radius: var(--radius-sm);

@@ -323,9 +323,16 @@ branch. The dialog reads the repo's GitHub remotes, so:
 
 The created PR opens in a new browser tab.
 
-The connected access token is injected per-command via an HTTP auth header, and any system
-credential manager is bypassed so operations never block on a GUI prompt — a
-missing/invalid token fails fast with a clear message. **Forgot to revoke?**
+Git commands, including those in the terminal panel, receive the connected account's
+token through a temporary credential helper scoped to HTTPS `github.com`. This also
+authenticates Git LFS downloads during checkout and missing objects in partial clones.
+The token is passed through the child process environment, not command arguments or
+repository configuration, and is not saved into the system credential manager.
+Git Credential Manager interaction and Git's askpass prompts are disabled; missing or
+rejected credentials fail instead of opening a sign-in window or switching to a
+different cached GitHub account. Other hosts can still
+use their existing cached credentials, and SSH remotes use the existing SSH setup.
+**Forgot to revoke?**
 Delete `github.json` in the config dir (or use **Disconnect**). Connecting an
 account is optional; it is only needed for authenticated HTTPS actions.
 

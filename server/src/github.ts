@@ -19,6 +19,7 @@ const GITHUB = "https://github.com";
 const GITHUB_OAUTH_CLIENT_ID = "Ov23liu2LXjA3dklsGu1";
 const OAUTH_FINISH_TTL_MS = 30 * 60_000;
 const GITHUB_REQUEST_TIMEOUT_MS = 15_000;
+const OAUTH_REFRESH_RETRY_MS = 30_000;
 const TOKEN_TEMP_MAX_AGE_MS = 10 * 60_000;
 
 export interface GitHubUser {
@@ -55,6 +56,7 @@ let loaded = false;
 let tokenRevision = 0;
 let refreshPromise: Promise<TokenConfig | null> | null = null;
 let pendingOAuthRefresh: PendingOAuthRefresh | null = null;
+let failedOAuthRefresh: { token: string; tokenRevision: number; retryAt: number } | null = null;
 let tokenWriteQueue: Promise<void> = Promise.resolve();
 
 function processIsRunning(pid: number): boolean {
@@ -187,38 +189,51 @@ async function readRefreshRecovery(): Promise<RefreshRecovery | null> {
   return recovered[0]?.recovery ?? null;
 }
 
-async function read(): Promise<TokenConfig | null> {
+async function read(inWriteQueue = false): Promise<TokenConfig | null> {
   if (loaded) return cache;
+  const revision = tokenRevision;
   try {
     await cleanupTokenTemps();
     const main = await fs.readFile(tokenFile(), "utf8").then(parseTokenConfig, () => null);
     const recovered = await readRefreshRecovery();
+    if (loaded || revision !== tokenRevision) return cache;
     if (recovered) {
-      if (main && (
-        main.token === recovered.previousToken ||
-        main.token === recovered.config.token
-      )) {
-        try {
-          await persistTokenConfig(recovered.config);
-          await clearRefreshRecovery();
-        } catch {
-          // The complete recovery record remains authoritative until promotion succeeds.
+      const restore = async () => {
+        if (loaded || revision !== tokenRevision) return cache;
+        if (main && (
+          main.token === recovered.previousToken ||
+          main.token === recovered.config.token
+        )) {
+          try {
+            await persistTokenConfig(recovered.config);
+            await clearRefreshRecovery();
+          } catch {
+            // The complete recovery record remains authoritative until promotion succeeds.
+          }
+          cache = recovered.config;
+        } else {
+          await clearRefreshRecovery().catch(() => undefined);
+          cache = main;
         }
-        cache = recovered.config;
         loaded = true;
         return cache;
-      }
-      await clearRefreshRecovery().catch(() => undefined);
+      };
+      if (inWriteQueue) return await restore();
+      const restoring = tokenWriteQueue.then(restore);
+      tokenWriteQueue = restoring.then(() => undefined, () => undefined);
+      return await restoring;
     }
+    if (loaded || revision !== tokenRevision) return cache;
     cache = main;
   } catch {
+    if (loaded || revision !== tokenRevision) return cache;
     cache = null;
   }
   loaded = true;
   return cache;
 }
 
-export async function getToken(): Promise<string | null> {
+async function readUsableToken(): Promise<string | null> {
   let config = await read();
   if (!config) return null;
   if (pendingOAuthRefresh?.tokenRevision === tokenRevision) {
@@ -253,6 +268,14 @@ export async function getToken(): Promise<string | null> {
     if (config.expiresAt <= Date.now()) return null;
   }
   return config.token;
+}
+
+export async function getToken(): Promise<string | null> {
+  for (;;) {
+    const revision = tokenRevision;
+    const token = await readUsableToken();
+    if (revision === tokenRevision) return token;
+  }
 }
 
 export async function hasToken(): Promise<boolean> {
@@ -360,11 +383,12 @@ function oauthError(value: unknown, fallback: string): Error & { status: number 
 
 async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | null> {
   if (refreshPromise) return refreshPromise;
+  const expectedRevision = tokenRevision;
   const persist = async (pending: PendingOAuthRefresh): Promise<TokenConfig | null> => {
     const commit = tokenWriteQueue.then(async () => {
       if (pendingOAuthRefresh !== pending || pending.tokenRevision !== tokenRevision) {
         if (pendingOAuthRefresh === pending) pendingOAuthRefresh = null;
-        return read();
+        return read(true);
       }
       try {
         await writeConfigFile(refreshRecoveryFile(), {
@@ -394,6 +418,14 @@ async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | nul
       return persist(pendingOAuthRefresh);
     }
     pendingOAuthRefresh = null;
+    if (
+      failedOAuthRefresh?.tokenRevision === tokenRevision &&
+      failedOAuthRefresh.token === config.token &&
+      failedOAuthRefresh.retryAt > Date.now()
+    ) {
+      return config.expiresAt !== undefined && config.expiresAt <= Date.now() ? null : config;
+    }
+    failedOAuthRefresh = null;
 
     if (!config.refreshToken) throw new Error("GitHub OAuth cannot refresh this token");
     if (
@@ -403,7 +435,6 @@ async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | nul
       throw new Error("The GitHub OAuth refresh token expired");
     }
 
-    const expectedRevision = tokenRevision;
     const body = new URLSearchParams({
       client_id: GITHUB_OAUTH_CLIENT_ID,
       grant_type: "refresh_token",
@@ -446,7 +477,16 @@ async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | nul
     pendingOAuthRefresh = pending;
     return persist(pending);
   })();
-  refreshPromise = refresh.finally(() => {
+  refreshPromise = refresh.catch((e) => {
+    if (tokenRevision === expectedRevision && !pendingOAuthRefresh) {
+      failedOAuthRefresh = {
+        token: config.token,
+        tokenRevision: expectedRevision,
+        retryAt: Date.now() + OAUTH_REFRESH_RETRY_MS,
+      };
+    }
+    throw e;
+  }).finally(() => {
     refreshPromise = null;
   });
   return refreshPromise;
@@ -725,7 +765,7 @@ async function storeOAuthToken(
       return;
     }
     flow.commitStarted = true;
-    flow.previousConfig = await read();
+    flow.previousConfig = await read(true);
     if (
       flow.cancelled ||
       oauthFlows.get(flowId) !== flow ||
@@ -1316,6 +1356,7 @@ export function _resetTokenCache(): void {
   loaded = false;
   refreshPromise = null;
   pendingOAuthRefresh = null;
+  failedOAuthRefresh = null;
   for (const flow of oauthFlows.values()) {
     if (flow.cleanupTimer) clearTimeout(flow.cleanupTimer);
   }

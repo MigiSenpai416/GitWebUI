@@ -52,6 +52,33 @@ describe("token storage", () => {
     expect(await hasToken()).toBe(false);
     expect(await getToken()).toBeNull();
   });
+
+  it.each(["disconnect", "replace"])("keeps %s authoritative during the initial token read", async (action) => {
+    await setToken("ghp_old");
+    _resetTokenCache();
+    const readFile = fs.readFile.bind(fs);
+    let release!: () => void;
+    const responseReady = new Promise<void>((resolve) => { release = resolve; });
+    let markStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      const contents = await readFile(...args);
+      if (String(args[0]) === path.join(TMP, "github.json")) {
+        markStarted();
+        await responseReady;
+      }
+      return contents;
+    });
+
+    const reading = getToken();
+    await readStarted;
+    if (action === "disconnect") await deleteToken();
+    else await setToken("ghp_replacement");
+    release();
+    const expected = action === "disconnect" ? null : "ghp_replacement";
+    expect(await reading).toBe(expected);
+    expect(await getToken()).toBe(expected);
+  });
 });
 
 describe("OAuth Device Flow", () => {
@@ -81,7 +108,15 @@ describe("OAuth Device Flow", () => {
     expect(clientIds).toEqual(["Ov23liu2LXjA3dklsGu1"]);
   });
 
-  it("keeps the device secret server-side and stores the authorized OAuth token", async () => {
+  it.each([false, true])("keeps the device secret server-side and stores the authorized OAuth token (recovery: %s)", async (recovery) => {
+    if (recovery) {
+      await setToken("ghp_old");
+      await fs.writeFile(path.join(TMP, "github-refresh.json"), JSON.stringify({
+        previousToken: "ghp_old",
+        config: { token: "gho_recovered", authMethod: "oauth" },
+      }));
+      _resetTokenCache();
+    }
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const calls: Array<{ url: string; body: string; signal: AbortSignal | null }> = [];
@@ -933,6 +968,85 @@ describe("OAuth Device Flow", () => {
     expect(requestBody).not.toContain("client_secret");
   });
 
+  it("backs off failed OAuth refreshes without returning an expired token", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    await setToken("gho_old", {
+      authMethod: "oauth",
+      refreshToken: "ghr_refresh",
+      expiresIn: 30,
+    });
+    now = 32_000;
+    const fetch = vi.fn().mockRejectedValue(new Error("offline"));
+    globalThis.fetch = fetch;
+
+    expect(await getToken()).toBeNull();
+    now = 61_999;
+    expect(await getToken()).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    now = 62_000;
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "gho_new", expires_in: 28_800 }),
+    });
+    expect(await getToken()).toBe("gho_new");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a still-valid OAuth token usable during refresh backoff", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    await setToken("gho_old", {
+      authMethod: "oauth",
+      refreshToken: "ghr_refresh",
+      expiresIn: 30,
+    });
+    const fetch = vi.fn().mockRejectedValue(new Error("offline"));
+    globalThis.fetch = fetch;
+
+    expect(await getToken()).toBe("gho_old");
+    expect(await getToken()).toBe("gho_old");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries OAuth refresh immediately after credentials are replaced", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const options = { authMethod: "oauth" as const, refreshToken: "ghr_refresh", expiresIn: 30 };
+    await setToken("gho_old", options);
+    const fetch = vi.fn().mockRejectedValue(new Error("offline"));
+    globalThis.fetch = fetch;
+    expect(await getToken()).toBe("gho_old");
+
+    await setToken("gho_old", options);
+    expect(await getToken()).toBe("gho_old");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries rotated-token persistence immediately without another refresh", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    await setToken("gho_old", {
+      authMethod: "oauth",
+      refreshToken: "ghr_refresh",
+      expiresIn: 30,
+    });
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "gho_rotated", expires_in: 28_800 }),
+    });
+    globalThis.fetch = fetch;
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename")
+      .mockRejectedValueOnce(new Error("disk full"))
+      .mockImplementation(rename);
+
+    expect(await getToken()).toBe("gho_rotated");
+    expect(await getToken()).toBe("gho_rotated");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(await fs.readFile(path.join(TMP, "github.json"), "utf8")).token)
+      .toBe("gho_rotated");
+  });
+
   it("retains a rotated token in memory until a failed persistence can be retried", async () => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -1065,6 +1179,67 @@ describe("OAuth Device Flow", () => {
     now = 33_000;
     await expect(pollOAuthDeviceFlow(flow.flowId)).resolves.toMatchObject({ status: "complete" });
     expect(await getToken()).toBe("gho_reconnected");
+  });
+
+  it.each(["disconnect", "replace"])("uses current credentials after %s during a failed refresh", async (action) => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    await setToken("gho_old", {
+      authMethod: "oauth",
+      refreshToken: "ghr_refresh",
+      expiresIn: 30,
+    });
+    let release!: () => void;
+    const responseReady = new Promise<void>((resolve) => { release = resolve; });
+    let markStarted!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    const fetch = vi.fn(async () => {
+      markStarted();
+      await responseReady;
+      throw new Error("offline");
+    });
+    globalThis.fetch = fetch;
+
+    const refreshing = getToken();
+    await refreshStarted;
+    if (action === "disconnect") await deleteToken();
+    else await setToken("ghp_replacement");
+    release();
+    const expected = action === "disconnect" ? null : "ghp_replacement";
+    expect(await refreshing).toBe(expected);
+    expect(await getToken()).toBe(expected);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["disconnect", "replace"])("serializes %s after recovery promotion already in flight", async (action) => {
+    await setToken("ghp_old");
+    await fs.writeFile(path.join(TMP, "github-refresh.json"), JSON.stringify({
+      previousToken: "ghp_old",
+      config: { token: "gho_recovered", authMethod: "oauth" },
+    }));
+    _resetTokenCache();
+    const rename = fs.rename.bind(fs);
+    let release!: () => void;
+    const responseReady = new Promise<void>((resolve) => { release = resolve; });
+    let markStarted!: () => void;
+    const promotionStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    let blocked = false;
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      if (!blocked && String(args[1]) === path.join(TMP, "github.json")) {
+        blocked = true;
+        markStarted();
+        await responseReady;
+      }
+      return rename(...args);
+    });
+
+    const reading = getToken();
+    await promotionStarted;
+    const changing = action === "disconnect" ? deleteToken() : setToken("ghp_replacement");
+    await Promise.race([changing, new Promise((resolve) => setTimeout(resolve, 100))]);
+    release();
+    await Promise.all([reading, changing]);
+    _resetTokenCache();
+    expect(await getToken()).toBe(action === "disconnect" ? null : "ghp_replacement");
   });
 
   it("serializes replacement credentials after an in-flight refresh", async () => {

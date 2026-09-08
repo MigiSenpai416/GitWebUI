@@ -43,36 +43,6 @@ export async function removeRemote(root: string, name: string): Promise<void> {
 }
 
 /**
- * Config args + env that let git authenticate to an HTTPS remote with the
- * stored token WITHOUT leaking it into argv history and WITHOUT triggering an
- * interactive credential-manager popup (which would hang the server):
- * - `credential.helper=` clears any configured helper (e.g. GCM) for this call.
- * - `http.extraHeader` supplies Basic auth only for an HTTPS github.com URL.
- * - GIT_TERMINAL_PROMPT=0 makes auth failures error out instead of prompting.
- */
-export function authArgs(token: string | null, remoteUrl: string | null): string[] {
-  const args = ["-c", "credential.helper="];
-  let githubHttps = false;
-  if (remoteUrl) {
-    try {
-      const parsed = new URL(remoteUrl.trim());
-      githubHttps = parsed.protocol === "https:" && parsed.hostname.toLowerCase() === "github.com";
-    } catch {
-      // SSH/scp syntax and local filesystem paths are intentionally token-free.
-    }
-  }
-  if (token && githubHttps) {
-    const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
-    // Scope the header at Git's own URL-matching layer too. Even if a GitHub
-    // request redirects, Git must not carry the credential to another host.
-    args.push("-c", `http.https://github.com/.extraHeader=Authorization: Basic ${basic}`);
-  }
-  return args;
-}
-
-const AUTH_ENV: NodeJS.ProcessEnv = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" };
-
-/**
  * Turn a raw Git credential failure into an actionable remote-auth error.
  *
  * A remote authentication failure must be 403, not 401: the web client reserves
@@ -110,50 +80,6 @@ async function upstreamName(root: string, branch: string): Promise<string | null
   } catch {
     return null;
   }
-}
-
-async function configValue(root: string, key: string): Promise<string | null> {
-  try {
-    const { stdout } = await runGit(root, ["config", "--get", key]);
-    return stdout.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-/** Resolve the remote Git itself will use for a push of this tracked branch. */
-async function configuredPushRemote(root: string, branch: string): Promise<string | null> {
-  return (
-    (await configValue(root, `branch.${branch}.pushRemote`)) ??
-    (await configValue(root, "remote.pushDefault")) ??
-    (await configValue(root, `branch.${branch}.remote`))
-  );
-}
-
-/** Resolve a registered remote's effective fetch or push URL. */
-async function remoteUrl(root: string, remote: string | null, push: boolean): Promise<string | null> {
-  if (!remote || remote === ".") return null;
-  try {
-    const { stdout } = await runGit(root, [
-      "remote",
-      "get-url",
-      ...(push ? ["--push"] : []),
-      remote,
-    ]);
-    return stdout.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-/** Build auth config from the effective URL Git has configured for a remote. */
-export async function authArgsForRemote(
-  root: string,
-  token: string | null,
-  remote: string | null,
-  push: boolean,
-): Promise<string[]> {
-  return authArgs(token, await remoteUrl(root, remote, push));
 }
 
 /**
@@ -227,12 +153,11 @@ export async function push(root: string, opts: { force?: PushForce } = {}): Prom
   const branch = await currentBranch(root);
   const upstream = await upstreamName(root, branch);
   const initialRemote = upstream ? null : await initialPushRemote(root);
-  const pushRemote = initialRemote ?? (await configuredPushRemote(root, branch));
-  const args = [...(await authArgsForRemote(root, token, pushRemote, true)), "push"];
+  const args = ["push"];
   if (opts.force) args.push(FORCE_FLAG[opts.force]);
   if (initialRemote) args.push("--set-upstream", initialRemote, branch);
   try {
-    const { stderr } = await runGit(root, args, { env: AUTH_ENV });
+    const { stderr } = await runGit(root, args);
     return { branch, output: stderr.trim() };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -278,13 +203,11 @@ export async function deleteRemoteBranch(
     await runGit(
       root,
       [
-        ...(await authArgsForRemote(root, token, remote, true)),
         "push",
         remote,
         "--delete",
         branch,
       ],
-      { env: AUTH_ENV },
     );
   } catch (e) {
     rethrowRemoteError(e, token);
@@ -320,13 +243,10 @@ export async function pull(
       throw Object.assign(new Error(`Remote ${target.remote} no longer exists.`), { status: 409 });
     }
   }
-  const branch = await currentBranch(root);
-  const pullRemote = target?.remote ?? (await configValue(root, `branch.${branch}.remote`));
   // Pull is deliberately fetch + merge throughout GitWebUI. Make that explicit
   // so a host-level `pull.rebase=true` does not silently rewrite local commits,
   // and newer Git versions do not reject divergent pulls when no policy is set.
   const args = [
-    ...(await authArgsForRemote(root, token, pullRemote, false)),
     "-c",
     "core.editor=true",
     "pull",
@@ -335,7 +255,7 @@ export async function pull(
   ];
   if (target) args.push(target.remote, target.branch);
   try {
-    const { stdout, stderr } = await runGit(root, args, { env: AUTH_ENV });
+    const { stdout, stderr } = await runGit(root, args);
     return { output: (stdout + stderr).trim() };
   } catch (e) {
     rethrowRemoteError(e, token);
@@ -358,7 +278,7 @@ export async function cloneRepo(parentDir: string, url: string): Promise<RepoInf
   const token = await getToken();
   const target = path.join(parentDir, repoNameFromUrl(url));
   try {
-    await runGit(parentDir, [...authArgs(token, url), "clone", url, target], { env: AUTH_ENV });
+    await runGit(parentDir, ["clone", url, target]);
   } catch (e) {
     rethrowRemoteError(e, token);
   }
@@ -391,8 +311,7 @@ export async function createGitHubRemote(
   const branch = await currentBranch(root);
   await runGit(
     root,
-    [...authArgs(token, repo.cloneUrl), "push", "--set-upstream", opts.remoteName, branch],
-    { env: AUTH_ENV },
+    ["push", "--set-upstream", opts.remoteName, branch],
   );
   return { repo, remotes: await getRemotes(root) };
 }
@@ -440,8 +359,7 @@ export async function createGitHubRepoNew(opts: {
   try {
     await runGit(
       info.root,
-      [...authArgs(token, created.cloneUrl), "push", "--set-upstream", "origin", info.branch],
-      { env: AUTH_ENV },
+      ["push", "--set-upstream", "origin", info.branch],
     );
   } catch (e) {
     rethrowRemoteError(e, token);

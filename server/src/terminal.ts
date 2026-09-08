@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
+import { gitAuthEnv } from "./git/gitRunner.js";
 
 /**
  * The terminal panel's back end: run one command at a time through the user's
@@ -183,9 +184,8 @@ function shellArgs(kind: ShellKind, script: string): string[] {
  * none, so the ones that can be told to keep their colours anyway are told to,
  * and the ones that would otherwise wait on a pager are pointed at `cat`.
  */
-function commandEnv(cwd: string, out: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
+function commandEnv(cwd: string, out: string): Promise<NodeJS.ProcessEnv> {
+  return gitAuthEnv({
     GW_CWD: cwd,
     GW_OUT: out,
     TERM: "xterm-256color",
@@ -194,8 +194,8 @@ function commandEnv(cwd: string, out: string): NodeJS.ProcessEnv {
     PAGER: "cat",
     GIT_PAGER: "cat",
     // git only colours a tty unless told otherwise; this is git's own way in.
-    GIT_CONFIG_PARAMETERS: "'color.ui=always'",
-  };
+    GIT_CONFIG_PARAMETERS: `${process.env.GIT_CONFIG_PARAMETERS ?? ""} 'color.ui=always'`.trim(),
+  });
 }
 
 export interface RunEvent {
@@ -293,9 +293,14 @@ export function runCommand(
     await fs.writeFile(scriptFile, bom + buildScript(opts.shell.kind, opts.command), "utf8");
 
     try {
+      const env = await commandEnv(opts.cwd, isPs ? cwdFile : bashPath(cwdFile));
+      if (killed) {
+        emit({ t: "exit", code: null, cwd: opts.cwd, killed: true });
+        return;
+      }
       const proc = spawn(opts.shell.path, shellArgs(opts.shell.kind, scriptFile), {
         cwd: opts.cwd,
-        env: commandEnv(opts.cwd, isPs ? cwdFile : bashPath(cwdFile)),
+        env,
         windowsHide: true,
         // POSIX only: make the shell a process-group leader so the whole tree
         // can be signalled at once. Killing the shell alone would leave
@@ -362,8 +367,8 @@ export function runCommand(
    * the process group directly and is synchronous either way.
    */
   const killTree = (wait: boolean): void => {
-    if (!child || child.exitCode !== null) return;
     killed = true;
+    if (!child || child.exitCode !== null) return;
     // The shell is the process group's parent on Windows; taskkill takes the
     // tree with it, where SIGKILL on the shell alone would orphan the command.
     if (process.platform === "win32" && child.pid) {

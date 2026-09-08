@@ -1,7 +1,35 @@
 import { execFile, spawn } from "node:child_process";
 import { gitPath } from "./gitPath.js";
+import { getToken } from "../github.js";
 
 const MAX_BUFFER = 256 * 1024 * 1024; // 256 MiB — large diffs / full-file (-U1000000) output
+
+/** Git filters and lazy fetches can request credentials even during local reads. */
+const GIT_AUTH_ENV: NodeJS.ProcessEnv = {
+  GIT_TERMINAL_PROMPT: "0",
+  GCM_INTERACTIVE: "never",
+  GIT_ASKPASS: "false",
+};
+
+/** Runtime credentials follow Git into filters and lazy fetches without entering argv. */
+export async function gitAuthEnv(extra: NodeJS.ProcessEnv = {}): Promise<NodeJS.ProcessEnv> {
+  const env = { ...process.env, ...extra, ...GIT_AUTH_ENV };
+  delete env.GITWEBUI_GITHUB_TOKEN;
+  const token = await getToken();
+  const count = Number(env.GIT_CONFIG_COUNT || "0");
+  if (!Number.isSafeInteger(count) || count < 0 || count > Number.MAX_SAFE_INTEGER - 2) {
+    throw new Error("Invalid GIT_CONFIG_COUNT");
+  }
+  env.GIT_CONFIG_COUNT = String(count + (token ? 2 : 1));
+  env[`GIT_CONFIG_KEY_${count}`] = "credential.https://github.com.helper";
+  env[`GIT_CONFIG_VALUE_${count}`] = "";
+  if (!token) return env;
+  env.GITWEBUI_GITHUB_TOKEN = token;
+  env[`GIT_CONFIG_KEY_${count + 1}`] = "credential.https://github.com.helper";
+  env[`GIT_CONFIG_VALUE_${count + 1}`] =
+    '!f() { if test "$1" = get; then printf \'%s\\n\' \'username=x-access-token\' "password=$GITWEBUI_GITHUB_TOKEN"; fi; }; f';
+  return env;
+}
 
 export class GitError extends Error {
   constructor(
@@ -39,7 +67,8 @@ export interface GitOptions {
  * desktop app launched from the Dock or Explorer may not have git on its PATH
  * even though the user does. It resolves to `"git"` unless something pinned it.
  */
-export function runGit(cwd: string, args: string[], opts: GitOptions = {}): Promise<GitResult> {
+export async function runGit(cwd: string, args: string[], opts: GitOptions = {}): Promise<GitResult> {
+  const env = await gitAuthEnv(opts.env);
   return new Promise((resolve, reject) => {
     const child = execFile(
       gitPath(),
@@ -49,7 +78,7 @@ export function runGit(cwd: string, args: string[], opts: GitOptions = {}): Prom
         maxBuffer: MAX_BUFFER,
         windowsHide: true,
         encoding: "buffer",
-        env: opts.env ? { ...process.env, ...opts.env } : process.env,
+        env,
       },
       (err, stdout, stderr) => {
         const out = stdout.toString("utf8");
@@ -76,16 +105,17 @@ export function runGit(cwd: string, args: string[], opts: GitOptions = {}): Prom
 }
 
 /** Run a `-z` Git command without buffering its cumulative output. */
-export function runGitNullRecords(
+export async function runGitNullRecords(
   cwd: string,
   args: string[],
   opts: GitOptions = {},
 ): Promise<string[]> {
+  const env = await gitAuthEnv(opts.env);
   return new Promise((resolve, reject) => {
     const child = spawn(gitPath(), args, {
       cwd,
       windowsHide: true,
-      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      env,
       stdio: ["pipe", "pipe", "pipe"],
     });
     const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });

@@ -4,7 +4,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { runGit } from "./gitRunner.js";
-import { push, pull, deleteRemoteBranch, authArgsForRemote } from "./remote.js";
+import { push, pull, deleteRemoteBranch } from "./remote.js";
 import { getRemoteBranches } from "./branches.js";
 
 const BASE = path.join(os.tmpdir(), `gitwebui-push-${randomBytes(6).toString("hex")}`);
@@ -80,56 +80,6 @@ beforeEach(async () => {
 afterAll(() => fs.rm(BASE, { recursive: true, force: true }));
 
 describe("push", () => {
-  it("derives token use from a remote's distinct fetch and push URLs", async () => {
-    await fs.mkdir(WORK, { recursive: true });
-    await runGit(WORK, ["init", "-b", "main"]);
-    await runGit(WORK, ["remote", "add", "origin", "https://github.com/me/repo.git"]);
-    await runGit(WORK, [
-      "remote",
-      "set-url",
-      "--push",
-      "origin",
-      "https://github.com.evil.example/steal.git",
-    ]);
-
-    const fetchArgs = await authArgsForRemote(WORK, "secret-token", "origin", false);
-    const pushArgs = await authArgsForRemote(WORK, "secret-token", "origin", true);
-
-    expect(
-      fetchArgs.some((arg) =>
-        arg.startsWith("http.https://github.com/.extraHeader=Authorization:"),
-      ),
-    ).toBe(true);
-    expect(pushArgs).toEqual(["-c", "credential.helper="]);
-    const scopedHeader = fetchArgs[3];
-    expect(
-      (await runGit(WORK, [
-        "-c",
-        scopedHeader,
-        "config",
-        "--get-urlmatch",
-        "http.extraHeader",
-        "https://github.com/me/repo.git",
-      ])).stdout.trim(),
-    ).toMatch(/^Authorization: Basic /);
-    await expect(
-      runGit(WORK, [
-        "-c",
-        scopedHeader,
-        "config",
-        "--get-urlmatch",
-        "http.extraHeader",
-        "https://github.com.evil.example/steal.git",
-      ]),
-    ).rejects.toThrow();
-
-    await runGit(WORK, ["remote", "set-url", "origin", "https://gitlab.com/me/repo.git"]);
-    expect(await authArgsForRemote(WORK, "secret-token", "origin", false)).toEqual([
-      "-c",
-      "credential.helper=",
-    ]);
-  });
-
   it("uses the only configured remote for a branch's first push when origin does not exist", async () => {
     await fs.mkdir(BASE, { recursive: true });
     await runGit(BASE, ["init", "--bare", "company.git"]);

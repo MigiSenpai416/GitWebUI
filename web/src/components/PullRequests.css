@@ -208,6 +208,9 @@
 .prv-management .prv-section-title { width: 100%; margin-bottom: 0; }
 .prv-management > span { width: 100%; color: var(--text-dim); font-size: var(--fs-sm); line-height: 1.6; margin-bottom: 6px; }
 .prv-management > button:first-of-type { order: 1; margin-left: auto; background: transparent; }
+.prv-merge-message { width: 100%; }
+.prv-merge-message > label:first-child { display: flex; align-items: center; gap: 8px; margin: 8px 0 12px; }
+.prv-merge-message textarea { width: 100%; padding: 10px; resize: vertical; }
 .prv-dialog select { padding: 5px 8px; }
 .prv-dialog .acct-error, .prv-loading { margin: 8px 26px; flex-shrink: 0; }
 .prv-notifications {

@@ -358,6 +358,11 @@ readiness changes are available through **Open in GitHub**.
 
 The modal supports posting comments and reviews, editing the title/description,
 closing/reopening, and merging using the repository's enabled merge methods.
+For squash merges and merge commits, enable **Customize commit message** to set
+the commit title and description before confirming the merge. Leave it disabled
+to use GitHub's defaults. Rebase preserves individual commit messages. Custom
+message drafts survive failed merge attempts and method/tab changes while the
+modal stays open.
 Controls reflect your account's repository permissions; GitHub still enforces
 token scopes, branch protection, and review rules. Merge and review submissions
 include the inspected head commit. Failed submissions preserve your text.

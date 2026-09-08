@@ -32,6 +32,8 @@ export function PullRequestViewer({ repo, number, onClose, onChanged }: {
   const [replyDrafts, setReplyDrafts] = useState<Record<number, string>>({});
   const [lineDrafts, setLineDrafts] = useState<Record<string, string>>({});
   const [method, setMethod] = useState("squash");
+  const [customizeMerge, setCustomizeMerge] = useState(false);
+  const [mergeDrafts, setMergeDrafts] = useState<Record<string, { title: string; body: string }>>({});
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -126,6 +128,8 @@ export function PullRequestViewer({ repo, number, onClose, onChanged }: {
 
   const mergeReady = pr?.state === "open" && !pr.draft && pr.mergeable === true
     && ["clean", "unstable", "has_hooks"].includes(pr.mergeableState);
+  const mergeDraft = mergeDrafts[method] ?? { title: pr?.title ?? "", body: "" };
+  const customMerge = customizeMerge && method !== "rebase";
 
   return createPortal(
     <div className="dialog-backdrop" onMouseDown={busy ? undefined : onClose}>
@@ -205,7 +209,17 @@ export function PullRequestViewer({ repo, number, onClose, onChanged }: {
                 <select aria-label="Merge method" value={method} disabled={busy || !mergeReady} onChange={(e) => setMethod(e.target.value)}>
                   {pr.mergeMethods.map((m) => <option key={m} value={m}>{m === "squash" ? "Squash and merge" : m === "rebase" ? "Rebase and merge" : "Create merge commit"}</option>)}
                 </select>
-                <button className="dialog-btn dialog-btn-primary" disabled={busy || loading || !mergeReady || !pr.mergeMethods.length} onClick={() => act({ action: "merge", method, sha: pr.sha }, `Merge ${repo} #${number} into ${pr.base} using ${method}? This changes the remote repository.`)}>Merge PR</button>
+                {method !== "rebase" ? <div className="prv-merge-message">
+                  <label><input type="checkbox" checked={customizeMerge} disabled={busy || loading} onChange={(e) => {
+                    setCustomizeMerge(e.target.checked);
+                    if (e.target.checked) setMergeDrafts((prev) => ({ ...prev, [method]: mergeDraft }));
+                  }} /> Customize commit message</label>
+                  {customMerge ? <>
+                    <label className="acct-field">Commit title<input aria-label="Merge commit title" value={mergeDraft.title} disabled={busy || loading} onChange={(e) => setMergeDrafts((prev) => ({ ...prev, [method]: { ...mergeDraft, title: e.target.value } }))} /></label>
+                    <label className="acct-field">Commit description<textarea aria-label="Merge commit description" rows={4} value={mergeDraft.body} disabled={busy || loading} placeholder="Optional description" onChange={(e) => setMergeDrafts((prev) => ({ ...prev, [method]: { ...mergeDraft, body: e.target.value } }))} /></label>
+                  </> : <p className="prv-muted">GitHub will use the repository’s default commit message.</p>}
+                </div> : <span>Rebase preserves the individual commit messages.</span>}
+                <button className="dialog-btn dialog-btn-primary" disabled={busy || loading || !mergeReady || !pr.mergeMethods.length || (customMerge && !mergeDraft.title.trim())} onClick={() => act({ action: "merge", method, sha: pr.sha, ...(customMerge ? { commitTitle: mergeDraft.title, commitMessage: mergeDraft.body } : {}) }, `Merge ${repo} #${number} into ${pr.base} using ${method}? This changes the remote repository.`)}>Merge PR</button>
               </>}
             </div>
             )}

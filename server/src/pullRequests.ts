@@ -202,8 +202,15 @@ export async function actOnPullRequest(token: string, slug: string, number: numb
   } else if (action === "merge") {
     if (!["merge", "squash", "rebase"].includes(String(input.method))) invalid("Invalid merge method");
     if (!/^[a-f0-9]{40}$/i.test(String(input.sha))) invalid("A head commit is required");
+    const customMessage = input.commitTitle !== undefined || input.commitMessage !== undefined;
+    if (customMessage && input.method === "rebase") invalid("Rebase preserves individual commit messages");
+    if (input.commitTitle !== undefined && (typeof input.commitTitle !== "string" || !input.commitTitle.trim() || /[\r\n]/.test(input.commitTitle))) invalid("Enter a single-line commit title");
+    if (input.commitMessage !== undefined && typeof input.commitMessage !== "string") invalid("Invalid commit description");
     const result = await request<{ merged: boolean; message: string }>(token, `${path}/pulls/${number}/merge`, "PUT",
-      { sha: input.sha, merge_method: input.method });
+      { sha: input.sha, merge_method: input.method,
+        ...(input.commitTitle !== undefined ? { commit_title: (input.commitTitle as string).trim() } : {}),
+        ...(input.commitMessage !== undefined ? { commit_message: input.commitMessage } : {}),
+      });
     if (!result.merged) throw Object.assign(new Error(result.message || "Pull request was not merged"), { status: 409 });
   } else {
     invalid("Unknown pull request action");

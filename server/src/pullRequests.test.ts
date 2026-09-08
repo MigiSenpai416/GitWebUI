@@ -102,6 +102,33 @@ describe("pull request actions", () => {
     expect(fetch.mock.calls[0][0]).toBe("https://api.github.com/repos/owner/repo/pulls/7/comments/11/replies");
     expect(fetch.mock.calls[0][1]).toMatchObject({ method: "POST", body: JSON.stringify({ body: "Fixed" }) });
   });
+  it.each(["merge", "squash", "rebase"])("omits custom fields when using GitHub defaults for %s", async (method) => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ merged: true }));
+    await actOnPullRequest("token", "owner/repo", 7, { action: "merge", method, sha: pull.head.sha });
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ sha: pull.head.sha, merge_method: method });
+  });
+
+  it.each(["merge", "squash"])("sends a custom title and multiline description for %s", async (method) => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ merged: true }));
+    await actOnPullRequest("token", "owner/repo", 7, { action: "merge", method, sha: pull.head.sha, commitTitle: "  Improve navigation  ", commitMessage: "First paragraph.\n\nSecond paragraph." });
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ sha: pull.head.sha, merge_method: method, commit_title: "Improve navigation", commit_message: "First paragraph.\n\nSecond paragraph." });
+  });
+
+  it("preserves an explicitly empty custom description", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ merged: true }));
+    await actOnPullRequest("token", "owner/repo", 7, { action: "merge", method: "squash", sha: pull.head.sha, commitTitle: "Title", commitMessage: "" });
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body)).commit_message).toBe("");
+  });
+
+  it.each([
+    { method: "rebase", commitTitle: "Title" }, { method: "merge", commitTitle: " " },
+    { method: "squash", commitTitle: "Title\nBody" }, { method: "merge", commitMessage: 42 },
+  ])("rejects invalid merge message input before calling GitHub: %j", async (input) => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    await expect(actOnPullRequest("token", "owner/repo", 7, { action: "merge", sha: pull.head.sha, ...input })).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("pins merges to the inspected SHA and handles a non-merged response", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ merged: false, message: "Head changed" }));
     await expect(actOnPullRequest("token", "owner/repo", 7, { action: "merge", method: "squash", sha: pull.head.sha })).rejects.toThrow("Head changed");

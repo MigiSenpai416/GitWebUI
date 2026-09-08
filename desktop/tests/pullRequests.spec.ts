@@ -89,6 +89,7 @@ test("pull requests browse, review, edit, close, reopen and merge through the lo
       const replies: unknown[] = [];
       const reviews: unknown[] = [{ id: 50, user: { login: "reviewer" }, body: "Please check the navigation behavior.\n\n<details><summary>Review context</summary>\n\nExtra review details.\n\n</details><script>window.prUnsafe = true</script>", state: "COMMENTED", submitted_at: "2026-09-08T01:00:00Z" }];
       let checkRequests = 0;
+      let mergeRequests = 0;
       const original = globalThis.fetch;
       globalThis.fetch = async (input, init) => {
         const url = String(input);
@@ -102,7 +103,7 @@ test("pull requests browse, review, edit, close, reopen and merge through the lo
         } } } } });
         if (path === "/user") return Response.json({ login: "viewer", id: 1 });
         if (path === "/user/emails") return Response.json([]);
-        if (path === "/repos/example/project") return Response.json({ full_name: "example/project", name: "project", owner: { login: "example" }, default_branch: "main", private: false, fork: false, permissions: { push: true }, allow_squash_merge: true, allow_merge_commit: true });
+        if (path === "/repos/example/project") return Response.json({ full_name: "example/project", name: "project", owner: { login: "example" }, default_branch: "main", private: false, fork: false, permissions: { push: true }, allow_squash_merge: true, allow_merge_commit: true, allow_rebase_merge: true });
         if (path.endsWith("/pulls")) {
           const state = new URL(url).searchParams.get("state");
           return Response.json(state === "all" || pr.state === state ? [pr] : []);
@@ -133,6 +134,8 @@ test("pull requests browse, review, edit, close, reopen and merge through the lo
         }
         if (path.endsWith("/merge")) {
           if (body.sha !== pr.head.sha || body.merge_method !== "squash") return Response.json({ merged: false, message: "Incorrect merge request" });
+          if (body.commit_title !== "Ship sidebar navigation" || body.commit_message !== "Improve navigation.\n\nPreserve keyboard focus.") return Response.json({ merged: false, message: "Incorrect commit message" });
+          if (mergeRequests++ === 0) return Response.json({ merged: false, message: "Merge temporarily blocked" });
           pr.state = "closed"; pr.merged_at = "2026-09-08T02:00:00Z";
           return Response.json({ merged: true, message: "Merged" });
         }
@@ -274,6 +277,36 @@ test("pull requests browse, review, edit, close, reopen and merge through the lo
     await dialog.getByRole("button", { name: "Reopen PR" }).click();
     await window.locator(".confirm-bar").getByRole("button", { name: "Confirm", exact: true }).click();
     await expect(dialog.getByRole("button", { name: "Merge PR" })).toBeEnabled();
+    await dialog.getByRole("checkbox", { name: "Customize commit message" }).check();
+    await dialog.getByRole("textbox", { name: "Merge commit title" }).fill("");
+    await expect(dialog.getByRole("button", { name: "Merge PR" })).toBeDisabled();
+    await dialog.getByRole("textbox", { name: "Merge commit title" }).fill("Ship sidebar navigation");
+    await dialog.getByRole("textbox", { name: "Merge commit description" }).fill("Improve navigation.\n\nPreserve keyboard focus.");
+    await dialog.getByLabel("Merge method").selectOption("merge");
+    await dialog.getByRole("textbox", { name: "Merge commit title" }).fill("Merge-method title");
+    await dialog.getByRole("textbox", { name: "Merge commit description" }).fill("Merge-method description");
+    await dialog.getByLabel("Merge method").selectOption("rebase");
+    await expect(dialog.getByRole("textbox", { name: "Merge commit title" })).toHaveCount(0);
+    await expect(dialog.getByText("Rebase preserves the individual commit messages.")).toBeVisible();
+    await dialog.getByLabel("Merge method").selectOption("squash");
+    await expect(dialog.getByRole("textbox", { name: "Merge commit title" })).toHaveValue("Ship sidebar navigation");
+    await dialog.getByRole("checkbox", { name: "Customize commit message" }).uncheck();
+    await expect(dialog.getByRole("textbox", { name: "Merge commit title" })).toHaveCount(0);
+    await dialog.getByRole("checkbox", { name: "Customize commit message" }).check();
+    await dialog.getByRole("tab", { name: "Commits (1)", exact: true }).click();
+    await dialog.getByRole("tab", { name: "Conversation", exact: true }).click();
+    await dialog.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "Merge PR" })).toBeEnabled();
+    await expect(dialog.getByRole("textbox", { name: "Merge commit title" })).toHaveValue("Ship sidebar navigation");
+    await dialog.getByRole("button", { name: "Merge PR" }).click();
+    await expect(dialog.getByRole("textbox", { name: "Merge commit title" })).toBeDisabled();
+    await window.locator(".confirm-bar").getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog.getByRole("textbox", { name: "Merge commit title" })).toBeEnabled();
+    await expect(dialog.getByRole("textbox", { name: "Merge commit description" })).toHaveValue("Improve navigation.\n\nPreserve keyboard focus.");
+    await dialog.getByRole("button", { name: "Merge PR" }).click();
+    await window.locator(".confirm-bar").getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(dialog.getByRole("alert")).toContainText("Merge temporarily blocked");
+    await expect(dialog.getByRole("textbox", { name: "Merge commit description" })).toHaveValue("Improve navigation.\n\nPreserve keyboard focus.");
     await dialog.getByRole("button", { name: "Merge PR" }).click();
     await window.locator(".confirm-bar").getByRole("button", { name: "Confirm", exact: true }).click();
     await expect(dialog.getByText("This pull request is merged.")).toBeVisible();

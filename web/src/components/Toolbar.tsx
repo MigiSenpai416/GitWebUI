@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../state/store";
+import { useCommitSearch } from "../state/commitSearch";
 import { isDesktop } from "../desktop";
 import { BranchMenu } from "./BranchMenu";
 import { ActionsMenu } from "./ActionsMenu";
@@ -23,6 +24,10 @@ import {
 import "./Toolbar.css";
 
 export function Toolbar() {
+  const searchOpen = useCommitSearch((s) => s.open);
+  const toggleSearch = useCommitSearch((s) => s.toggle);
+  const closeWorktreeCreate = useStore((s) => s.closeWorktreeCreate);
+  const worktreeCreateOpen = useStore((s) => s.worktreeCreateOpen);
   const repo = useStore((s) => s.repo);
   const setNotice = useStore((s) => s.setNotice);
   const logout = useStore((s) => s.logout);
@@ -170,7 +175,7 @@ export function Toolbar() {
           </ToolButton>
           {actionsOpen && <ActionsMenu onClose={() => setActionsOpen(false)} />}
         </div>
-        <ToolButton label="Search" onClick={soon("Search")}>
+        <ToolButton label="Search" onClick={() => { closeWorktreeCreate(); if (!searchOpen || !worktreeCreateOpen) toggleSearch(); }} active={searchOpen} disabled={opening}>
           <IconSearch />
         </ToolButton>
         {/* There is no session to end in the desktop app — the window's

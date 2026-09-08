@@ -15,7 +15,7 @@ const HELPER = '!f() { echo helper-called >&2; if [ "$GCM_INTERACTIVE" != "never
 
 beforeEach(async () => {
   vi.mocked(getToken).mockReset().mockResolvedValue(null);
-  await fs.rm(ROOT, { recursive: true, force: true });
+  await fs.rm(ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   await fs.mkdir(ROOT, { recursive: true });
   await fs.writeFile(path.join(ROOT, "global-config"), "");
   vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
@@ -30,7 +30,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => vi.unstubAllEnvs());
-afterAll(() => fs.rm(ROOT, { recursive: true, force: true }));
+afterAll(() => fs.rm(ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
 
 describe("noninteractive Git authentication", () => {
   it.each(["github.com", "github.com:443", "GITHUB.COM"])("uses the saved token for %s without persisting it", async (host) => {
@@ -113,6 +113,49 @@ describe("noninteractive Git authentication", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("helper-called");
     expect((error as Error).message).not.toContain("credential-popup");
+  });
+
+  it("does not launch Git cancelled while its token is loading", async () => {
+    let ready!: () => void;
+    let finish!: (token: string | null) => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    const token = new Promise<string | null>((resolve) => { finish = resolve; });
+    vi.mocked(getToken).mockImplementationOnce(() => { ready(); return token; });
+    const controller = new AbortController();
+    const result = runGit(ROOT, ["config", "test.cancelled", "should-not-run"], { signal: controller.signal });
+    const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+    await started;
+    controller.abort();
+    finish(null);
+    await rejected;
+    expect(await fs.readFile(path.join(ROOT, ".git", "config"), "utf8")).not.toContain("should-not-run");
+  });
+
+  it("cancels a running Git command waiting for input", async () => {
+    const controller = new AbortController();
+    const result = runGit(ROOT, ["cat-file", "--batch"], { signal: controller.signal });
+    const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+    const timer = setTimeout(() => controller.abort(), 100);
+    try {
+      await rejected;
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  it("cancels Git while a large stdin write is still buffered", async () => {
+    const controller = new AbortController();
+    const result = runGit(ROOT, ["cat-file", "--batch-check"], {
+      input: "HEAD\n".repeat(2_000_000),
+      signal: controller.signal,
+    });
+    const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+    const timer = setTimeout(() => controller.abort(), 10);
+    try {
+      await rejected;
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
   it("still accepts credentials returned without interaction", async () => {

@@ -119,3 +119,36 @@ export async function getLog(
   ]);
   return parseLog(stdout);
 }
+
+export async function searchCommits(root: string, query: string, signal?: AbortSignal) {
+  const [head, refs] = await Promise.all([
+    runGit(root, ["rev-parse", "--verify", "HEAD"], { signal }).then((result) => result.stdout.trim()).catch(() => {
+      signal?.throwIfAborted();
+      return null;
+    }),
+    runGit(root, ["rev-parse", "--branches", "--remotes", "--tags"], { signal }),
+  ]);
+  const revisions = [...new Set([...(head ? [head] : []), ...refs.stdout.trim().split(/\s+/).filter(Boolean)])];
+  if (!revisions.length) return { rows: [], matches: [] };
+  const args = ["log", "--date-order", "--no-notes", "--no-show-signature", "--stdin"];
+  const input = revisions.join("\n") + "\n";
+  const [history, hits] = await Promise.all([
+    runGit(root, [...args, "--format=%H %P"], { input, signal }),
+    runGit(root, [...args, "--format=%H", "--fixed-strings", "--regexp-ignore-case", `--grep=${query}`], { input, signal }),
+  ]);
+  const matched = new Set(hits.stdout.trim().split(/\s+/));
+  const rows = history.stdout.trim().split("\n").filter(Boolean).map((line) => {
+    const [hash, ...parents] = line.trim().split(/\s+/);
+    return { hash, parents };
+  });
+  const matches = rows.flatMap((row, index) => matched.has(row.hash) ? [index] : []);
+  return { rows, matches };
+}
+
+export async function getCommitsByHash(root: string, hashes: string[], signal?: AbortSignal): Promise<Commit[]> {
+  if (!hashes.length) return [];
+  const { stdout } = await runGit(root, [
+    "log", "--no-walk=unsorted", "--no-notes", "--no-show-signature", "--decorate=full", `--pretty=format:${FORMAT}`, ...hashes, "--",
+  ], { signal });
+  return parseLog(stdout);
+}

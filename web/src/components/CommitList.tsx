@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useStore, type GraphMode } from "../state/store";
+import { useCommitSearch } from "../state/commitSearch";
+import { CommitSearch } from "./CommitSearch";
 import type { Commit, StashEntry } from "../types";
 import { RefBadges } from "./RefBadges";
 import { IconWarning } from "./icons";
@@ -45,12 +47,19 @@ export function CommitList() {
   const mergeState = useStore((s) => s.mergeState);
   const graphMode = useStore((s) => s.graphMode);
   const setGraphMode = useStore((s) => s.setGraphMode);
+  const search = useCommitSearch();
+  const searching = search.open && !!search.query.trim();
+  const history = searching ? search.rows : commits;
+  const matchHashes = useMemo(
+    () => new Set(search.matches.map((index) => search.rows[index].hash)),
+    [search.matches, search.rows],
+  );
 
   const parentRef = useRef<HTMLDivElement>(null);
   const wipCount = status.staged.length + status.unstaged.length;
   const fullGraph = useMemo(
-    () => graphMode === "full" ? layoutCommitGraph(commits) : null,
-    [commits, graphMode],
+    () => graphMode === "full" ? layoutCommitGraph(history) : null,
+    [history, graphMode],
   );
   const graphWidth = fullGraph ? graphSvgWidth(fullGraph.maxLanes) : 34;
   const graphColumnWidth = fullGraph
@@ -61,7 +70,7 @@ export function CommitList() {
     ? { minWidth: graphColumnWidth + WIDE_GRAPH_REMAINING_WIDTH }
     : undefined;
 
-  const rowCount = commits.length;
+  const rowCount = history.length;
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
@@ -71,16 +80,29 @@ export function CommitList() {
 
   const items = virtualizer.getVirtualItems();
   const lastItem = items[items.length - 1];
+  const firstIndex = items[0]?.index ?? 0;
+  const lastIndex = lastItem?.index ?? -1;
   useEffect(() => {
+    if (searching) void search.hydrate(history.slice(firstIndex, lastIndex + 1).map((row) => row.hash));
+  }, [searching, history, firstIndex, lastIndex, search.hydrate]);
+
+  const targetIndex = search.matches[search.current];
+  useEffect(() => {
+    if (searching && targetIndex !== undefined) virtualizer.scrollToIndex(targetIndex, { align: "center" });
+  }, [searching, targetIndex, search.navigation, virtualizer]);
+
+  useEffect(() => {
+    if (searching) return;
     if (!lastItem) return;
     if (hasMore && !loadingCommits && lastItem.index >= rowCount - 25) {
       loadCommits(false);
     }
-  }, [lastItem, hasMore, loadingCommits, rowCount, loadCommits]);
+  }, [lastItem, hasMore, loadingCommits, rowCount, loadCommits, searching]);
 
   return (
     <div className="commit-list">
       <div className="commit-list-inner" style={graphContentStyle}>
+        <CommitSearch />
         <div className="commit-list-header">
           <div className="col-refs-head">Branch / Tag</div>
           <div className="col-graph-head" style={graphColumnStyle}>
@@ -151,7 +173,13 @@ export function CommitList() {
         <div className="commit-scroll" ref={parentRef}>
           <div className="commit-vlist" style={{ height: virtualizer.getTotalSize() }}>
             {items.map((vi) => {
-              const commit = commits[vi.index];
+              const row = history[vi.index];
+              const commit = searching ? search.cache[row.hash] : commits[vi.index];
+              if (!commit) return (
+                <div key={row.hash} className="clrow commit-row commit-placeholder" style={{ transform: `translateY(${vi.start}px)` }}>
+                  Loading commit…
+                </div>
+              );
               return (
                 <CommitRow
                   key={commit.hash}
@@ -161,12 +189,15 @@ export function CommitList() {
                   graphWidth={graphWidth}
                   graphColumnStyle={graphColumnStyle}
                   first={vi.index === 0 && wipCount === 0}
-                  last={vi.index === rowCount - 1 && !hasMore}
+                  last={vi.index === rowCount - 1 && (searching || !hasMore)}
                   selected={commit.hash === selectedCommitHash}
-                  onSelect={() => selectCommit(commit.hash)}
+                  searchState={searching ? matchHashes.has(commit.hash) ? "hit" : "miss" : undefined}
+                  activeMatch={searching && vi.index === targetIndex}
+                  onSelect={() => searching ? search.choose(commit.hash) : selectCommit(commit.hash)}
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    selectCommit(commit.hash);
+                    if (searching) search.choose(commit.hash);
+                    else selectCommit(commit.hash);
                     openCommitMenu({ hash: commit.hash, x: e.clientX, y: e.clientY });
                   }}
                   style={{ transform: `translateY(${vi.start}px)` }}
@@ -174,7 +205,7 @@ export function CommitList() {
               );
             })}
           </div>
-          {loadingCommits && <div className="commit-loading">Loading…</div>}
+          {!searching && loadingCommits && <div className="commit-loading">Loading…</div>}
         </div>
       </div>
     </div>
@@ -190,6 +221,8 @@ interface RowProps {
   first: boolean;
   last: boolean;
   selected: boolean;
+  searchState?: "hit" | "miss";
+  activeMatch?: boolean;
   onSelect: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
   style: React.CSSProperties;
@@ -204,13 +237,16 @@ function CommitRow({
   first,
   last,
   selected,
+  searchState,
+  activeMatch,
   onSelect,
   onContextMenu,
   style,
 }: RowProps) {
   return (
     <div
-      className={"clrow commit-row" + (selected ? " selected" : "")}
+      className={"clrow commit-row" + (selected ? " selected" : "") + (searchState ? ` search-${searchState}` : "") + (activeMatch ? " search-active" : "")}
+      data-commit-hash={commit.hash}
       style={style}
       onClick={onSelect}
       onContextMenu={onContextMenu}

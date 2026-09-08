@@ -161,7 +161,7 @@ for example:
 
 ```bash
 npm run icons        # draws the app icon from the brand mark (once)
-npm run dist         # → release/desktop/GitWebUI-0.1.0.exe
+npm run dist         # → release/desktop/GitWebUI-0.2.0.exe
 ```
 
 One standalone executable, about 90 MB. There is no installer: copy it wherever

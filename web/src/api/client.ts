@@ -194,8 +194,14 @@ export const api = {
     if (revs.length > 0) params.set("revs", revs.join(","));
     return req<{ commits: Commit[]; hasMore: boolean }>(`/api/commits?${params.toString()}`);
   },
-  commitFiles: (hash: string) =>
-    req<{ files: CommitFile[] }>(`/api/commits/${hash}/files`),
+  commitFiles: (hash: string, signal?: AbortSignal) =>
+    req<{ files: CommitFile[] }>(`/api/commits/${hash}/files`, { signal }),
+  searchCommits: (query: string, signal?: AbortSignal) =>
+    req<{ rows: Pick<Commit, "hash" | "parents">[]; matches: number[] }>(
+      `/api/commits/search?${new URLSearchParams({ q: query })}`, { signal },
+    ),
+  commitsByHash: (hashes: string[], signal?: AbortSignal) =>
+    req<{ commits: Commit[] }>(`/api/commits/batch?${new URLSearchParams({ hashes: hashes.join(",") })}`, { signal }),
 
   status: () => req<StatusResult>("/api/status"),
 

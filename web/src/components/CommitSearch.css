@@ -1,0 +1,71 @@
+.commit-find-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 12px;
+  flex-shrink: 0;
+  padding: 6px 10px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+.commit-find-scope {
+  margin-right: auto;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+.commit-find {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: 420px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 5px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+.commit-find input {
+  flex: 1;
+  min-width: 60px;
+  width: 220px;
+  height: 26px;
+  padding: 3px 8px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+}
+.commit-find-count {
+  min-width: 64px;
+  padding: 0 5px;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  text-align: right;
+  white-space: nowrap;
+}
+.commit-find button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+}
+.commit-find button:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--bg-elevated);
+}
+.commit-find button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.commit-find-error {
+  width: 100%;
+  color: var(--red);
+  font-size: var(--fs-sm);
+}

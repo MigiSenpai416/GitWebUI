@@ -2,6 +2,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openExternal } from "../desktop";
 import { useStore } from "../state/store";
+import { useCommitSearch } from "../state/commitSearch";
 import type { CommitFile } from "../types";
 import { ChangedFiles } from "./ChangedFiles";
 import { IconClose } from "./icons";
@@ -16,8 +17,9 @@ export function CommitDetails() {
   const status = useStore((s) => s.status);
   const openFile = useStore((s) => s.openFile);
   const selectedFile = useStore((s) => s.selectedFile);
+  const searchCommit = useCommitSearch((s) => hash ? s.cache[hash] : undefined);
 
-  const commit = commits.find((c) => c.hash === hash);
+  const commit = searchCommit ?? commits.find((c) => c.hash === hash);
   if (!commit) return null;
 
   const wipCount = status.staged.length + status.unstaged.length;

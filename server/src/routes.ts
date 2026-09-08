@@ -1,7 +1,7 @@
 import { promises as fsPromises } from "node:fs";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { openRepo, createLocalRepo, currentBranch, headHash, type RepoInfo } from "./git/repo.js";
-import { getLog } from "./git/log.js";
+import { getLog, getCommitsByHash, searchCommits } from "./git/log.js";
 import { getStatus } from "./git/status.js";
 import { getCommitFiles } from "./git/commitFiles.js";
 import { getDiff, type DiffSource } from "./git/diff.js";
@@ -272,10 +272,51 @@ api.get("/commits", h(async (req, res) => {
   res.json({ commits: hasMore ? commits.slice(0, limit) : commits, hasMore });
 }));
 
+api.get("/commits/search", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const query = String(req.query.q ?? "");
+  if (!query.trim() || query.length > 1000 || /[\0\r\n]/.test(query)) {
+    res.status(400).json({ error: "Enter a search of 1–1000 characters on one line" });
+    return;
+  }
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  res.once("close", cancel);
+  try {
+    res.json(await searchCommits(root, query, controller.signal));
+  } finally {
+    res.removeListener("close", cancel);
+  }
+}));
+
+api.get("/commits/batch", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const hashes = String(req.query.hashes ?? "").split(",");
+  if (hashes.length > 80 || hashes.some((hash) => !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(hash))) {
+    res.status(400).json({ error: "Expected up to 80 full commit hashes" });
+    return;
+  }
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  res.once("close", cancel);
+  try {
+    res.json({ commits: await getCommitsByHash(root, hashes, controller.signal) });
+  } finally {
+    res.removeListener("close", cancel);
+  }
+}));
+
 api.get("/commits/:hash/files", h(async (req, res) => {
   const root = requireRepoRoot(req);
-  const files = await getCommitFiles(root, req.params.hash);
-  res.json({ files });
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  res.once("close", cancel);
+  try {
+    const files = await getCommitFiles(root, req.params.hash, controller.signal);
+    res.json({ files });
+  } finally {
+    res.removeListener("close", cancel);
+  }
 }));
 
 api.get("/status", h(async (req, res) => {

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useStore } from "../state/store";
+import { useCommitSearch } from "../state/commitSearch";
 import "./CreateBranchDialog.css";
 
 export function CreateBranchDialog() {
@@ -7,10 +8,11 @@ export function CreateBranchDialog() {
   const commits = useStore((s) => s.commits);
   const close = useStore((s) => s.closeBranchDialog);
   const createBranchAt = useStore((s) => s.createBranchAt);
+  const searchCommit = useCommitSearch((s) => hash ? s.cache[hash] : undefined);
   const [name, setName] = useState("");
 
   if (!hash) return null;
-  const commit = commits.find((c) => c.hash === hash);
+  const commit = searchCommit ?? commits.find((c) => c.hash === hash);
 
   const valid = /^[^\s~^:?*[\\]+$/.test(name.trim()) && name.trim().length > 0;
 

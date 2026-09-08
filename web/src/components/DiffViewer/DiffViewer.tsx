@@ -465,6 +465,7 @@ export function DiffViewer() {
   // file, and Alt+Down/Up navigates diff hunks.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof Element && e.target.closest(".commit-find")) return;
       // Higher-level dialogs own keyboard input while they cover the viewer.
       // Include legacy backdrops that do not expose aria-modal yet.
       if (document.querySelector('.dialog-backdrop, [aria-modal="true"], [role="alertdialog"]')) {

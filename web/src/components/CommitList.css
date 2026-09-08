@@ -115,6 +115,20 @@
 .clrow.selected .col-hash {
   color: #cfe0f2;
 }
+.commit-row.search-miss {
+  opacity: 0.3;
+}
+.commit-row.search-hit {
+  background: rgba(210, 153, 34, 0.14);
+}
+.commit-row.search-active {
+  background: rgba(210, 153, 34, 0.3);
+  box-shadow: inset 3px 0 var(--amber), inset 0 0 0 1px var(--amber);
+}
+.commit-placeholder {
+  padding-left: 12px;
+  color: var(--text-faint);
+}
 
 .col-refs {
   width: var(--refs-w);

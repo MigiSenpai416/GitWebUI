@@ -26,6 +26,7 @@ import type {
 } from "../types";
 
 const PAGE = 150;
+let commitFilesController: AbortController | undefined;
 const SIDEBAR_KEY = "gwui.sidebarCollapsed";
 const TABS_KEY = "gwui.tabs";
 const VISIBLE_KEY = "gwui.visibleRefs";
@@ -299,6 +300,7 @@ interface AppState {
   graphMode: GraphMode;
 
   selectedCommitHash: string | null;
+  selectionVersion: number;
   /**
    * The stash open in the side pane, keyed by its commit — the stash@{N} index
    * shifts whenever anything is pushed or dropped, the commit doesn't.
@@ -555,6 +557,7 @@ export const useStore = create<AppState>((set, get) => ({
   graphMode: "linear",
 
   selectedCommitHash: null,
+  selectionVersion: 0,
   selectedStashHash: null,
   commitFiles: [],
   loadingCommitFiles: false,
@@ -863,21 +866,24 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async selectCommit(hash: string | null) {
+    commitFilesController?.abort();
+    commitFilesController = new AbortController();
+    const signal = commitFilesController.signal;
+    const root = get().repo?.root;
+    const selectionVersion = get().selectionVersion + 1;
     // A commit and a stash both own the side pane, so selecting one drops the other.
-    set({ selectedCommitHash: hash, selectedStashHash: null, selectedFile: null });
+    set({ selectedCommitHash: hash, selectedStashHash: null, selectedFile: null, selectionVersion, commitFiles: [], loadingCommitFiles: !!hash });
     if (!hash) {
-      set({ commitFiles: [] });
       return;
     }
-    set({ loadingCommitFiles: true });
     try {
-      const { files } = await api.commitFiles(hash);
+      const { files } = await api.commitFiles(hash, signal);
       // Guard against a race if the user clicked another commit meanwhile.
-      if (get().selectedCommitHash === hash) set({ commitFiles: files });
+      if (!signal.aborted && get().repo?.root === root && get().selectionVersion === selectionVersion && get().selectedCommitHash === hash) set({ commitFiles: files });
     } catch (e) {
-      reportError(set, e);
+      if (!signal.aborted && get().repo?.root === root && get().selectedCommitHash === hash) reportError(set, e);
     } finally {
-      set({ loadingCommitFiles: false });
+      if (!signal.aborted && get().repo?.root === root && get().selectionVersion === selectionVersion && get().selectedCommitHash === hash) set({ loadingCommitFiles: false });
     }
   },
 
@@ -886,19 +892,22 @@ export const useStore = create<AppState>((set, get) => ({
    * diffs come from the same place a commit's do.
    */
   async selectStash(hash: string | null) {
-    set({ selectedStashHash: hash, selectedCommitHash: null, selectedFile: null });
+    commitFilesController?.abort();
+    commitFilesController = new AbortController();
+    const signal = commitFilesController.signal;
+    const root = get().repo?.root;
+    const selectionVersion = get().selectionVersion + 1;
+    set({ selectedStashHash: hash, selectedCommitHash: null, selectedFile: null, selectionVersion, commitFiles: [], loadingCommitFiles: !!hash });
     if (!hash) {
-      set({ commitFiles: [] });
       return;
     }
-    set({ loadingCommitFiles: true, commitFiles: [] });
     try {
-      const { files } = await api.commitFiles(hash);
-      if (get().selectedStashHash === hash) set({ commitFiles: files });
+      const { files } = await api.commitFiles(hash, signal);
+      if (!signal.aborted && get().repo?.root === root && get().selectionVersion === selectionVersion && get().selectedStashHash === hash) set({ commitFiles: files });
     } catch (e) {
-      reportError(set, e);
+      if (!signal.aborted && get().repo?.root === root && get().selectedStashHash === hash) reportError(set, e);
     } finally {
-      set({ loadingCommitFiles: false });
+      if (!signal.aborted && get().repo?.root === root && get().selectionVersion === selectionVersion && get().selectedStashHash === hash) set({ loadingCommitFiles: false });
     }
   },
 

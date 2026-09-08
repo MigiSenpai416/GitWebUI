@@ -39,7 +39,7 @@ function normalize(code: string): ChangeStatus {
   return "M";
 }
 
-export async function getCommitFiles(root: string, hash: string): Promise<CommitFile[]> {
+export async function getCommitFiles(root: string, hash: string, signal?: AbortSignal): Promise<CommitFile[]> {
   const { stdout } = await runGit(root, [
     "show",
     "--first-parent",
@@ -47,6 +47,6 @@ export async function getCommitFiles(root: string, hash: string): Promise<Commit
     "-z",
     "--format=",
     hash,
-  ]);
+  ], { signal });
   return parseNameStatus(stdout);
 }

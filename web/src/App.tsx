@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "./state/store";
+import { useCommitSearch } from "./state/commitSearch";
 import { applyFavicon, repoColor } from "./brand";
 import { useDesktopMenu } from "./useDesktopMenu";
 import { RepoPicker } from "./components/RepoPicker";
@@ -43,6 +44,17 @@ export function App() {
   const init = useStore((s) => s.init);
   const refreshAll = useStore((s) => s.refreshAll);
   const lastRefresh = useRef(0);
+  const opening = useStore((s) => s.opening);
+  const refreshTick = useStore((s) => s.refreshTick);
+
+  useEffect(() => {
+    useCommitSearch.getState().reset();
+  }, [repo?.root, opening]);
+
+  useEffect(() => {
+    const search = useCommitSearch.getState();
+    search.search(search.query, true);
+  }, [refreshTick]);
 
   // The native menu, when there is one. Registered unconditionally because
   // hooks must be, and inert in a browser.

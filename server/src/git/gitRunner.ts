@@ -53,6 +53,7 @@ export interface GitOptions {
   env?: NodeJS.ProcessEnv;
   /** Optional stdin for commands such as `git update-ref --stdin`. */
   input?: string | Buffer;
+  signal?: AbortSignal;
 }
 
 /**
@@ -68,7 +69,9 @@ export interface GitOptions {
  * even though the user does. It resolves to `"git"` unless something pinned it.
  */
 export async function runGit(cwd: string, args: string[], opts: GitOptions = {}): Promise<GitResult> {
+  opts.signal?.throwIfAborted();
   const env = await gitAuthEnv(opts.env);
+  opts.signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = execFile(
       gitPath(),
@@ -79,8 +82,12 @@ export async function runGit(cwd: string, args: string[], opts: GitOptions = {})
         windowsHide: true,
         encoding: "buffer",
         env,
+        signal: opts.signal,
       },
       (err, stdout, stderr) => {
+        if (opts.signal?.aborted) {
+          return;
+        }
         const out = stdout.toString("utf8");
         const errOut = stderr.toString("utf8");
         if (err) {
@@ -100,6 +107,14 @@ export async function runGit(cwd: string, args: string[], opts: GitOptions = {})
         resolve({ stdout: out, stderr: errOut });
       },
     );
+    child.once("close", () => {
+      if (opts.signal?.aborted) reject(opts.signal.reason);
+    });
+    child.stdin?.once("error", (error) => {
+      if (opts.signal?.aborted) return;
+      child.kill();
+      reject(new GitError(error.message, null, "", args));
+    });
     if (opts.input !== undefined) child.stdin?.end(opts.input);
   });
 }

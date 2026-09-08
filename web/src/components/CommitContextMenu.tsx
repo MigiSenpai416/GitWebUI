@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
+import { useCommitSearch } from "../state/commitSearch";
 import type { ResetMode } from "../state/store";
 import { IconBranch, IconChevron, IconCommit, IconMonitor } from "./icons";
 import "./CommitContextMenu.css";
@@ -8,6 +9,7 @@ const MENU_W = 260;
 
 export function CommitContextMenu() {
   const menu = useStore((s) => s.commitMenu);
+  const searchCommit = useCommitSearch((s) => menu ? s.cache[menu.hash] : undefined);
   const repo = useStore((s) => s.repo);
   const commits = useStore((s) => s.commits);
   const close = useStore((s) => s.closeCommitMenu);
@@ -47,7 +49,7 @@ export function CommitContextMenu() {
   }, [menu, close]);
 
   if (!menu) return null;
-  const commit = commits.find((c) => c.hash === menu.hash);
+  const commit = searchCommit ?? commits.find((c) => c.hash === menu.hash);
   const shortHash = commit?.shortHash ?? menu.hash.slice(0, 7);
   const branch = repo?.branch ?? "HEAD";
 

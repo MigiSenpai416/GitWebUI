@@ -54,18 +54,21 @@ export function CommitList() {
   const search = useCommitSearch();
   const searching = search.open && !!search.query.trim();
   const history = searching ? search.rows : commits;
-  const [mainPin, setMainPin] = useState<{ root: string; hashes: ReadonlySet<string> }>({ root: "", hashes: EMPTY_MAIN_HISTORY });
-  const mainHistory = mainPin.root === root ? mainPin.hashes : EMPTY_MAIN_HISTORY;
-  const [pinError, setPinError] = useState<string | null>(null);
+  const [mainPin, setMainPin] = useState<{ root: string; tip: string; hashes: ReadonlySet<string> }>({ root: "", tip: "", hashes: EMPTY_MAIN_HISTORY });
+  const pinReady = mainPin.root === root && mainPin.tip === mainTip;
+  const mainHistory = pinReady ? mainPin.hashes : EMPTY_MAIN_HISTORY;
+  const graphPending = graphMode === "full" && !pinReady;
+  const [pinError, setPinError] = useState<{ root: string; tip: string; message: string } | null>(null);
+  const pinMessage = pinError?.root === root && pinError.tip === mainTip ? pinError.message : null;
   const [pinRetry, setPinRetry] = useState(0);
   useEffect(() => {
     setPinError(null);
     if (!root || graphMode !== "full") return;
     const controller = new AbortController();
     api.mainHistory(controller.signal).then(({ hashes }) => {
-      if (!controller.signal.aborted) setMainPin({ root, hashes: new Set(hashes) });
+      if (!controller.signal.aborted) setMainPin({ root, tip: mainTip, hashes: new Set(hashes) });
     }).catch((e) => {
-      if (!controller.signal.aborted) setPinError(e instanceof Error ? e.message : String(e));
+      if (!controller.signal.aborted) setPinError({ root, tip: mainTip, message: e instanceof Error ? e.message : String(e) });
     });
     return () => controller.abort();
   }, [root, graphMode, mainTip, pinRetry]);
@@ -77,15 +80,20 @@ export function CommitList() {
   const parentRef = useRef<HTMLDivElement>(null);
   const wipCount = status.staged.length + status.unstaged.length;
   const fullGraph = useMemo(
-    () => graphMode === "full" ? layoutCommitGraph(history, mainHistory) : null,
-    [history, graphMode, mainHistory],
+    () => graphMode === "full" && !graphPending ? layoutCommitGraph(history, mainHistory) : null,
+    [history, graphMode, mainHistory, graphPending],
   );
-  const graphWidth = fullGraph ? graphSvgWidth(fullGraph.maxLanes) : 34;
-  const graphColumnWidth = fullGraph
+  const previousGraphWidth = useRef({ root: "", width: 34 });
+  useEffect(() => {
+    if (fullGraph) previousGraphWidth.current = { root, width: graphSvgWidth(fullGraph.maxLanes) };
+  }, [root, fullGraph]);
+  const graphWidth = fullGraph ? graphSvgWidth(fullGraph.maxLanes) :
+    graphPending && previousGraphWidth.current.root === root ? previousGraphWidth.current.width : 34;
+  const graphColumnWidth = graphMode === "full"
     ? Math.max(GRAPH_COLUMN_WIDTH, graphWidth + 8)
     : GRAPH_COLUMN_WIDTH;
   const graphColumnStyle = { width: graphColumnWidth };
-  const graphContentStyle = fullGraph && graphColumnWidth > GRAPH_COLUMN_WIDTH
+  const graphContentStyle = graphMode === "full" && graphColumnWidth > GRAPH_COLUMN_WIDTH
     ? { minWidth: graphColumnWidth + WIDE_GRAPH_REMAINING_WIDTH }
     : undefined;
 
@@ -111,12 +119,12 @@ export function CommitList() {
   }, [searching, targetIndex, search.navigation, virtualizer]);
 
   useEffect(() => {
-    if (searching) return;
+    if (searching || graphPending) return;
     if (!lastItem) return;
     if (hasMore && !loadingCommits && lastItem.index >= rowCount - 25) {
       loadCommits(false);
     }
-  }, [lastItem, hasMore, loadingCommits, rowCount, loadCommits, searching]);
+  }, [lastItem, hasMore, loadingCommits, rowCount, loadCommits, searching, graphPending]);
 
   return (
     <div className="commit-list">
@@ -139,8 +147,8 @@ export function CommitList() {
           <div className="col-msg-head">Commit Message</div>
         </div>
 
-        {graphMode === "full" && pinError && <div className="merge-banner" role="status">
-          <span>Could not pin main: {pinError}</span>
+        {graphMode === "full" && pinMessage && <div className="merge-banner" role="status">
+          <span>Could not pin main: {pinMessage}</span>
           <button type="button" onClick={() => setPinRetry((value) => value + 1)}>Retry</button>
         </div>}
 
@@ -194,9 +202,10 @@ export function CommitList() {
           />
         ))}
 
-        <div className="commit-scroll" ref={parentRef}>
+        <div className="commit-scroll" ref={parentRef} aria-busy={graphPending && !pinMessage}>
           <div className="commit-vlist" style={{ height: virtualizer.getTotalSize() }}>
-            {items.map((vi) => {
+            {graphPending && !pinMessage && <div className="commit-loading" style={{ top: 0 }} role="status">Loading commit graph…</div>}
+            {!graphPending && items.map((vi) => {
               const row = history[vi.index];
               const commit = searching ? search.cache[row.hash] : commits[vi.index];
               if (!commit) return (

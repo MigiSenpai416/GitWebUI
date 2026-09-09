@@ -205,3 +205,143 @@ test("an unchanged repository refresh keeps main pinned while requests are in fl
     await fs.rm(repoDir, { recursive: true, force: true });
   }
 });
+
+for (const scenario of ["delayed", "retry", "no main"] as const) {
+  test(`Full mode waits for its final layout: ${scenario}`, async () => {
+    const repoDir = makeGraphRepo();
+    const git = (...args: string[]) => execFileSync("git", ["-C", repoDir, ...args], { encoding: "utf8" }).trim();
+    if (scenario === "no main") git("branch", "-m", "trunk");
+    git("switch", "-c", "active-work");
+    git("commit", "--allow-empty", "-m", "Newest feature work");
+    const feature = git("rev-parse", "HEAD");
+    let started: TestApp | undefined;
+    let release: (() => void) | undefined;
+    try {
+      started = await launchApp();
+      const window = await started.app.firstWindow();
+      await window.waitForLoadState("domcontentloaded");
+      await openRepo(window, repoDir);
+      await expect(window.locator(".sb-branch-checkout")).toHaveCount(3);
+      const order = await window.locator(".commit-row").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-commit-hash")));
+      const pending = new Promise<void>((resolve) => { release = resolve; });
+      let attempts = 0;
+      await window.route("**/api/commits/main-history", async (route) => {
+        attempts += 1;
+        if (scenario === "retry" && attempts === 1) {
+          await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Temporary lookup failure" }) });
+          return;
+        }
+        await pending;
+        await route.continue().catch(() => {});
+      });
+      await window.locator(".graph-mode-toggle").click();
+      if (scenario === "retry") {
+        await expect(window.getByText("Could not pin main: Temporary lookup failure")).toBeVisible();
+        await expect(window.locator(".commit-row")).toHaveCount(0);
+        await window.getByRole("button", { name: "Retry", exact: true }).click();
+      }
+      await expect(window.locator(".commit-row")).toHaveCount(0);
+      await expect(window.getByText("Loading commit graph…", { exact: true })).toBeVisible();
+      release?.();
+      await expect(window.locator(`.full-graph-node[data-commit-hash="${feature}"]`)).toHaveAttribute("data-node-lane", scenario === "no main" ? "0" : "1");
+      await expect(window.getByText("Loading commit graph…", { exact: true })).toHaveCount(0);
+      expect(await window.locator(".commit-row").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-commit-hash")))).toEqual(order);
+
+      await window.locator(".graph-mode-toggle").click();
+      const another = new Promise<void>((resolve) => { release = resolve; });
+      await window.unroute("**/api/commits/main-history");
+      await window.route("**/api/commits/main-history", async (route) => {
+        await another;
+        await route.continue().catch(() => {});
+      });
+      await window.locator(".graph-mode-toggle").click();
+      await expect(window.locator(`.full-graph-node[data-commit-hash="${feature}"]`)).toHaveAttribute("data-node-lane", scenario === "no main" ? "0" : "1");
+      await expect(window.getByText("Loading commit graph…", { exact: true })).toHaveCount(0);
+    } finally {
+      release?.();
+      await started?.app.close().catch(() => {});
+      if (started) await cleanupApp(started);
+      await fs.rm(repoDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("switching repositories waits for that repository's own graph data", async () => {
+  const roots = [makeGraphRepo(), makeGraphRepo()];
+  execFileSync("git", ["-C", roots[1], "branch", "-m", "trunk"]);
+  const savedRoots = roots.map((root) => root.replace(/\\/g, "/"));
+  let started: TestApp | undefined;
+  let release: (() => void) | undefined;
+  try {
+    started = await launchApp();
+    const window = await started.app.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+    await window.evaluate((repos) => {
+      localStorage.setItem("gwui.tabs", JSON.stringify({
+        tabs: repos.map((root, index) => ({ id: String(index), root, name: `Repo ${index}`, branch: index ? "trunk" : "main" })),
+        activeTabId: "0",
+      }));
+      localStorage.setItem("gwui.graphMode", JSON.stringify(Object.fromEntries(repos.map((root) => [root, "full"]))));
+    }, savedRoots);
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    await window.route("**/api/commits/main-history", async (route) => {
+      if (route.request().headers()["x-repo-root"]?.replace(/\\/g, "/") === savedRoots[1]) await pending;
+      await route.continue().catch(() => {});
+    });
+    await window.reload();
+    await expect(window.locator(".graph-mode-toggle")).toHaveAttribute("title", /Main history pinned left/);
+    await window.locator(".tabbar-tabs .tab").nth(1).click();
+    await expect(window.getByText("Loading commit graph…", { exact: true })).toBeVisible();
+    await expect(window.locator(".commit-row")).toHaveCount(0);
+    release?.();
+    await expect(window.locator(".full-graph-node").first()).toBeVisible();
+    await expect(window.locator(".graph-mode-toggle")).not.toHaveAttribute("title", /Main history pinned left/);
+  } finally {
+    release?.();
+    await started?.app.close().catch(() => {});
+    if (started) await cleanupApp(started);
+    for (const root of roots) await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("waiting for a changed main tip preserves horizontal graph position", async () => {
+  const root = makeGraphRepo();
+  const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+  git("switch", "-c", "active-work");
+  git("commit", "--allow-empty", "-m", "Newest feature work");
+  const feature = git("rev-parse", "HEAD");
+  let started: TestApp | undefined;
+  let release: (() => void) | undefined;
+  try {
+    started = await launchApp();
+    const window = await started.app.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+    await openRepo(window, root);
+    await window.locator(".graph-mode-toggle").click();
+    await expect(window.locator(".graph-mode-toggle")).toHaveAttribute("title", /Main history pinned left/);
+    const list = window.locator(".commit-list");
+    const offset = await list.evaluate((element) => {
+      element.scrollLeft = element.scrollWidth - element.clientWidth;
+      return element.scrollLeft;
+    });
+    expect(offset).toBeGreaterThan(0);
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    await window.route("**/api/commits/main-history", async (route) => {
+      await pending;
+      await route.continue().catch(() => {});
+    });
+    git("update-ref", "refs/heads/main", feature);
+    await window.waitForTimeout(850);
+    await window.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(window.getByText("Loading commit graph…", { exact: true })).toBeVisible();
+    expect(await list.evaluate((element) => element.scrollLeft)).toBe(offset);
+    release?.();
+    await expect(window.locator(`.full-graph-node[data-commit-hash="${feature}"]`)).toHaveAttribute("data-node-lane", "0");
+    expect(await list.evaluate((element) => element.scrollLeft)).toBe(offset);
+  } finally {
+    release?.();
+    await started?.app.close().catch(() => {});
+    if (started) await cleanupApp(started);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

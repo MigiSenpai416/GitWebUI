@@ -58,12 +58,16 @@ test("full commit graph is opt-in, parent-aware, and persisted for the repositor
     await expect(window.locator(".full-graph-svg")).toHaveCount(0);
 
     const mergeRow = window.locator(".commit-row").filter({ hasText: "Merge feature" });
+    await expect(mergeRow.locator("rect.graph-node")).toHaveCount(1);
+    await expect(window.locator(".commit-row").filter({ hasText: "Feature work" }).locator("circle.graph-node")).toHaveCount(1);
     await mergeRow.click();
     await expect(mergeRow).toHaveClass(/selected/);
     await toggle.click();
 
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
     await expect(toggle).toContainText("Full");
+    await expect(mergeRow.locator("rect.full-graph-node")).toHaveCount(1);
+    await expect(window.locator(".commit-row").filter({ hasText: "Feature work" }).locator("circle.full-graph-node")).toHaveCount(1);
     await expect(mergeRow.locator('[data-edge="parent"]')).toHaveCount(2);
     const mergeTargets = await mergeRow.locator('[data-edge="parent"]').evaluateAll((edges) =>
       edges.map((edge) => edge.getAttribute("data-to-lane")),
@@ -105,6 +109,98 @@ test("full commit graph is opt-in, parent-aware, and persisted for the repositor
     ).toHaveCount(1);
   } finally {
     await app?.close().catch(() => {});
+    if (started) await cleanupApp(started);
+    await fs.rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("main stays left while a newer feature is checked out and while searching", async () => {
+  const repoDir = makeGraphRepo();
+  const git = (...args: string[]) => execFileSync("git", ["-C", repoDir, ...args], { encoding: "utf8" }).trim();
+  const main = git("rev-parse", "main");
+  const pinned = new Set(git("rev-list", "--first-parent", "main").split("\n"));
+  git("switch", "-c", "active-work");
+  git("commit", "--allow-empty", "-m", "Newest feature work");
+  const feature = git("rev-parse", "HEAD");
+  let started: TestApp | undefined;
+  try {
+    started = await launchApp();
+    const window = await started.app.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+    await openRepo(window, repoDir);
+    await window.locator(".graph-mode-toggle").click();
+    await expect(window.locator(".graph-mode-toggle")).toHaveAttribute("title", /Main history pinned left/);
+    await expect(window.locator(`.full-graph-node[data-commit-hash="${main}"]`)).toHaveAttribute("data-node-lane", "0");
+    await expect(window.locator(`.full-graph-node[data-commit-hash="${feature}"]`)).toHaveAttribute("data-node-lane", "1");
+    const checkLanes = async () => {
+      const nodes = await window.locator(".full-graph-node").evaluateAll((entries) => entries.map((entry) => ({
+        hash: entry.getAttribute("data-commit-hash")!, lane: Number(entry.getAttribute("data-node-lane")),
+      })));
+      expect(nodes.length).toBeGreaterThan(1);
+      for (const node of nodes) {
+        if (pinned.has(node.hash)) expect(node.lane).toBe(0);
+        else expect(node.lane).toBeGreaterThan(0);
+      }
+    };
+    await checkLanes();
+    await window.getByRole("button", { name: "Search", exact: true }).click();
+    await window.getByRole("textbox", { name: "Find in commits" }).fill("Newest feature work");
+    await expect(window.locator(".commit-find-count")).toHaveText("1 of 1");
+    await expect(window.locator(`.full-graph-node[data-commit-hash="${main}"]`)).toHaveAttribute("data-node-lane", "0");
+    await checkLanes();
+    expect(git("branch", "--show-current")).toBe("active-work");
+  } finally {
+    await started?.app.close().catch(() => {});
+    if (started) await cleanupApp(started);
+    await fs.rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("an unchanged repository refresh keeps main pinned while requests are in flight", async () => {
+  const repoDir = makeGraphRepo();
+  const git = (...args: string[]) => execFileSync("git", ["-C", repoDir, ...args], { encoding: "utf8" }).trim();
+  git("switch", "-c", "active-work");
+  git("commit", "--allow-empty", "-m", "Newest feature work");
+  const feature = git("rev-parse", "HEAD");
+  let started: TestApp | undefined;
+  let release: (() => void) | undefined;
+  try {
+    started = await launchApp();
+    const window = await started.app.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+    await openRepo(window, repoDir);
+    await window.locator(".graph-mode-toggle").click();
+    await expect(window.locator(".graph-mode-toggle")).toHaveAttribute("title", /Main history pinned left/);
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    await window.route("**/api/commits/main-history", async (route) => {
+      await pending;
+      await route.continue().catch(() => {});
+    });
+    const refreshed = window.waitForResponse((response) => new URL(response.url()).pathname === "/api/commits");
+    // Focus refreshes are coalesced for 800 ms.
+    await window.waitForTimeout(850);
+    await window.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await refreshed;
+    await window.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(window.locator(`.full-graph-node[data-commit-hash="${feature}"]`)).toHaveAttribute("data-node-lane", "1");
+    await expect(window.locator(".graph-mode-toggle")).toHaveAttribute("title", /Main history pinned left/);
+    release?.();
+    await window.unroute("**/api/commits/main-history");
+    git("update-ref", "refs/heads/main", feature);
+    const moved = window.waitForResponse((response) => new URL(response.url()).pathname === "/api/commits/main-history");
+    await window.waitForTimeout(850);
+    await window.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await moved;
+    await expect(window.locator(`.full-graph-node[data-commit-hash="${feature}"]`)).toHaveAttribute("data-node-lane", "0");
+    git("branch", "-D", "main");
+    const deleted = window.waitForResponse((response) => new URL(response.url()).pathname === "/api/commits/main-history");
+    await window.waitForTimeout(850);
+    await window.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await deleted;
+    await expect(window.locator(".graph-mode-toggle")).not.toHaveAttribute("title", /Main history pinned left/);
+  } finally {
+    release?.();
+    await started?.app.close().catch(() => {});
     if (started) await cleanupApp(started);
     await fs.rm(repoDir, { recursive: true, force: true });
   }

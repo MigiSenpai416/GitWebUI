@@ -196,6 +196,7 @@ export const api = {
   },
   commitFiles: (hash: string, signal?: AbortSignal) =>
     req<{ files: CommitFile[] }>(`/api/commits/${hash}/files`, { signal }),
+  mainHistory: (signal?: AbortSignal) => req<{ hashes: string[] }>("/api/commits/main-history", { signal }),
   searchCommits: (query: string, signal?: AbortSignal) =>
     req<{ rows: Pick<Commit, "hash" | "parents">[]; matches: number[] }>(
       `/api/commits/search?${new URLSearchParams({ q: query })}`, { signal },

@@ -1,7 +1,7 @@
 import { promises as fsPromises } from "node:fs";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { openRepo, createLocalRepo, currentBranch, headHash, type RepoInfo } from "./git/repo.js";
-import { getLog, getCommitsByHash, searchCommits } from "./git/log.js";
+import { getLog, getMainHistory, getCommitsByHash, searchCommits } from "./git/log.js";
 import { getStatus } from "./git/status.js";
 import { getCommitFiles } from "./git/commitFiles.js";
 import { getDiff, type DiffSource } from "./git/diff.js";
@@ -270,6 +270,18 @@ api.get("/commits", h(async (req, res) => {
   const commits = await getLog(root, skip, limit + 1, ["HEAD", ...extraRevs]);
   const hasMore = commits.length > limit;
   res.json({ commits: hasMore ? commits.slice(0, limit) : commits, hasMore });
+}));
+
+api.get("/commits/main-history", h(async (req, res) => {
+  const root = requireRepoRoot(req);
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  res.once("close", cancel);
+  try {
+    res.json({ hashes: await getMainHistory(root, controller.signal) });
+  } finally {
+    res.removeListener("close", cancel);
+  }
 }));
 
 api.get("/commits/search", h(async (req, res) => {

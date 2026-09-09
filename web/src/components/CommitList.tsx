@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "../api/client";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useStore, type GraphMode } from "../state/store";
 import { useCommitSearch } from "../state/commitSearch";
@@ -17,6 +18,7 @@ import "./CommitList.css";
 
 const ROW = 28;
 const GRAPH_COLUMN_WIDTH = 96;
+const EMPTY_MAIN_HISTORY: ReadonlySet<string> = new Set();
 /** Refs, a usable message area, author, and hash beside a wide graph. */
 const WIDE_GRAPH_REMAINING_WIDTH = 502;
 const GRAPH_COLORS = [
@@ -44,12 +46,29 @@ export function CommitList() {
   const selectStash = useStore((s) => s.selectStash);
   const openStashMenu = useStore((s) => s.openStashMenu);
   const branch = useStore((s) => s.repo?.branch ?? "");
+  const root = useStore((s) => s.repo?.root ?? "");
+  const mainTip = useStore((s) => s.branches.find((entry) => entry.name === "main")?.shortHash ?? "");
   const mergeState = useStore((s) => s.mergeState);
   const graphMode = useStore((s) => s.graphMode);
   const setGraphMode = useStore((s) => s.setGraphMode);
   const search = useCommitSearch();
   const searching = search.open && !!search.query.trim();
   const history = searching ? search.rows : commits;
+  const [mainPin, setMainPin] = useState<{ root: string; hashes: ReadonlySet<string> }>({ root: "", hashes: EMPTY_MAIN_HISTORY });
+  const mainHistory = mainPin.root === root ? mainPin.hashes : EMPTY_MAIN_HISTORY;
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [pinRetry, setPinRetry] = useState(0);
+  useEffect(() => {
+    setPinError(null);
+    if (!root || graphMode !== "full") return;
+    const controller = new AbortController();
+    api.mainHistory(controller.signal).then(({ hashes }) => {
+      if (!controller.signal.aborted) setMainPin({ root, hashes: new Set(hashes) });
+    }).catch((e) => {
+      if (!controller.signal.aborted) setPinError(e instanceof Error ? e.message : String(e));
+    });
+    return () => controller.abort();
+  }, [root, graphMode, mainTip, pinRetry]);
   const matchHashes = useMemo(
     () => new Set(search.matches.map((index) => search.rows[index].hash)),
     [search.matches, search.rows],
@@ -58,8 +77,8 @@ export function CommitList() {
   const parentRef = useRef<HTMLDivElement>(null);
   const wipCount = status.staged.length + status.unstaged.length;
   const fullGraph = useMemo(
-    () => graphMode === "full" ? layoutCommitGraph(history) : null,
-    [history, graphMode],
+    () => graphMode === "full" ? layoutCommitGraph(history, mainHistory) : null,
+    [history, graphMode, mainHistory],
   );
   const graphWidth = fullGraph ? graphSvgWidth(fullGraph.maxLanes) : 34;
   const graphColumnWidth = fullGraph
@@ -110,7 +129,7 @@ export function CommitList() {
               type="button"
               className={"graph-mode-toggle" + (graphMode === "full" ? " active" : "")}
               aria-pressed={graphMode === "full"}
-              title={graphMode === "full" ? "Show linear commit history" : "Show full commit graph"}
+              title={graphMode === "full" ? `${mainHistory.size ? "Main history pinned left. " : ""}Show linear commit history` : "Show full commit graph"}
               onClick={() => setGraphMode(graphMode === "full" ? "linear" : "full")}
             >
               <span>Graph</span>
@@ -119,6 +138,11 @@ export function CommitList() {
           </div>
           <div className="col-msg-head">Commit Message</div>
         </div>
+
+        {graphMode === "full" && pinError && <div className="merge-banner" role="status">
+          <span>Could not pin main: {pinError}</span>
+          <button type="button" onClick={() => setPinRetry((value) => value + 1)}>Retry</button>
+        </div>}
 
         {mergeState?.active && (
           <div className="merge-banner" role="status">
@@ -266,7 +290,11 @@ function CommitRow({
               y2={last ? ROW / 2 : ROW}
               className="graph-line"
             />
-            <circle cx="17" cy={ROW / 2} r="5.5" className="graph-node" />
+            {commit.parents.length > 1 ? (
+              <rect x="12.5" y={ROW / 2 - 4.5} width="9" height="9" transform={`rotate(45 17 ${ROW / 2})`} className="graph-node" />
+            ) : (
+              <circle cx="17" cy={ROW / 2} r="5.5" className="graph-node" />
+            )}
           </svg>
         )}
       </span>
@@ -297,15 +325,29 @@ function FullGraphRow({ commit, row, width }: { commit: Commit; row: CommitGraph
           data-to-lane={segment.toLane}
         />
       ))}
-      <circle
-        cx={graphLaneX(row.nodeLane)}
-        cy={ROW / 2}
-        r="5.5"
-        className="graph-node full-graph-node"
-        stroke={graphColor(row.nodeColor)}
-        data-commit-hash={commit.hash}
-        data-node-lane={row.nodeLane}
-      />
+      {commit.parents.length > 1 ? (
+        <rect
+          x={graphLaneX(row.nodeLane) - 4.5}
+          y={ROW / 2 - 4.5}
+          width="9"
+          height="9"
+          transform={`rotate(45 ${graphLaneX(row.nodeLane)} ${ROW / 2})`}
+          className="graph-node full-graph-node"
+          stroke={graphColor(row.nodeColor)}
+          data-commit-hash={commit.hash}
+          data-node-lane={row.nodeLane}
+        />
+      ) : (
+        <circle
+          cx={graphLaneX(row.nodeLane)}
+          cy={ROW / 2}
+          r="5.5"
+          className="graph-node full-graph-node"
+          stroke={graphColor(row.nodeColor)}
+          data-commit-hash={commit.hash}
+          data-node-lane={row.nodeLane}
+        />
+      )}
     </svg>
   );
 }

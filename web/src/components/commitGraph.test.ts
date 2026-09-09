@@ -6,6 +6,41 @@ function commit(hash: string, parents: string[] = []) {
 }
 
 describe("layoutCommitGraph", () => {
+  it("keeps main left when a newer feature first reaches an older main ancestor", () => {
+    const commits = [commit("feature", ["root"]), commit("main", ["older"]), commit("older", ["root"]), commit("root")];
+    const pinned = new Set(["main", "older", "root"]);
+    const graph = layoutCommitGraph(commits, pinned);
+    expect(graph.rows.map((row) => row.nodeLane)).toEqual([1, 0, 0, 0]);
+    expect(graph.rows[2].segments).toContainEqual(expect.objectContaining({ kind: "parent", fromLane: 0, toLane: 0, parentHash: "root" }));
+    expect(graph.rows[2].segments).toContainEqual(expect.objectContaining({ kind: "continuation", fromLane: 1, toLane: 0 }));
+    for (let length = 1; length <= commits.length; length += 1) {
+      expect(layoutCommitGraph(commits.slice(0, length), pinned).rows).toEqual(graph.rows.slice(0, length));
+    }
+  });
+
+  it("reserves main's column after its root and when its tip is outside the visible history", () => {
+    const pinned = new Set(["main", "root"]);
+    const graph = layoutCommitGraph([commit("feature", ["root"]), commit("root"), commit("unrelated")], pinned);
+    expect(graph.rows.map((row) => row.nodeLane)).toEqual([1, 0, 1]);
+    expect(graph.rows[1].segments).toContainEqual(expect.objectContaining({ kind: "incoming", fromLane: 1, toLane: 0 }));
+    expect(graph.rows[0].segments).not.toContainEqual(expect.objectContaining({ fromLane: 0 }));
+  });
+
+  it("pins the first-parent chain through dense cross-merges without losing parent edges", () => {
+    const commits = Array.from({ length: 40 }, (_, index) => commit(`c${index}`, [
+      ...(index + 1 < 40 ? [`c${index + 1}`] : []),
+      ...(index % 3 === 0 && index + 4 < 40 ? [`c${index + 4}`] : []),
+    ]));
+    const pinned = new Set(commits.map((entry) => entry.hash));
+    const graph = layoutCommitGraph(commits, pinned);
+    for (let index = 0; index < commits.length; index += 1) {
+      expect(graph.rows[index].nodeLane).toBe(0);
+      expect(graph.rows[index].nodeColor).toBe(0);
+      expect(graph.rows[index].segments.filter((edge) => edge.kind === "parent").map((edge) => edge.parentHash)).toEqual(commits[index].parents);
+      expect(layoutCommitGraph(commits.slice(0, index + 1), pinned).rows).toEqual(graph.rows.slice(0, index + 1));
+    }
+  });
+
   it("keeps a linear history in one lane", () => {
     const layout = layoutCommitGraph([
       commit("c3", ["c2"]),

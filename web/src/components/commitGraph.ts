@@ -38,46 +38,57 @@ type GraphCommit = Pick<Commit, "hash" | "parents">;
  * guarantees that children appear before their parents, so the active lanes
  * can be carried forward through a single pass.
  */
-export function layoutCommitGraph(commits: readonly GraphCommit[]): CommitGraphLayout {
+export function layoutCommitGraph(commits: readonly GraphCommit[], pinned: ReadonlySet<string> = new Set()): CommitGraphLayout {
   const rows: CommitGraphRow[] = [];
-  let lanes: ActiveLane[] = [];
+  const reserveLeft = pinned.size > 0;
+  let lanes: Array<ActiveLane | null> = reserveLeft ? [null] : [];
   let maxLanes = 0;
-  let nextColor = 0;
+  let nextColor = reserveLeft ? 1 : 0;
 
   for (const commit of commits) {
-    let nodeLane = lanes.findIndex((lane) => lane.hash === commit.hash);
-    const startsHere = nodeLane === -1;
+    const pinnedNode = pinned.has(commit.hash);
+    let sourceLane = lanes.findIndex((lane) => lane?.hash === commit.hash);
+    const startsHere = sourceLane === -1;
     if (startsHere) {
-      nodeLane = lanes.length;
-      lanes.push({ hash: commit.hash, color: nextColor++ });
+      sourceLane = pinnedNode ? 0 : lanes.length;
+      lanes[sourceLane] = { hash: commit.hash, color: pinnedNode ? 0 : nextColor++ };
     }
+    const nodeLane = pinnedNode ? 0 : sourceLane;
 
     const before = lanes;
-    const current = before[nodeLane];
+    const current = before[sourceLane]!;
     const next: Array<ActiveLane | null> = [...before];
-    next[nodeLane] = null;
+    next[sourceLane] = null;
 
     const parents = Array.from(
       new Set(commit.parents.filter((parent) => parent && parent !== commit.hash)),
     );
     for (let i = 0; i < parents.length; i += 1) {
       const parent = parents[i];
-      if (next.some((lane) => lane?.hash === parent)) continue;
+      const existing = next.findIndex((lane) => lane?.hash === parent);
+      if (existing >= 0) {
+        if (pinnedNode && i === 0) {
+          next[0] = { hash: parent, color: 0 };
+          if (existing !== 0) next[existing] = null;
+        }
+        continue;
+      }
 
-      let targetLane = i === 0 ? nodeLane : next.findIndex((lane) => lane === null);
+      let targetLane = i === 0 ? nodeLane : next.findIndex((lane, index) => lane === null && (!reserveLeft || index > 0));
       if (targetLane < 0 || next[targetLane] !== null) targetLane = next.length;
       next[targetLane] = {
         hash: parent,
-        color: i === 0 ? current.color : nextColor++,
+        color: i === 0 ? pinnedNode ? 0 : current.color : nextColor++,
       };
     }
 
-    const after = next.filter((lane): lane is ActiveLane => lane !== null);
+    const after = reserveLeft ? [next[0], ...next.slice(1).filter((lane) => lane !== null)] : next.filter((lane) => lane !== null);
     const segments: GraphSegment[] = [];
 
     for (let laneIndex = 0; laneIndex < before.length; laneIndex += 1) {
       const lane = before[laneIndex];
-      if (laneIndex === nodeLane) {
+      if (!lane) continue;
+      if (laneIndex === sourceLane) {
         if (!startsHere) {
           segments.push({
             kind: "incoming",
@@ -91,7 +102,7 @@ export function layoutCommitGraph(commits: readonly GraphCommit[]): CommitGraphL
         continue;
       }
 
-      const targetLane = after.findIndex((candidate) => candidate.hash === lane.hash);
+      const targetLane = after.findIndex((candidate) => candidate?.hash === lane.hash);
       if (targetLane >= 0) {
         segments.push({
           kind: "continuation",
@@ -105,7 +116,7 @@ export function layoutCommitGraph(commits: readonly GraphCommit[]): CommitGraphL
     }
 
     for (const parent of parents) {
-      const targetLane = after.findIndex((lane) => lane.hash === parent);
+      const targetLane = after.findIndex((lane) => lane?.hash === parent);
       if (targetLane >= 0) {
         segments.push({
           kind: "parent",
@@ -113,14 +124,14 @@ export function layoutCommitGraph(commits: readonly GraphCommit[]): CommitGraphL
           toLane: targetLane,
           fromPosition: 0.5,
           toPosition: 1,
-          color: after[targetLane].color,
+          color: after[targetLane]!.color,
           parentHash: parent,
         });
       }
     }
 
     maxLanes = Math.max(maxLanes, before.length, after.length);
-    rows.push({ nodeLane, nodeColor: current.color, segments });
+    rows.push({ nodeLane, nodeColor: pinnedNode ? 0 : current.color, segments });
     lanes = after;
   }
 

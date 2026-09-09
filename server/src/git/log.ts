@@ -1,4 +1,4 @@
-import { runGit } from "./gitRunner.js";
+import { GitError, runGit } from "./gitRunner.js";
 
 export interface CommitRef {
   name: string;
@@ -118,6 +118,18 @@ export async function getLog(
     ...sanitizeRevs(revs),
   ]);
   return parseLog(stdout);
+}
+
+export async function getMainHistory(root: string, signal?: AbortSignal): Promise<string[]> {
+  let hash: string;
+  try {
+    hash = (await runGit(root, ["rev-parse", "--verify", "--quiet", "refs/heads/main"], { signal })).stdout.trim();
+  } catch (e) {
+    if (e instanceof GitError && e.code === 1) return [];
+    throw e;
+  }
+  const { stdout } = await runGit(root, ["rev-list", "--first-parent", hash, "--"], { signal });
+  return stdout.trim().split("\n").filter(Boolean);
 }
 
 export async function searchCommits(root: string, query: string, signal?: AbortSignal) {

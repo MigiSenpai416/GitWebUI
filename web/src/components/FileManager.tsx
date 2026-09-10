@@ -608,16 +608,18 @@ export function FileManager({ open, intent = "browse", onClose }: Props) {
 
         <div className="fm-body">
           <aside className="fm-tree" aria-label="Repository folders">
-            <TreeRow
-              node={root}
-              label={repoName}
-              depth={0}
-              currentPath={current.path}
-              expanded={expanded}
-              setExpanded={setExpanded}
-              navigate={navigate}
-              onContextMenu={openMenu}
-            />
+            <div className="fm-tree-inner">
+              <TreeRow
+                node={root}
+                label={repoName}
+                depth={0}
+                currentPath={current.path}
+                expanded={expanded}
+                setExpanded={setExpanded}
+                navigate={navigate}
+                onContextMenu={openMenu}
+              />
+            </div>
           </aside>
 
           {historyPath ? (

@@ -184,7 +184,39 @@ describe("discard paths", () => {
   });
 });
 
+describe("background status", () => {
+  it("reports staged and unstaged changes without rewriting the index", async () => {
+    await initRepo();
+    await fs.writeFile(path.join(ROOT, "staged.txt"), "staged\n", "utf8");
+    await stagePaths(ROOT, ["staged.txt"]);
+    await fs.writeFile(path.join(ROOT, "tracked.txt"), "changed\n", "utf8");
+    const index = path.join(ROOT, ".git", "index");
+    const before = await fs.readFile(index);
+    const stat = await fs.stat(index);
+
+    const status = await getStatus(ROOT, true);
+
+    expect(status.staged.map((file) => file.path)).toEqual(["staged.txt"]);
+    expect(status.unstaged.map((file) => file.path)).toEqual(["tracked.txt"]);
+    expect(await fs.readFile(index)).toEqual(before);
+    expect((await fs.stat(index)).mtimeMs).toBe(stat.mtimeMs);
+  });
+});
+
 describe("commit", () => {
+  it("runs commit hooks and preserves the index when a hook rejects the commit", async () => {
+    await initRepo();
+    const before = (await runGit(ROOT, ["rev-parse", "HEAD"])).stdout.trim();
+    await fs.writeFile(path.join(ROOT, "tracked.txt"), "changed\n", "utf8");
+    await stagePaths(ROOT, ["tracked.txt"]);
+    const hook = path.join(ROOT, ".git", "hooks", "pre-commit");
+    await fs.writeFile(hook, "#!/bin/sh\necho hook-rejected >&2\nexit 1\n", { mode: 0o755 });
+
+    await expect(commit(ROOT, { title: "rejected" })).rejects.toThrow("hook-rejected");
+    expect((await runGit(ROOT, ["rev-parse", "HEAD"])).stdout.trim()).toBe(before);
+    expect((await getStatus(ROOT)).staged.map((file) => file.path)).toEqual(["tracked.txt"]);
+  });
+
   it("preserves the summary and multi-line description as separate message sections", async () => {
     await initRepo();
     await fs.writeFile(path.join(ROOT, "tracked.txt"), "changed\n", "utf8");

@@ -187,7 +187,7 @@ export async function commit(root: string, opts: CommitOptions): Promise<string>
   if (opts.identity?.name && opts.identity?.email) {
     args.push("-c", `user.name=${opts.identity.name}`, "-c", `user.email=${opts.identity.email}`);
   }
-  args.push("commit", "-m", title);
+  args.push("commit", "--quiet", "-m", title);
   const desc = (opts.description ?? "").trim();
   if (desc) args.push("-m", desc);
   if (opts.amend) args.push("--amend");

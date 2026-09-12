@@ -95,8 +95,9 @@ function splitUnmerged(line: string): { xy: string; path: string } {
   return { xy: parts[1], path: parts.slice(10).join(" ") };
 }
 
-export async function getStatus(root: string): Promise<StatusResult> {
+export async function getStatus(root: string, background = false): Promise<StatusResult> {
   const { stdout } = await runGit(root, [
+    ...(background ? ["--no-optional-locks"] : []),
     "status",
     "--porcelain=v2",
     "-z",

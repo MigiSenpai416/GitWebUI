@@ -85,6 +85,75 @@ describe("POST /commit", () => {
       hasMore: false,
     });
   });
+
+  it("refreshes detached HEAD after amending without moving the branch", async () => {
+    const opened = registerRepo(await openRepo(TMP));
+    const branch = opened.branch;
+    const original = opened.head;
+    await runGit(TMP, ["checkout", "--detach", "HEAD"]);
+    try {
+      const committed = await fetch(base + "/api/commit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
+        body: JSON.stringify({ title: "detached amendment", amend: true }),
+      });
+      expect(committed.status).toBe(200);
+      const result = await committed.json() as { hash: string };
+      expect(result.hash).not.toBe(original);
+      expect(result).toMatchObject({
+        repo: { root: opened.root, branch: "HEAD", head: result.hash },
+        status: { staged: [], unstaged: [] },
+      });
+      expect((await runGit(TMP, ["rev-parse", branch])).stdout.trim()).toBe(original);
+      const current = await fetch(base + "/api/repo/current", {
+        headers: { "X-Repo-Root": opened.root },
+      });
+      await expect(current.json()).resolves.toMatchObject({
+        repo: { branch: "HEAD", head: result.hash },
+      });
+    } finally {
+      await runGit(TMP, ["checkout", branch]);
+    }
+  });
+
+  it("reads and commits a linked worktree index without changing the main worktree", async () => {
+    const main = registerRepo(await openRepo(TMP));
+    const linkedPath = path.join(TMP, "linked-worktree");
+    await runGit(TMP, ["worktree", "add", "-b", "linked-review", linkedPath, "HEAD"]);
+    const linked = registerRepo(await openRepo(linkedPath));
+    try {
+      await fs.writeFile(path.join(linkedPath, "first.txt"), "staged version\n", "utf8");
+      await runGit(linkedPath, ["add", "--", "first.txt"]);
+      await fs.writeFile(path.join(linkedPath, "first.txt"), "unstaged version\n", "utf8");
+      const status = await fetch(base + "/api/status", {
+        headers: { "X-Repo-Root": linked.root },
+      });
+      expect(status.status).toBe(200);
+      await expect(status.json()).resolves.toEqual({
+        staged: [{ path: "first.txt", status: "M", staged: true }],
+        unstaged: [{ path: "first.txt", status: "M", staged: false }],
+      });
+      const committed = await fetch(base + "/api/commit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Repo-Root": linked.root },
+        body: JSON.stringify({ title: "linked staged change" }),
+      });
+      expect(committed.status).toBe(200);
+      const result = await committed.json() as { hash: string };
+      expect(result).toMatchObject({
+        repo: { root: linked.root, branch: "linked-review", head: result.hash },
+        status: { staged: [], unstaged: [{ path: "first.txt", status: "M", staged: false }] },
+      });
+      expect((await runGit(linkedPath, ["show", "HEAD:first.txt"])).stdout.replace(/\r/g, ""))
+        .toBe("staged version\n");
+      expect((await runGit(TMP, ["rev-parse", "HEAD"])).stdout.trim()).toBe(main.head);
+      expect(await fs.readFile(path.join(TMP, "first.txt"), "utf8")).toBe("first\n");
+    } finally {
+      unregisterRepo(linked.root);
+      await runGit(TMP, ["worktree", "remove", "--force", linkedPath]);
+      await runGit(TMP, ["branch", "-D", "linked-review"]);
+    }
+  });
 });
 
 describe("POST /merge", () => {

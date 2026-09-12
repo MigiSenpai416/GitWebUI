@@ -17,6 +17,7 @@ export type TreeNode<T> = DirNode<T> | FileNode<T>;
 /** Build a nested folder/file tree from a flat list of files (for Tree view). */
 export function buildTree<T extends { path: string }>(files: T[]): TreeNode<T>[] {
   const root: DirNode<T> = { type: "dir", name: "", path: "", children: [] };
+  const dirs = new Map<string, DirNode<T>>();
 
   for (const file of files) {
     const parts = file.path.split("/");
@@ -24,12 +25,11 @@ export function buildTree<T extends { path: string }>(files: T[]): TreeNode<T>[]
     for (let i = 0; i < parts.length - 1; i++) {
       const seg = parts[i];
       const dirPath = parts.slice(0, i + 1).join("/");
-      let next = dir.children.find(
-        (c): c is DirNode<T> => c.type === "dir" && c.path === dirPath,
-      );
+      let next = dirs.get(dirPath);
       if (!next) {
         next = { type: "dir", name: seg, path: dirPath, children: [] };
         dir.children.push(next);
+        dirs.set(dirPath, next);
       }
       dir = next;
     }

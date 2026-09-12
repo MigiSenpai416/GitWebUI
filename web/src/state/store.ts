@@ -27,6 +27,8 @@ import type {
 
 const PAGE = 150;
 let commitFilesController: AbortController | undefined;
+let repoRefreshId = 0;
+let statusRefresh: { generation: number; root: string; tabId: string | null; again: boolean; promise: Promise<void> } | undefined;
 const SIDEBAR_KEY = "gwui.sidebarCollapsed";
 const TABS_KEY = "gwui.tabs";
 const VISIBLE_KEY = "gwui.visibleRefs";
@@ -925,9 +927,11 @@ export const useStore = create<AppState>((set, get) => ({
   async loadBranches() {
     const root = get().repo?.root;
     if (!root) return;
+    const tick = get().refreshTick;
+    const generation = tabSelectionGeneration;
     try {
       const { branches } = await api.branches();
-      if (get().repo?.root !== root) return;
+      if (get().repo?.root !== root || get().refreshTick !== tick || tabSelectionGeneration !== generation) return;
       set({ branches });
       // Drop any visible LOCAL refs whose branch no longer exists (e.g. deleted
       // elsewhere); leave remote refs to loadRemoteBranches.
@@ -947,9 +951,11 @@ export const useStore = create<AppState>((set, get) => ({
   async loadRemoteBranches() {
     const root = get().repo?.root;
     if (!root) return;
+    const tick = get().refreshTick;
+    const generation = tabSelectionGeneration;
     try {
       const { branches } = await api.remoteBranches();
-      if (get().repo?.root !== root) return;
+      if (get().repo?.root !== root || get().refreshTick !== tick || tabSelectionGeneration !== generation) return;
       set({ remoteBranches: branches });
       // Drop any visible REMOTE refs whose branch no longer exists on the remote.
       // Local refs (refs/heads/…) are left untouched — loadBranches prunes those.
@@ -1069,9 +1075,11 @@ export const useStore = create<AppState>((set, get) => ({
   async loadWorktrees() {
     const root = get().repo?.root;
     if (!root) return;
+    const tick = get().refreshTick;
+    const generation = tabSelectionGeneration;
     try {
       const { worktrees } = await api.worktrees();
-      if (get().repo?.root !== root) return;
+      if (get().repo?.root !== root || get().refreshTick !== tick || tabSelectionGeneration !== generation) return;
       set({ worktrees });
     } catch {
       /* non-fatal */
@@ -1155,9 +1163,11 @@ export const useStore = create<AppState>((set, get) => ({
   async loadRemotes() {
     const root = get().repo?.root;
     if (!root) return;
+    const tick = get().refreshTick;
+    const generation = tabSelectionGeneration;
     try {
       const { remotes } = await api.remotes();
-      if (get().repo?.root !== root) return;
+      if (get().repo?.root !== root || get().refreshTick !== tick || tabSelectionGeneration !== generation) return;
       set({ remotes });
     } catch {
       /* non-fatal */
@@ -1235,10 +1245,16 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async ensureBranchPushed(branch: string) {
-    const root = get().repo?.root;
-    if (!root) return { ok: false, reason: "The repository is no longer active." };
+    const repo = get().repo;
+    if (!repo) return { ok: false, reason: "The repository is no longer active." };
+    const root = repo.root;
+    const generation = tabSelectionGeneration;
+    let { branches } = await api.branches();
+    if (!isActiveTarget(get, root, repo.branch) || tabSelectionGeneration !== generation) {
+      return { ok: false, reason: "The repository or branch changed while checking push status." };
+    }
     const pushed = (name: string): boolean => {
-      const b = get().branches.find((x) => x.name === name);
+      const b = branches.find((x) => x.name === name);
       return Boolean(b && b.upstream && !b.upstreamGone && b.ahead === 0);
     };
     if (pushed(branch)) return { ok: true };
@@ -1249,7 +1265,7 @@ export const useStore = create<AppState>((set, get) => ({
         reason: `"${branch}" has commits that aren't on the remote. Check it out and push it first.`,
       };
     }
-    const entry = get().branches.find((b) => b.name === branch);
+    const entry = branches.find((b) => b.name === branch);
     const ahead = entry?.ahead ?? 0;
     const detail = !entry?.upstream
       ? `"${branch}" isn't on the remote yet.`
@@ -1259,12 +1275,16 @@ export const useStore = create<AppState>((set, get) => ({
       { label: "Cancel", value: "cancel", kind: "neutral" },
     ]);
     if (choice !== "push") return { ok: false };
-    if (!isActiveTarget(get, root, branch)) {
+    if (!isActiveTarget(get, root, branch) || tabSelectionGeneration !== generation) {
       return { ok: false, reason: "The repository or branch changed before the push started." };
     }
     await get().push();
-    if (!isActiveTarget(get, root, branch)) {
+    if (!isActiveTarget(get, root, branch) || tabSelectionGeneration !== generation) {
       return { ok: false, reason: "The repository or branch changed while pushing." };
+    }
+    branches = (await api.branches()).branches;
+    if (!isActiveTarget(get, root, branch) || tabSelectionGeneration !== generation) {
+      return { ok: false, reason: "The repository or branch changed while checking push status." };
     }
     return pushed(branch)
       ? { ok: true }
@@ -1296,9 +1316,11 @@ export const useStore = create<AppState>((set, get) => ({
   async loadMergeState() {
     const root = get().repo?.root;
     if (!root) return;
+    const tick = get().refreshTick;
+    const generation = tabSelectionGeneration;
     try {
       const { merge } = await api.mergeState();
-      if (get().repo?.root !== root) return;
+      if (get().repo?.root !== root || get().refreshTick !== tick || tabSelectionGeneration !== generation) return;
       applyMerge(get, set, merge);
     } catch {
       /* non-fatal */
@@ -1432,9 +1454,11 @@ export const useStore = create<AppState>((set, get) => ({
   async loadStashes() {
     const root = get().repo?.root;
     if (!root) return;
+    const tick = get().refreshTick;
+    const generation = tabSelectionGeneration;
     try {
       const { stashes } = await api.stashes();
-      if (get().repo?.root !== root) return;
+      if (get().repo?.root !== root || get().refreshTick !== tick || tabSelectionGeneration !== generation) return;
       set({ stashes });
       // The open stash may have just been popped, dropped, or left behind by a
       // repo switch — one guard here covers every way it can go.
@@ -1719,21 +1743,49 @@ export const useStore = create<AppState>((set, get) => ({
   async refreshStatus() {
     const root = get().repo?.root;
     if (!root) return;
-    set({ loadingStatus: true });
-    try {
-      const status = await api.status();
-      if (get().repo?.root !== root) return;
-      set({ status });
-    } catch (e) {
-      if (get().repo?.root === root) reportError(set, e);
-    } finally {
-      if (get().repo?.root === root) set({ loadingStatus: false });
+    const tabId = get().activeTabId;
+    if (statusRefresh?.generation === tabSelectionGeneration && statusRefresh.root === root && statusRefresh.tabId === tabId) {
+      statusRefresh.again = true;
+      return statusRefresh.promise;
     }
+    const request = { generation: tabSelectionGeneration, root, tabId, again: false, promise: Promise.resolve() };
+    statusRefresh = request;
+    const isCurrent = () => statusRefresh === request && tabSelectionGeneration === request.generation
+      && get().repo?.root === root && get().activeTabId === tabId;
+    set({ loadingStatus: true });
+    request.promise = (async () => {
+      try {
+        do {
+          request.again = false;
+          const previous = get().status;
+          try {
+            const status = await api.status();
+            if (isCurrent() && get().status === previous) {
+              const staged = sameChanges(previous.staged, status.staged) ? previous.staged : status.staged;
+              const unstaged = sameChanges(previous.unstaged, status.unstaged) ? previous.unstaged : status.unstaged;
+              if (staged !== previous.staged || unstaged !== previous.unstaged) set({ status: { staged, unstaged } });
+            }
+          } catch (e) {
+            if (isCurrent() && get().status === previous) reportError(set, e);
+          }
+        } while (isCurrent() && request.again);
+      } finally {
+        if (statusRefresh === request) {
+          if (get().repo?.root === root && get().activeTabId === tabId) set({ loadingStatus: false });
+          statusRefresh = undefined;
+        }
+      }
+    })();
+    return request.promise;
   },
 
   async refreshAll() {
-    const root = get().repo?.root;
+    const previous = get().repo;
+    const root = previous?.root;
     if (!root || get().opening) return;
+    const generation = tabSelectionGeneration;
+    const request = ++repoRefreshId;
+    const statusPromise = get().refreshStatus();
     try {
       // Git may have been changed by the built-in terminal or another client.
       // Refresh the branch/HEAD metadata before the derived lists so the tab
@@ -1741,14 +1793,15 @@ export const useStore = create<AppState>((set, get) => ({
       const { repo } = await api.currentRepo();
       // A rapid tab switch can finish while this request is in flight. Never
       // apply the previous repository's response to the newly active tab.
-      if (!repo || get().repo?.root !== root) return;
+      if (!repo || tabSelectionGeneration !== generation || request !== repoRefreshId || get().repo !== previous) return;
       set({ repo });
       syncActiveTab(get, set, repo);
+      await refreshRepoData(get, set, root, false);
     } catch (e) {
-      if (isActiveRepo(get, root)) reportError(set, e);
-      return;
+      if (tabSelectionGeneration === generation && request === repoRefreshId && isActiveRepo(get, root)) reportError(set, e);
+    } finally {
+      await statusPromise;
     }
-    await refreshRepoData(get, set, root);
   },
 
   async stage(paths: string[]) {
@@ -1848,15 +1901,21 @@ export const useStore = create<AppState>((set, get) => ({
   async commit(title: string, description: string, amend: boolean) {
     const root = get().repo?.root;
     if (!root) return;
+    if (get().committing) throw new Error("A commit is already running");
     set({ committing: true });
     try {
       const { repo, status } = await api.commit(title, description, amend);
       if (!isActiveRepo(get, root)) return;
       set({ ...(repo ? { repo } : {}), status, selectedFile: null });
       if (repo) syncActiveTab(get, set, repo);
-      await refreshRepoData(get, set, root);
+      void refreshRepoData(get, set, root, false).catch((e) => {
+        if (isActiveRepo(get, root)) reportError(set, e);
+      });
     } catch (e) {
-      if (isActiveRepo(get, root)) reportError(set, e);
+      if (isActiveRepo(get, root)) {
+        reportError(set, e);
+        void get().refreshStatus();
+      }
       throw e;
     } finally {
       set({ committing: false });
@@ -1900,6 +1959,14 @@ export const useStore = create<AppState>((set, get) => ({
 type StoreGet = () => AppState;
 type StoreSet = (partial: Partial<AppState> | ((s: AppState) => Partial<AppState>)) => void;
 
+function sameChanges(a: StatusResult["staged"], b: StatusResult["staged"]): boolean {
+  return a.length === b.length && a.every((file, i) => {
+    const other = b[i];
+    return file.path === other.path && file.status === other.status
+      && file.oldPath === other.oldPath && file.staged === other.staged;
+  });
+}
+
 function isActiveRepo(get: StoreGet, root: string): boolean {
   return get().repo?.root === root;
 }
@@ -1921,30 +1988,41 @@ async function refreshRepoData(
   get: StoreGet,
   set: StoreSet,
   expectedRoot = get().repo?.root,
+  refreshStatus = true,
 ): Promise<void> {
   if (!expectedRoot || !isActiveRepo(get, expectedRoot)) return;
   // Bump the tick first so an open diff refetches alongside the lists.
   set({ refreshTick: get().refreshTick + 1 });
+  const tick = get().refreshTick;
+  const generation = tabSelectionGeneration;
+  const statusPromise = refreshStatus ? get().refreshStatus() : Promise.resolve();
   // Refresh remote branches first so any deleted refs are pruned from the
   // visible set before we query the log with them.
   await get().loadRemoteBranches();
   // A tab switch while the first refresh was in flight changes the API's
   // request target. Stop here instead of issuing the rest against another repo.
-  if (!isActiveRepo(get, expectedRoot)) return;
+  if (!isActiveRepo(get, expectedRoot) || tabSelectionGeneration !== generation || get().refreshTick !== tick) {
+    await statusPromise;
+    return;
+  }
   // Reload as many commits as are currently paged in, so a deep scroll position
   // survives the refresh (server caps the page at 1000).
   const count = Math.min(1000, Math.max(PAGE, get().commits.length));
   const commitsPromise = api
     .commits(0, count, get().visibleRefs)
     .then(({ commits, hasMore }) => {
-      if (isActiveRepo(get, expectedRoot)) set({ commits, hasMore });
+      if (isActiveRepo(get, expectedRoot) && tabSelectionGeneration === generation && get().refreshTick === tick) {
+        set({ commits, hasMore });
+      }
     })
     .catch((e) => {
-      if (isActiveRepo(get, expectedRoot)) reportError(set, e);
+      if (isActiveRepo(get, expectedRoot) && tabSelectionGeneration === generation && get().refreshTick === tick) {
+        reportError(set, e);
+      }
     });
   await Promise.all([
     commitsPromise,
-    get().refreshStatus(),
+    statusPromise,
     get().loadBranches(),
     get().loadRemotes(),
     get().loadStashes(),
@@ -2152,13 +2230,22 @@ async function hydrateRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promis
   });
   // Load the ref lists first so we can resolve the default visible set and query
   // the log with valid refs.
-  await Promise.all([get().loadRemoteBranches(), get().loadBranches()]);
-  if (get().repo?.root !== info.root) return;
+  const generation = tabSelectionGeneration;
+  const statusPromise = get().refreshStatus();
+  let tick: number;
+  do {
+    tick = get().refreshTick;
+    await Promise.all([get().loadRemoteBranches(), get().loadBranches()]);
+    if (get().repo?.root !== info.root || tabSelectionGeneration !== generation) {
+      await statusPromise;
+      return;
+    }
+  } while (get().refreshTick !== tick);
   set({ visibleRefs: resolveVisibleRefs(get(), info.root) });
   writeVisibleFor(info.root, get().visibleRefs);
   await Promise.all([
     get().loadCommits(true),
-    get().refreshStatus(),
+    statusPromise,
     get().loadRemotes(),
     get().loadStashes(),
     get().loadMergeState(),

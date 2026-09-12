@@ -16,6 +16,7 @@ import {
 import { checkoutCommit } from "./branches.js";
 import { currentBranch } from "./repo.js";
 import { getStatus } from "./status.js";
+import { commit } from "./mutate.js";
 
 async function revParse(ref: string): Promise<string> {
   return (await runGit(ROOT, ["rev-parse", ref])).stdout.trim();
@@ -130,6 +131,38 @@ describe("merge conflict state", () => {
     const state = await getMergeState(ROOT);
     expect(state.active).toBe(true);
     expect(state.conflicted).toHaveLength(0);
+  });
+
+  it("rejects committing an unresolved merge without changing HEAD or conflict entries", async () => {
+    await setupConflict();
+    const head = await revParse("HEAD");
+    await mergeBranch(ROOT, "feature");
+    const status = await getStatus(ROOT, true);
+    expect(status.unstaged).toContainEqual({ path: "a.txt", status: "U", staged: false });
+
+    await expect(commit(ROOT, { title: "unresolved" })).rejects.toThrow();
+
+    expect(await revParse("HEAD")).toBe(head);
+    expect(await getStatus(ROOT, true)).toEqual(status);
+    expect((await getMergeState(ROOT)).active).toBe(true);
+  });
+
+  it("commits a resolved merge with both parents and leaves unrelated files unstaged", async () => {
+    await setupConflict();
+    const parents = [await revParse("main"), await revParse("feature")];
+    await mergeBranch(ROOT, "feature");
+    await writeResolution(ROOT, "a.txt", "one\nRESOLVED\nthree\n", true);
+    await write("keep.txt", "untracked work\n");
+
+    const hash = await commit(ROOT, { title: "resolved merge" });
+
+    const line = (await runGit(ROOT, ["rev-list", "--parents", "-n", "1", "HEAD"])).stdout.trim();
+    expect(line.split(" ")).toEqual([hash, ...parents]);
+    expect((await runGit(ROOT, ["show", "HEAD:a.txt"])).stdout.replace(/\r/g, "")).toBe("one\nRESOLVED\nthree\n");
+    expect((await getMergeState(ROOT)).active).toBe(false);
+    expect(await getStatus(ROOT, true)).toEqual({
+      staged: [], unstaged: [{ path: "keep.txt", status: "?", staged: false }],
+    });
   });
 
   it("stages only the literal conflict filename when it contains pathspec metacharacters", async () => {

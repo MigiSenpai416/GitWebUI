@@ -333,7 +333,7 @@ api.get("/commits/:hash/files", h(async (req, res) => {
 
 api.get("/status", h(async (req, res) => {
   const root = requireRepoRoot(req);
-  res.json(await getStatus(root));
+  res.json(await getStatus(root, true));
 }));
 
 api.get("/branches", h(async (req, res) => {
@@ -618,11 +618,10 @@ api.post("/commit", h(async (req, res) => {
   const amend = Boolean(req.body?.amend);
   const identity = await resolveCommitIdentity();
   const hash = await commit(root, { title, description, amend, identity });
-  const status = await getStatus(root);
   // A first commit moves an unborn repository from head=null to a real HEAD;
   // amend moves HEAD as well. Keep the registry authoritative before the client
   // reloads /commits, whose unborn-repo fast path reads this metadata.
-  const repo = await refreshSession(root);
+  const [status, repo] = await Promise.all([getStatus(root), refreshSession(root, hash)]);
   res.json({ hash, status, repo });
 }));
 
@@ -1292,11 +1291,12 @@ async function usableCwd(want: string, root: string): Promise<string> {
 }
 
 /** Re-read the branch and HEAD into the registry after a ref-moving op. */
-async function refreshSession(root: string): Promise<RepoInfo | null> {
+async function refreshSession(root: string, head?: string): Promise<RepoInfo | null> {
   const info = getRepoByRoot(root);
   if (!info) return null;
-  info.branch = await currentBranch(root);
-  info.head = await headHash(root);
+  const [branch, hash] = await Promise.all([currentBranch(root), head ?? headHash(root)]);
+  info.branch = branch;
+  info.head = hash;
   return registerRepo(info);
 }
 

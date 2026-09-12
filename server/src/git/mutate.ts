@@ -1,8 +1,9 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { runGit } from "./gitRunner.js";
+import { runGit, GitError } from "./gitRunner.js";
 import { headHash } from "./repo.js";
 import { getStatus } from "./status.js";
+import { parseNameStatus } from "./commitFiles.js";
 
 /** Treat a status path as a filename, never as a wildcard pathspec. */
 function literalPathspecs(paths: Iterable<string>): string[] {
@@ -15,6 +16,33 @@ function isRequested(filePath: string, requested: string[]): boolean {
     const candidate = raw.replace(/\/+$/, "");
     return candidate === "." || filePath === candidate || filePath.startsWith(`${candidate}/`);
   });
+}
+
+/** Match status's rename settings without scanning the working tree. */
+async function statusRenameOptions(root: string): Promise<string[]> {
+  const { stdout: config } = await runGit(root, [
+    "config", "--null", "--get-regexp", "^(diff|status)\\.(renames|renamelimit)$",
+  ]).catch((e) => {
+    if (e instanceof GitError && e.code === 1) return { stdout: "" };
+    throw e;
+  });
+  const settings = new Map<string, string | null>();
+  const options: string[] = [];
+  for (const entry of config.split("\0").filter(Boolean)) {
+    const nl = entry.indexOf("\n");
+    const key = nl === -1 ? entry : entry.slice(0, nl);
+    const value = nl === -1 ? null : entry.slice(nl + 1);
+    const name = key.slice(key.indexOf(".") + 1);
+    const previous = settings.get(name);
+    // Status uses the first diff fallback, then honors status overrides.
+    // A rename limit of -1 leaves the fallback unset.
+    if (key.startsWith("status.") || !settings.has(name)
+      || (name === "renamelimit" && (Number(previous) === -1 || /^-0x0*1$/i.test(previous?.trim() ?? "")))) {
+      settings.set(name, value);
+      options.push("-c", value === null ? `diff.${name}` : `diff.${name}=${value}`);
+    }
+  }
+  return options;
 }
 
 /** Stage one or more paths (handles new, modified, and deleted files). */
@@ -31,15 +59,24 @@ export async function stageAll(root: string): Promise<void> {
 /** Unstage one or more paths, restoring the index entry from HEAD. */
 export async function unstagePaths(root: string, paths: string[]): Promise<void> {
   if (paths.length === 0) return;
-  const head = await headHash(root);
+  const [head, options] = await Promise.all([headHash(root), statusRenameOptions(root)]);
   if (head) {
     // A staged rename is one logical change but Git stores it as an old-path
     // deletion plus a new-path addition. The UI displays (and submits) the new
     // path, so restoring only that path would leave the deletion staged. Include
     // the source path for requested renames; copies deliberately keep their
     // source because it was never removed.
+    const staged = await runGit(root, [
+      ...options,
+      "diff", "--cached", "--name-status", "-z", "--diff-filter=R",
+      "--ita-invisible-in-index", "--ignore-submodules=dirty", "--no-ext-diff", "--no-textconv",
+      head, "--",
+    ]).then(({ stdout }) => parseNameStatus(stdout)).catch(async (e) => {
+      if (!(e instanceof GitError)) throw e;
+      // Status can accept config entries that the diff command rejects.
+      return (await getStatus(root)).staged;
+    });
     const requested = new Set(paths);
-    const staged = (await getStatus(root)).staged;
     const renameSources = staged
       .filter((file) => file.status === "R" && file.oldPath && requested.has(file.path))
       .map((file) => file.oldPath!);

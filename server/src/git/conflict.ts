@@ -93,8 +93,13 @@ async function detectKind(gitDir: string): Promise<MergeKind | null> {
 
 /** Repo-relative paths with unmerged index entries. */
 export async function conflictedPaths(root: string): Promise<string[]> {
-  const { stdout } = await runGit(root, ["diff", "--name-only", "--diff-filter=U", "-z"]);
-  return stdout.split("\0").filter((s) => s.length > 0);
+  const { stdout } = await runGit(root, ["ls-files", "--unmerged", "--full-name", "-z"]);
+  const paths = new Set<string>();
+  for (const entry of stdout.split("\0")) {
+    const tab = entry.indexOf("\t");
+    if (tab !== -1) paths.add(entry.slice(tab + 1));
+  }
+  return [...paths];
 }
 
 /** Whether the working tree currently has any unmerged (conflicted) paths. */

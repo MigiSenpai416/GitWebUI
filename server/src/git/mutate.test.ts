@@ -55,6 +55,182 @@ describe("deleteFile", () => {
 });
 
 describe("staging", () => {
+  it.each([
+    [undefined, undefined, true],
+    ["false", "true", false],
+    ["true", "false", true],
+    [undefined, "false", false],
+    ["", "true", false],
+  ])("respects status.renames=%s over diff.renames=%s while unstaging", async (statusRenames, diffRenames, renamed) => {
+    await initRepo();
+    if (diffRenames !== undefined) await runGit(ROOT, ["config", "diff.renames", diffRenames]);
+    if (statusRenames !== undefined) await runGit(ROOT, ["config", "status.renames", statusRenames]);
+    await runGit(ROOT, ["mv", "tracked.txt", "renamed [x].txt"]);
+    expect((await getStatus(ROOT)).staged.some((file) => file.status === "R")).toBe(renamed);
+
+    await unstagePaths(ROOT, ["renamed [x].txt"]);
+
+    const staged = (await getStatus(ROOT)).staged;
+    expect(staged).toEqual(renamed ? [] : [{ path: "tracked.txt", status: "D", staged: true }]);
+    expect(await fs.readFile(path.join(ROOT, "renamed [x].txt"), "utf8")).toBe("base\n");
+  });
+
+  it("keeps a copy's modified source staged", async () => {
+    await initRepo();
+    await runGit(ROOT, ["config", "status.renames", "copies"]);
+    await fs.writeFile(path.join(ROOT, "copy.txt"), "base\n");
+    await fs.writeFile(path.join(ROOT, "tracked.txt"), "source changed\n");
+    await stageAll(ROOT);
+    expect((await getStatus(ROOT)).staged).toContainEqual({ path: "copy.txt", oldPath: "tracked.txt", status: "C", staged: true });
+
+    await unstagePaths(ROOT, ["copy.txt"]);
+
+    expect((await getStatus(ROOT)).staged).toEqual([{ path: "tracked.txt", status: "M", staged: true }]);
+    expect(await fs.readFile(path.join(ROOT, "copy.txt"), "utf8")).toBe("base\n");
+  });
+
+  it("matches status's first diff setting when the config contains multiple rename values", async () => {
+    await initRepo();
+    await runGit(ROOT, ["config", "--add", "diff.renames", "false"]);
+    await runGit(ROOT, ["config", "--add", "diff.renames", "true"]);
+    await runGit(ROOT, ["mv", "tracked.txt", "renamed.txt"]);
+    expect((await getStatus(ROOT)).staged.some((file) => file.status === "R")).toBe(false);
+
+    await unstagePaths(ROOT, ["renamed.txt"]);
+
+    expect((await getStatus(ROOT)).staged).toEqual([{ path: "tracked.txt", status: "D", staged: true }]);
+  });
+
+  it("accepts an implicit true status rename setting", async () => {
+    await initRepo();
+    await runGit(ROOT, ["config", "diff.renames", "false"]);
+    await fs.appendFile(path.join(ROOT, ".git", "config"), "\n[status]\n\trenames\n");
+    await runGit(ROOT, ["mv", "tracked.txt", "renamed.txt"]);
+    expect((await getStatus(ROOT)).staged[0].status).toBe("R");
+
+    await unstagePaths(ROOT, ["renamed.txt"]);
+
+    expect((await getStatus(ROOT)).staged).toEqual([]);
+  });
+
+  it("preserves status behavior when an ignored duplicate diff setting is invalid", async () => {
+    await initRepo();
+    await runGit(ROOT, ["config", "--add", "diff.renames", "false"]);
+    await runGit(ROOT, ["config", "--add", "diff.renames", "invalid"]);
+    await runGit(ROOT, ["mv", "tracked.txt", "renamed.txt"]);
+    expect((await getStatus(ROOT)).staged.some((file) => file.status === "R")).toBe(false);
+
+    await unstagePaths(ROOT, ["renamed.txt"]);
+
+    expect((await getStatus(ROOT)).staged).toEqual([{ path: "tracked.txt", status: "D", staged: true }]);
+  });
+
+  it("does not unstage files when status rejects an earlier rename setting", async () => {
+    await initRepo();
+    await runGit(ROOT, ["mv", "tracked.txt", "renamed.txt"]);
+    await runGit(ROOT, ["config", "--add", "status.renames", "invalid"]);
+    await runGit(ROOT, ["config", "--add", "status.renames", "true"]);
+    const index = path.join(ROOT, ".git", "index");
+    const before = await fs.readFile(index);
+    await expect(getStatus(ROOT)).rejects.toThrow();
+
+    await expect(unstagePaths(ROOT, ["renamed.txt"])).rejects.toThrow();
+
+    expect(await fs.readFile(index)).toEqual(before);
+  });
+
+  it("does not pair an intent-to-add entry with a staged deletion", async () => {
+    await initRepo();
+    await fs.writeFile(path.join(ROOT, "empty.txt"), "");
+    await stagePaths(ROOT, ["empty.txt"]);
+    await commit(ROOT, { title: "empty file" });
+    await runGit(ROOT, ["rm", "empty.txt"]);
+    await fs.writeFile(path.join(ROOT, "new.txt"), "");
+    await runGit(ROOT, ["add", "-N", "new.txt"]);
+
+    await unstagePaths(ROOT, ["new.txt"]);
+
+    expect((await getStatus(ROOT)).staged).toEqual([{ path: "empty.txt", status: "D", staged: true }]);
+    expect(await fs.readFile(path.join(ROOT, "new.txt"), "utf8")).toBe("");
+  });
+
+  it("unstages an unborn repository without deleting its file", async () => {
+    await runGit(ROOT, ["init", "-b", "main"]);
+    await fs.writeFile(path.join(ROOT, "new.txt"), "new file\n");
+    await stagePaths(ROOT, ["new.txt"]);
+
+    await unstagePaths(ROOT, ["new.txt"]);
+
+    expect(await getStatus(ROOT)).toEqual({ staged: [], unstaged: [{ path: "new.txt", status: "?", staged: false }] });
+    expect(await fs.readFile(path.join(ROOT, "new.txt"), "utf8")).toBe("new file\n");
+  });
+
+  it.each([1, 20])("matches status's inexact rename pairing at status.renameLimit=%s", async (limit) => {
+    await initRepo();
+    await runGit(ROOT, ["config", "diff.renameLimit", "1"]);
+    await runGit(ROOT, ["config", "status.renameLimit", String(limit)]);
+    for (let i = 0; i < 3; i += 1) {
+      const content = Array.from({ length: 100 }, (_, line) => `file ${i} original line ${line}\n`).join("");
+      await fs.writeFile(path.join(ROOT, `old-${i}.txt`), content);
+    }
+    await stageAll(ROOT);
+    await commit(ROOT, { title: "rename fixtures" });
+    for (let i = 0; i < 3; i += 1) {
+      await runGit(ROOT, ["mv", `old-${i}.txt`, `new-${i}.txt`]);
+      await fs.appendFile(path.join(ROOT, `new-${i}.txt`), "additional line\n");
+    }
+    await stageAll(ROOT);
+    const before = (await getStatus(ROOT)).staged;
+    const entry = before.find((file) => file.path === "new-0.txt")!;
+    expect(entry.status).toBe(limit === 1 ? "A" : "R");
+
+    await unstagePaths(ROOT, [entry.path]);
+
+    const after = (await getStatus(ROOT)).staged;
+    expect(after.some((file) => file.path === entry.path)).toBe(false);
+    if (entry.oldPath) expect(after.some((file) => file.path === entry.oldPath)).toBe(false);
+    else expect(after).toContainEqual({ path: "old-0.txt", status: "D", staged: true });
+  });
+
+  it.each(["-0x1", "-0X01"])("matches status's rename limit fallback after %s", async (limit) => {
+    await initRepo();
+    await runGit(ROOT, ["config", "status.renameLimit", limit]);
+    await runGit(ROOT, ["config", "diff.renameLimit", "1"]);
+    for (let i = 0; i < 3; i += 1) {
+      const content = Array.from({ length: 100 }, (_, line) => `file ${i} original line ${line}\n`).join("");
+      await fs.writeFile(path.join(ROOT, `old-${i}.txt`), content);
+    }
+    await stageAll(ROOT);
+    await commit(ROOT, { title: "rename fixtures" });
+    for (let i = 0; i < 3; i += 1) {
+      await runGit(ROOT, ["mv", `old-${i}.txt`, `new-${i}.txt`]);
+      await fs.appendFile(path.join(ROOT, `new-${i}.txt`), "additional line\n");
+    }
+    await stageAll(ROOT);
+    expect((await getStatus(ROOT)).staged).toContainEqual({ path: "new-0.txt", status: "A", staged: true });
+
+    await unstagePaths(ROOT, ["new-0.txt"]);
+
+    const after = (await getStatus(ROOT)).staged;
+    expect(after.some((file) => file.path === "new-0.txt")).toBe(false);
+    expect(after).toContainEqual({ path: "old-0.txt", status: "D", staged: true });
+    expect(await fs.readFile(path.join(ROOT, "new-0.txt"), "utf8")).toContain("additional line\n");
+  });
+
+  it("does not run a working-tree clean filter while looking up staged renames", async () => {
+    await initRepo();
+    await runGit(ROOT, ["mv", "tracked.txt", "renamed.txt"]);
+    await fs.writeFile(path.join(ROOT, ".gitattributes"), "*.txt filter=probe\n");
+    await runGit(ROOT, ["config", "filter.probe.clean", "echo scanned > .git/scanned; cat"]);
+    await fs.writeFile(path.join(ROOT, "renamed.txt"), "unstaged version\n");
+
+    await unstagePaths(ROOT, ["renamed.txt"]);
+
+    await expect(fs.access(path.join(ROOT, ".git", "scanned"))).rejects.toThrow();
+    expect((await runGit(ROOT, ["diff", "--cached", "--name-only"])).stdout).toBe("");
+    expect(await fs.readFile(path.join(ROOT, "renamed.txt"), "utf8")).toBe("unstaged version\n");
+  });
+
   it("stages only the requested path and leaves other worktree changes unstaged", async () => {
     await initRepo();
     await fs.writeFile(path.join(ROOT, "tracked.txt"), "changed\n", "utf8");

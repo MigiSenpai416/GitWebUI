@@ -12,6 +12,7 @@ import {
   mergeBranch,
   cherryPick,
   abortMerge,
+  conflictedPaths,
 } from "./conflict.js";
 import { checkoutCommit } from "./branches.js";
 import { currentBranch } from "./repo.js";
@@ -71,6 +72,20 @@ beforeEach(async () => {
 afterAll(() => fs.rm(ROOT, { recursive: true, force: true }));
 
 describe("merge conflict state", () => {
+  it("returns each unmerged path once and preserves literal index filenames", async () => {
+    await setupConflict();
+    await runGit(ROOT, ["read-tree", "--empty"]);
+    const blob = (await runGit(ROOT, ["hash-object", "-w", "--stdin"], { input: "conflict\n" })).stdout.trim();
+    const paths = [" leading space.txt", "dir/[ab].txt", "tab\tand\nnewline.txt", "\uFEFFunicode.txt"];
+    const input = paths.flatMap((name) => [1, 2, 3].map((stage) => `100644 ${blob} ${stage}\t${name}\0`)).join("");
+    await runGit(ROOT, ["-c", "core.protectNTFS=false", "update-index", "-z", "--index-info"], { input });
+
+    expect(await conflictedPaths(ROOT)).toEqual(paths);
+    expect(await isConflicted(ROOT)).toBe(true);
+    await runGit(ROOT, ["read-tree", "HEAD"]);
+    expect(await conflictedPaths(ROOT)).toEqual([]);
+  });
+
   it("reports no merge on a clean repo", async () => {
     await setupConflict();
     const state = await getMergeState(ROOT);

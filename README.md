@@ -12,17 +12,15 @@ It runs two ways, from one codebase:
 
 | | Platforms | |
 |---|---|---|
-| **Desktop app** | Windows | A single standalone `.exe`. No install, no ports, no browser tab, no password. Native folder pickers and menus. |
+| **Desktop app** | Windows, Linux (x64) | A standalone `.exe` or `.AppImage`. No install, no browser tab, no password. Native folder pickers and menus. |
 | **Server** | Windows, Linux, macOS | The original mode. Run it on a machine, reach it from a browser anywhere on your network, gated by a password. |
 
 The desktop app is the Express API and the web UI in a single process: the API
 listens on a random loopback port and the window is pointed at it, so both modes
 run exactly the same server code.
 
-The desktop build is Windows-only on purpose. Electron can target macOS and
-Linux, but their installers can only be built — and only meaningfully tested —
-on those platforms, and this is developed on Windows. The server mode covers
-them instead, and nothing in `server/` or `web/` is Windows-specific.
+The Linux desktop build is packaged on Linux (including WSL on Windows) as an
+x64 AppImage. The server mode also supports macOS.
 
 ## Features
 
@@ -157,7 +155,9 @@ for example:
 - Windows: `C:\Users\you\projects\my-repo`
 - Linux/macOS: `/home/you/projects/my-repo`
 
-## The desktop app (Windows)
+## The desktop app
+
+### Windows
 
 ```bash
 npm run icons        # draws the app icon from the brand mark (once)
@@ -175,6 +175,38 @@ to the config directory below and survive replacing the `.exe`.
 
 It is unsigned, so SmartScreen shows "Windows protected your PC" the first
 time; choose **More info → Run anyway**.
+
+### Linux (x64)
+
+Run the build on Linux or inside WSL with Linux Node.js and dependencies:
+
+```bash
+npm ci
+npm run dist:linux   # → release/desktop/GitWebUI-0.2.0-linux-x86_64.AppImage
+```
+
+Keep Linux dependencies in a separate checkout when also building on Windows;
+the two platforms use different Electron and esbuild binaries.
+
+The AppImage bundles Electron, the Express server and the built UI. The host
+needs `git` and the desktop libraries Electron uses (GTK 3, NSS and ALSA), plus
+FUSE 2 for mounting the AppImage. File Manager history deletion additionally
+needs `git-filter-repo` and Python.
+
+```bash
+chmod +x GitWebUI-0.2.0-linux-x86_64.AppImage
+./GitWebUI-0.2.0-linux-x86_64.AppImage
+```
+
+On a system without FUSE, extract it and run the included launcher:
+
+```bash
+./GitWebUI-0.2.0-linux-x86_64.AppImage --appimage-extract
+./squashfs-root/AppRun
+```
+
+Electron's profile and `main.log` are stored in
+`$XDG_CONFIG_HOME/gitwebui-desktop` or `~/.config/gitwebui-desktop`.
 
 ### How it differs from the server
 
@@ -451,8 +483,11 @@ The Playwright suite can also be pointed at a packaged build, which is the only
 way to catch failures specific to being packaged — asar path resolution above all:
 
 ```bash
-GITWEBUI_E2E_BINARY=release/desktop/win-unpacked/GitWebUI.exe \
+GITWEBUI_E2E_BINARY=../release/desktop/win-unpacked/GitWebUI.exe \
   npm run test --workspace desktop
+# Linux, from the repository root:
+GITWEBUI_E2E_BINARY="$PWD/release/desktop/GitWebUI-0.2.0-linux-x86_64.AppImage" \
+  npm run test --workspace desktop -- smoke.spec.ts persistence.spec.ts
 ```
 
 The desktop tests run on their own port and their own Electron profile

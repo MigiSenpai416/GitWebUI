@@ -19,6 +19,7 @@
     "build:desktop": "npm run icons && npm run build:web && node scripts/stage-renderer.mjs && npm run build --workspace desktop",
     "start:desktop": "npm run start --workspace desktop",
     "dist": "npm run build:desktop && npm run dist --workspace desktop",
+    "dist:linux": "npm run build:desktop && npm run dist:linux --workspace desktop",
     "embed": "node scripts/embed-web.mjs",
     "build:exe:win": "bun build server/src/bunEntry.ts --compile --target=bun-windows-x64 --outfile release/gitwebui.exe",
     "build:exe:linux": "bun build server/src/bunEntry.ts --compile --target=bun-linux-x64 --outfile release/gitwebui",

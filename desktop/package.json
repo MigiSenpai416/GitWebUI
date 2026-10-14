@@ -4,6 +4,7 @@
   "private": true,
   "description": "GitWebUI as a desktop application",
   "productName": "GitWebUI",
+  "desktopName": "dev.gitwebui.app.desktop",
   "author": "GitWebUI",
   "main": "dist/main.js",
   "//": [
@@ -15,7 +16,8 @@
     "dev": "node build.mjs --watch",
     "start": "electron dist/main.js",
     "test": "playwright test",
-    "dist": "npm run build && electron-builder --config electron-builder.yml --win"
+    "dist": "npm run build && electron-builder --config electron-builder.yml --win",
+    "dist:linux": "npm run build && electron-builder --config electron-builder.yml --linux --x64 --publish never"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",

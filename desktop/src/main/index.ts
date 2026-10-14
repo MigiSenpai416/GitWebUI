@@ -204,8 +204,8 @@ async function createWindow(): Promise<BrowserWindow> {
     // either way.
     autoHideMenuBar: true,
     title: "GitWebUI",
-    // The window icon comes from the executable's own resources; Windows needs
-    // nothing passed here.
+    // Windows uses the executable's resources; Linux needs an explicit icon.
+    icon: process.platform === "linux" ? path.join(__dirname, "..", "build", "icon.png") : undefined,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       // Nothing in web/src touches Node; CodeMirror and xterm are pure DOM.

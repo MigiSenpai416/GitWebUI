@@ -2,10 +2,6 @@ appId: dev.gitwebui.app
 productName: GitWebUI
 copyright: GitWebUI
 
-# Windows only, deliberately. The headless server still runs anywhere — see the
-# README — but the desktop app is built and tested on the one platform it is
-# developed on, rather than shipping installers nobody has ever launched.
-
 directories:
   output: ../release/desktop
   buildResources: build
@@ -15,6 +11,7 @@ directories:
 files:
   - dist/**
   - renderer/**
+  - build/icon.png
   - package.json
 
 # Nothing needs to sit outside the archive: every process this app spawns —
@@ -47,3 +44,13 @@ portable:
   # Extracted to a fixed directory under %LOCALAPPDATA%\Temp rather than a fresh
   # one per launch, so starting it a second time doesn't unpack ~200 MB again.
   unpackDirName: GitWebUI
+
+linux:
+  icon: build/icon.png
+  category: Development
+  executableName: gitwebui
+  syncDesktopName: true
+  artifactName: GitWebUI-${version}-linux-${arch}.${ext}
+  target:
+    - target: AppImage
+      arch: [x64]

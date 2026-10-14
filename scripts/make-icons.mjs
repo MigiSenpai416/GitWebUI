@@ -1,4 +1,4 @@
-// Draws the Windows application icon from the brand mark in web/src/brand.ts.
+// Draws the desktop application icons from the brand mark in web/src/brand.ts.
 //
 // The mark is the app's own commit-graph column, and it is already defined once
 // as geometry so the React icon, the auth screen and the favicon can't drift
@@ -217,10 +217,11 @@ async function main() {
 
   const images = ICO_SIZES.map((size) => ({ size, png: encodePng(size, render(size)) }));
   await fs.writeFile(path.join(outDir, "icon.ico"), encodeIco(images));
+  await fs.writeFile(path.join(outDir, "icon.png"), encodePng(512, render(512)));
 
   console.log(
-    `[make-icons] wrote icon.ico (${ICO_SIZES.join(", ")}px) to ` +
-      `${path.relative(root, path.join(outDir, "icon.ico"))}`,
+    `[make-icons] wrote icon.ico (${ICO_SIZES.join(", ")}px) and icon.png (512px) to ` +
+      `${path.relative(root, outDir)}`,
   );
 }
 

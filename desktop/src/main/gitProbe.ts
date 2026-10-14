@@ -15,7 +15,10 @@ import {
  * `resolveGitPath` handles the search — this module handles the consequences.
  */
 
-const DOWNLOAD_URL = "https://git-scm.com/download/win";
+const WINDOWS = process.platform === "win32";
+const DOWNLOAD_URL = WINDOWS
+  ? "https://git-scm.com/download/win"
+  : "https://git-scm.com/download/linux";
 
 let probe: Promise<string | null> | null = null;
 
@@ -53,8 +56,11 @@ export async function ensureGitOrPrompt(window: BrowserWindow | null): Promise<s
 
   const detail =
     "GitWebUI needs the git command-line tool, and couldn't find it on this machine. " +
-    "Install Git for Windows and restart GitWebUI — or point it at an existing git.exe " +
-    "if you already have one.";
+    (WINDOWS
+      ? "Install Git for Windows and restart GitWebUI — or point it at an existing git.exe " +
+        "if you already have one."
+      : "Install git with your package manager and restart GitWebUI — or point it at an " +
+        "existing git executable if you already have one.");
   const buttons = ["Locate git…", "Download Git", "Continue Anyway"];
   const options: Electron.MessageBoxOptions = {
     type: "warning",
@@ -86,11 +92,11 @@ export async function ensureGitOrPrompt(window: BrowserWindow | null): Promise<s
  */
 export async function locateGit(window: BrowserWindow | null): Promise<string | null> {
   const options: Electron.OpenDialogOptions = {
-    title: "Locate git.exe",
+    title: WINDOWS ? "Locate git.exe" : "Locate git",
     buttonLabel: "Use this git",
     properties: ["openFile"],
-    filters: [{ name: "Programs", extensions: ["exe"] }],
-    defaultPath: "C:\\Program Files\\Git\\cmd",
+    filters: WINDOWS ? [{ name: "Programs", extensions: ["exe"] }] : undefined,
+    defaultPath: WINDOWS ? "C:\\Program Files\\Git\\cmd" : "/usr/bin",
   };
 
   const picked = window
@@ -104,7 +110,11 @@ export async function locateGit(window: BrowserWindow | null): Promise<string | 
       type: "error",
       title: "Not a working git",
       message: "That file didn't run as git",
-      detail: `${candidate} either isn't git or couldn't be started. Look for git.exe in a Git installation's cmd folder — usually C:\\Program Files\\Git\\cmd\\git.exe.`,
+      detail:
+        `${candidate} either isn't git or couldn't be started. ` +
+        (WINDOWS
+          ? "Look for git.exe in a Git installation's cmd folder — usually C:\\Program Files\\Git\\cmd\\git.exe."
+          : "Look for the git executable — usually /usr/bin/git."),
       buttons: ["Try Again", "Cancel"],
       defaultId: 0,
       cancelId: 1,

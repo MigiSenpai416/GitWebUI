@@ -50,6 +50,18 @@ export async function removeRemote(root: string, name: string): Promise<void> {
  */
 export function rethrowRemoteError(e: unknown, token: string | null): never {
   const msg = e instanceof Error ? e.message : String(e);
+  // GitHub rejects pushes that touch .github/workflows from OAuth App tokens and
+  // PATs lacking the `workflow` scope (fine-grained: the Workflows permission).
+  // The credential itself is valid, so name the missing scope instead of
+  // reporting a generic authentication failure.
+  if (/refusing to allow .* to create or update workflow/i.test(msg)) {
+    throw Object.assign(
+      new Error(
+        "GitHub refused to push changes under .github/workflows because the connected credential lacks the workflow scope. Reconnect your GitHub account (OAuth now requests it), or use a token with the workflow scope (classic) or Workflows read/write (fine-grained).",
+      ),
+      { status: 403 },
+    );
+  }
   const looksAuth =
     /could not read Username|terminal prompts disabled|Authentication failed|Invalid username or password|403 Forbidden/i.test(
       msg,
@@ -309,10 +321,14 @@ export async function createGitHubRemote(
   });
   await addRemote(root, opts.remoteName, repo.cloneUrl);
   const branch = await currentBranch(root);
-  await runGit(
-    root,
-    ["push", "--set-upstream", opts.remoteName, branch],
-  );
+  try {
+    await runGit(
+      root,
+      ["push", "--set-upstream", opts.remoteName, branch],
+    );
+  } catch (e) {
+    rethrowRemoteError(e, token);
+  }
   return { repo, remotes: await getRemotes(root) };
 }
 

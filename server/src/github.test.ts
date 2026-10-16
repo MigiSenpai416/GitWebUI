@@ -175,7 +175,7 @@ describe("OAuth Device Flow", () => {
       intervalMs: 1_000,
     });
     expect(flow).not.toHaveProperty("deviceCode");
-    expect(calls[0].body).toContain("scope=repo+user%3Aemail");
+    expect(calls[0].body).toContain("scope=repo+workflow+user%3Aemail");
     expect(calls[0].signal).toBeInstanceOf(AbortSignal);
 
     now = 2_000;

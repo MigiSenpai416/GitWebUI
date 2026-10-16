@@ -175,7 +175,9 @@ function GitHubPatDialog({ onBack, onClose }: { onBack: () => void; onClose: () 
 
       <p className="acct-hint">
         Create one at GitHub → Settings → Developer settings → Personal access tokens, with{" "}
-        <code>repo</code> scope (classic) or Contents read/write (fine-grained).
+        <code>repo</code> and <code>workflow</code> scopes (classic) or Contents and Workflows
+        read/write (fine-grained). Without the workflow scope, GitHub rejects pushes that
+        change <code>.github/workflows</code>.
       </p>
 
       {error && <div className="acct-error" role="alert">{error}</div>}
@@ -341,6 +343,7 @@ function GitHubOAuthDialog({ onBack, onClose }: { onBack: () => void; onClose: (
           <div className="acct-oauth-scopes">
             <strong>GitHub will ask for:</strong>
             <span>Repository access for push, pull, repositories, and pull requests</span>
+            <span>Workflow access so pushes that change .github/workflows are accepted</span>
             <span>Email read access for your Git commit identity</span>
           </div>
         </>

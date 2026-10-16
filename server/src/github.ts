@@ -570,7 +570,9 @@ async function pruneOAuthFlows(now = Date.now()): Promise<void> {
 
 /** Begin GitHub's OAuth Device Flow without exposing the device secret to the browser. */
 export async function beginOAuthDeviceFlow(): Promise<GitHubOAuthDeviceFlow> {
-  const body = new URLSearchParams({ client_id: GITHUB_OAUTH_CLIENT_ID, scope: "repo user:email" });
+  // `workflow` is required on top of `repo`: GitHub refuses any push that adds or
+  // changes a file under .github/workflows from a token without it.
+  const body = new URLSearchParams({ client_id: GITHUB_OAUTH_CLIENT_ID, scope: "repo workflow user:email" });
   const res = await fetch(`${GITHUB}/login/device/code`, {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },

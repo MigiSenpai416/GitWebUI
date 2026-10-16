@@ -58,6 +58,27 @@ describe("remote authentication errors", () => {
       );
   });
 
+  it("names the missing workflow scope when GitHub refuses a .github/workflows push", () => {
+    const oauth = new Error(
+      " ! [remote rejected] main -> main (refusing to allow an OAuth App to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)\nerror: failed to push some refs to 'https://github.com/me/repo.git'",
+    );
+    expect(() => rethrowRemoteError(oauth, "gho_token")).toThrowError(
+      expect.objectContaining({
+        status: 403,
+        message: expect.stringContaining("workflow scope"),
+      }),
+    );
+    const fineGrained = new Error(
+      " ! [remote rejected] main -> main (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflows` permission)",
+    );
+    expect(() => rethrowRemoteError(fineGrained, "github_pat")).toThrowError(
+      expect.objectContaining({
+        status: 403,
+        message: expect.stringContaining(".github/workflows"),
+      }),
+    );
+  });
+
   it("preserves non-authentication Git errors", () => {
     const error = Object.assign(new Error("remote branch does not exist"), { status: 422 });
     expect(() => rethrowRemoteError(error, null)).toThrow(error);

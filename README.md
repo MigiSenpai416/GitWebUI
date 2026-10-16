@@ -322,10 +322,14 @@ elsewhere; override with `GITWEBUI_CONFIG_DIR`). **Forgot the password?** Delete
    - **GitHub OAuth** — GitWebUI shows a one-time code and provides a button to
      open GitHub in the browser. Authorize it there; the connection finishes
      automatically and the dialog shows the connected account. OAuth requests
-     repository access plus email read access for the Git commit identity.
+     repository access, workflow access, and email read access for the Git
+     commit identity. Accounts connected before workflow access was requested
+     need a **Reconnect with GitHub** to push changes under `.github/workflows`.
    - **Personal Access Token** — paste a
      [Personal Access Token](https://github.com/settings/tokens) (classic `repo`
-     scope, or fine-grained with Contents read/write).
+     and `workflow` scopes, or fine-grained with Contents and Workflows
+     read/write). GitHub rejects pushes that add or change files under
+     `.github/workflows` from a token without workflow access.
 
    The credential is validated against GitHub and stored in `github.json` in
    the config dir. Use the same dialog to change methods or **Disconnect**.

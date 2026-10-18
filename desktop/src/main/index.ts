@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { app, BrowserWindow, dialog, session, shell } from "electron";
 import { setConfigDir } from "../../../server/src/config.js";
+import { settleTokenWork } from "../../../server/src/github.js";
 import { setOpener } from "../../../server/src/system.js";
 import { killAllCommands, runningCommandCount } from "../../../server/src/terminal.js";
 import { beginGitProbe, ensureGitOrPrompt } from "./gitProbe.js";
@@ -28,6 +29,8 @@ const DEV_RENDERER_ORIGIN = "http://localhost:5173";
 /** The port Vite's dev proxy forwards /api to, also per web/vite.config.ts. */
 const DEV_API_PORT = 5174;
 const BACKGROUND = "#0d1117";
+/** The most a quit waits for a GitHub token refresh in flight to reach disk. */
+const TOKEN_SETTLE_TIMEOUT_MS = 3_000;
 
 /**
  * The built web UI.
@@ -50,6 +53,7 @@ const DESKTOP_TOKEN = randomBytes(32).toString("base64url");
 let server: StartedServer | null = null;
 let mainWindow: BrowserWindow | null = null;
 let quitting = false;
+let tokenWorkSettled = false;
 
 // ---------------------------------------------------------------------------
 // Where Electron keeps its own state
@@ -278,8 +282,12 @@ async function openExternally(url: string): Promise<void> {
 // which is one of the things that would need revisiting to ship there.)
 app.on("window-all-closed", () => app.quit());
 
-app.on("before-quit", () => {
-  if (quitting) return;
+app.on("before-quit", (event) => {
+  if (quitting) {
+    // A second quit (Ctrl+Q again, the close button) must not cut the hold short.
+    if (!tokenWorkSettled) event.preventDefault();
+    return;
+  }
   quitting = true;
   // A terminal command is a child process of *this* process. Quitting without
   // reaping them leaves them running with nothing reading their output. The
@@ -288,12 +296,26 @@ app.on("before-quit", () => {
   const reaped = runningCommandCount();
   killAllCommands();
   log.info(`shutting down (${reaped} terminal command(s) reaped)`);
-  // Deliberately not awaited, and the quit is not deferred. Blocking shutdown
-  // on a graceful server close made quitting take seconds whenever a command
-  // was running, because a graceful close waits for the terminal's streaming
-  // response to drain.
+  // Deliberately not awaited. Blocking shutdown on a graceful server close made
+  // quitting take seconds whenever a command was running, because a graceful
+  // close waits for the terminal's streaming response to drain.
   server?.dispose();
   server = null;
+  // The one thing worth deferring the quit for: a GitHub token refresh in
+  // flight. GitHub retires the old refresh token the moment it answers, so
+  // quitting before the new pair reaches disk leaves the stored credentials
+  // dead and the account "expired" on the next launch. settleTokenWork() stops
+  // further refreshes from starting, so only work already under way is waited for.
+  event.preventDefault();
+  void Promise.race([
+    settleTokenWork().then((waited) => {
+      if (waited) log.info("held the quit for a GitHub token refresh to finish");
+    }),
+    new Promise<void>((resolve) => setTimeout(resolve, TOKEN_SETTLE_TIMEOUT_MS)),
+  ]).finally(() => {
+    tokenWorkSettled = true;
+    app.quit();
+  });
 });
 
 // ---------------------------------------------------------------------------

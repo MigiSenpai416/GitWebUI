@@ -161,7 +161,7 @@ for example:
 
 ```bash
 npm run icons        # draws the app icon from the brand mark (once)
-npm run dist         # → release/desktop/GitWebUI-0.2.0.exe
+npm run dist         # → release/desktop/GitWebUI-0.3.0.exe
 ```
 
 One standalone executable, about 90 MB. There is no installer: copy it wherever
@@ -182,7 +182,7 @@ Run the build on Linux or inside WSL with Linux Node.js and dependencies:
 
 ```bash
 npm ci
-npm run dist:linux   # → release/desktop/GitWebUI-0.2.0-linux-x86_64.AppImage
+npm run dist:linux   # → release/desktop/GitWebUI-0.3.0-linux-x86_64.AppImage
 ```
 
 Keep Linux dependencies in a separate checkout when also building on Windows;
@@ -194,14 +194,14 @@ FUSE 2 for mounting the AppImage. File Manager history deletion additionally
 needs `git-filter-repo` and Python.
 
 ```bash
-chmod +x GitWebUI-0.2.0-linux-x86_64.AppImage
-./GitWebUI-0.2.0-linux-x86_64.AppImage
+chmod +x GitWebUI-0.3.0-linux-x86_64.AppImage
+./GitWebUI-0.3.0-linux-x86_64.AppImage
 ```
 
 On a system without FUSE, extract it and run the included launcher:
 
 ```bash
-./GitWebUI-0.2.0-linux-x86_64.AppImage --appimage-extract
+./GitWebUI-0.3.0-linux-x86_64.AppImage --appimage-extract
 ./squashfs-root/AppRun
 ```
 
@@ -490,7 +490,7 @@ way to catch failures specific to being packaged — asar path resolution above 
 GITWEBUI_E2E_BINARY=../release/desktop/win-unpacked/GitWebUI.exe \
   npm run test --workspace desktop
 # Linux, from the repository root:
-GITWEBUI_E2E_BINARY="$PWD/release/desktop/GitWebUI-0.2.0-linux-x86_64.AppImage" \
+GITWEBUI_E2E_BINARY="$PWD/release/desktop/GitWebUI-0.3.0-linux-x86_64.AppImage" \
   npm run test --workspace desktop -- smoke.spec.ts persistence.spec.ts
 ```
 

@@ -20,6 +20,8 @@ const GITHUB_OAUTH_CLIENT_ID = "Ov23liu2LXjA3dklsGu1";
 const OAUTH_FINISH_TTL_MS = 30 * 60_000;
 const GITHUB_REQUEST_TIMEOUT_MS = 15_000;
 const OAUTH_REFRESH_RETRY_MS = 30_000;
+const OAUTH_REFRESH_MARGIN_MS = 5 * 60_000;
+const OAUTH_REFRESH_LOG_INTERVAL_MS = 60_000;
 const TOKEN_TEMP_MAX_AGE_MS = 10 * 60_000;
 
 export interface GitHubUser {
@@ -57,6 +59,9 @@ let tokenRevision = 0;
 let refreshPromise: Promise<TokenConfig | null> | null = null;
 let pendingOAuthRefresh: PendingOAuthRefresh | null = null;
 let failedOAuthRefresh: { token: string; tokenRevision: number; retryAt: number } | null = null;
+let lastRefreshFailure: { message: string; loggedAt: number } | null = null;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let shuttingDown = false;
 let tokenWriteQueue: Promise<void> = Promise.resolve();
 
 function processIsRunning(pid: number): boolean {
@@ -216,6 +221,7 @@ async function read(inWriteQueue = false): Promise<TokenConfig | null> {
           cache = main;
         }
         loaded = true;
+        armRefreshTimer();
         return cache;
       };
       if (inWriteQueue) return await restore();
@@ -230,6 +236,7 @@ async function read(inWriteQueue = false): Promise<TokenConfig | null> {
     cache = null;
   }
   loaded = true;
+  armRefreshTimer();
   return cache;
 }
 
@@ -248,9 +255,9 @@ async function readUsableToken(): Promise<string | null> {
   if (
     config.authMethod === "oauth" &&
     config.expiresAt !== undefined &&
-    config.expiresAt <= Date.now() + 60_000
+    config.expiresAt <= Date.now() + OAUTH_REFRESH_MARGIN_MS
   ) {
-    if (config.refreshToken) {
+    if (config.refreshToken && !shuttingDown) {
       try {
         const refreshed = await refreshOAuthToken(config);
         return refreshed?.token ?? null;
@@ -274,12 +281,90 @@ export async function getToken(): Promise<string | null> {
   for (;;) {
     const revision = tokenRevision;
     const token = await readUsableToken();
-    if (revision === tokenRevision) return token;
+    if (revision === tokenRevision) {
+      armRefreshTimer();
+      return token;
+    }
   }
 }
 
 export async function hasToken(): Promise<boolean> {
   return (await getToken()) !== null;
+}
+
+/**
+ * Refresh an OAuth token on a timer shortly before it expires, so an app left
+ * idle rotates its credentials while the process still has time to persist
+ * them, instead of on the last request before it quits. Once the token has
+ * expired the next request takes over; the timer never keeps the process alive.
+ */
+function armRefreshTimer(): void {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+  const config = cache;
+  const now = Date.now();
+  if (
+    shuttingDown ||
+    !loaded ||
+    !config ||
+    config.authMethod !== "oauth" ||
+    !config.refreshToken ||
+    config.expiresAt === undefined ||
+    config.expiresAt <= now ||
+    (config.refreshTokenExpiresAt !== undefined && config.refreshTokenExpiresAt <= now)
+  ) {
+    return;
+  }
+  // A rotated token whose write failed is retried on the short interval too:
+  // until it is on disk, GitHub's answer exists only in this process.
+  const retryingPersist = pendingOAuthRefresh?.tokenRevision === tokenRevision;
+  const due = config.expiresAt - OAUTH_REFRESH_MARGIN_MS;
+  const delay = !retryingPersist && due > now ? Math.min(due - now, 2 ** 31 - 1) : OAUTH_REFRESH_RETRY_MS;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    void getToken().catch(() => undefined);
+  }, delay);
+  refreshTimer.unref?.();
+}
+
+function noteRefreshFailure(e: unknown): void {
+  const message = e instanceof Error ? e.message : String(e);
+  const now = Date.now();
+  const last = lastRefreshFailure;
+  if (last && last.message === message && now - last.loggedAt < OAUTH_REFRESH_LOG_INTERVAL_MS) {
+    return;
+  }
+  console.error(`[gitwebui] GitHub OAuth token refresh failed: ${message}`);
+  lastRefreshFailure = { message, loggedAt: now };
+}
+
+/**
+ * Stop starting OAuth refreshes and wait for any already in flight, including
+ * the write of the rotated token. GitHub retires the old refresh token the
+ * moment it answers, so a process that exits between the answer and the write
+ * leaves `github.json` holding credentials GitHub will never accept again.
+ * Resolves to whether a refresh was in flight.
+ */
+export async function settleTokenWork(): Promise<boolean> {
+  shuttingDown = true;
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+  let waited = false;
+  if (pendingOAuthRefresh?.tokenRevision === tokenRevision) {
+    waited = true;
+    await getToken().catch(() => undefined);
+  }
+  for (;;) {
+    const refresh = refreshPromise;
+    const writes = tokenWriteQueue;
+    if (refresh) waited = true;
+    await Promise.all([refresh?.catch(() => undefined), writes]);
+    if (!refreshPromise && tokenWriteQueue === writes) return waited;
+  }
 }
 
 async function writeTokenConfig(config: TokenConfig): Promise<void> {
@@ -288,8 +373,10 @@ async function writeTokenConfig(config: TokenConfig): Promise<void> {
     await clearRefreshRecovery().catch(() => undefined);
     tokenRevision++;
     pendingOAuthRefresh = null;
+    lastRefreshFailure = null;
     cache = config;
     loaded = true;
+    armRefreshTimer();
   });
   tokenWriteQueue = write.catch(() => undefined);
   await write;
@@ -325,8 +412,10 @@ export async function deleteToken(): Promise<void> {
     await cleanupTokenTemps(true);
     tokenRevision++;
     pendingOAuthRefresh = null;
+    lastRefreshFailure = null;
     cache = null;
     loaded = true;
+    armRefreshTimer();
   });
   tokenWriteQueue = remove.catch(() => undefined);
   await remove;
@@ -401,12 +490,15 @@ async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | nul
         if (pending.tokenRevision === tokenRevision) {
           cache = pending.config;
           loaded = true;
+          armRefreshTimer();
         }
         throw e;
       }
       if (pendingOAuthRefresh === pending) pendingOAuthRefresh = null;
+      lastRefreshFailure = null;
       cache = pending.config;
       loaded = true;
+      armRefreshTimer();
       return pending.config;
     });
     tokenWriteQueue = commit.then(() => undefined, () => undefined);
@@ -455,7 +547,18 @@ async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | nul
       error_description?: string;
     };
     if (!res.ok || !response.access_token) {
-      throw oauthError(response, `GitHub OAuth refresh failed (${res.status})`);
+      // GitHub answers a refresh token that was already rotated with
+      // incorrect_client_credentials rather than the documented bad_refresh_token;
+      // the Client ID itself is the same constant the Device Flow just accepted.
+      const known: Record<string, string> = {
+        bad_refresh_token: "GitHub rejected the stored refresh token as invalid or expired.",
+        incorrect_client_credentials:
+          "GitHub no longer accepts the stored refresh token; it was already used or revoked.",
+      };
+      const message = response.error && known[response.error];
+      throw message
+        ? Object.assign(new Error(message), { status: 502 })
+        : oauthError(response, `GitHub OAuth refresh failed (${res.status})`);
     }
 
     const now = Date.now();
@@ -478,6 +581,7 @@ async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | nul
     return persist(pending);
   })();
   refreshPromise = refresh.catch((e) => {
+    if (tokenRevision === expectedRevision) noteRefreshFailure(e);
     if (tokenRevision === expectedRevision && !pendingOAuthRefresh) {
       failedOAuthRefresh = {
         token: config.token,
@@ -781,8 +885,10 @@ async function storeOAuthToken(
     tokenRevision++;
     flow.committedRevision = tokenRevision;
     pendingOAuthRefresh = null;
+    lastRefreshFailure = null;
     cache = config;
     loaded = true;
+    armRefreshTimer();
     stored = true;
   });
   flow.commitPromise = commit;
@@ -932,8 +1038,10 @@ export async function cancelOAuthDeviceFlow(flowId: string): Promise<void> {
     }
     tokenRevision++;
     pendingOAuthRefresh = null;
+    lastRefreshFailure = null;
     cache = flow.previousConfig;
     loaded = true;
+    armRefreshTimer();
   });
   tokenWriteQueue = rollback.catch(() => undefined);
   try {
@@ -1023,7 +1131,16 @@ export async function status(): Promise<{
   if (!stored) return { configured: false, authMethod: null, user: null };
   const token = await getToken();
   const authMethod = (await read())?.authMethod ?? stored.authMethod;
-  if (!token) return { configured: true, authMethod, user: null, error: "OAuth token expired" };
+  if (!token) {
+    return {
+      configured: true,
+      authMethod,
+      user: null,
+      error: lastRefreshFailure
+        ? `OAuth token expired; refresh failed: ${lastRefreshFailure.message.replace(/\.$/, "")}`
+        : "OAuth token expired",
+    };
+  }
   try {
     return { configured: true, authMethod, user: await fetchUser(token) };
   } catch (e) {
@@ -1365,6 +1482,10 @@ export function _resetTokenCache(): void {
   refreshPromise = null;
   pendingOAuthRefresh = null;
   failedOAuthRefresh = null;
+  lastRefreshFailure = null;
+  shuttingDown = false;
+  if (refreshTimer) clearTimeout(refreshTimer);
+  refreshTimer = null;
   for (const flow of oauthFlows.values()) {
     if (flow.cleanupTimer) clearTimeout(flow.cleanupTimer);
   }

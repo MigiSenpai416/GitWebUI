@@ -1321,7 +1321,7 @@ describe("OAuth Device Flow", () => {
     await setToken("gho_old", {
       authMethod: "oauth",
       refreshToken: "ghr_refresh",
-      expiresIn: 600,
+      expiresIn: 3_600,
     });
     const fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -1334,13 +1334,85 @@ describe("OAuth Device Flow", () => {
     });
     globalThis.fetch = fetch;
 
-    await vi.advanceTimersByTimeAsync(299_000);
+    await vi.advanceTimersByTimeAsync(1_799_000);
     expect(fetch).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(fetch).toHaveBeenCalledTimes(1);
+    // The refresh re-reads the credentials file before calling GitHub, and
+    // fake timers do not wait for that real I/O.
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
     expect(await getToken()).toBe("gho_new");
     expect(JSON.parse(await fs.readFile(path.join(TMP, "github.json"), "utf8")).token)
       .toBe("gho_new");
+  });
+
+  it("does not stall callers behind a slow refresh while the token is still valid", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    await setToken("gho_old", {
+      authMethod: "oauth",
+      refreshToken: "ghr_refresh",
+      expiresIn: 600,
+    });
+    globalThis.fetch = vi.fn(() => new Promise(() => undefined)) as unknown as typeof fetch;
+
+    const reading = getToken();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await reading).toBe("gho_old");
+  });
+
+  it("waits for the refresh once the token expires during the grace period", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    await setToken("gho_old", {
+      authMethod: "oauth",
+      refreshToken: "ghr_refresh",
+      expiresIn: 10,
+    });
+    let release!: () => void;
+    const answer = new Promise<void>((resolve) => { release = resolve; });
+    globalThis.fetch = vi.fn(async () => {
+      await answer;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "gho_new", expires_in: 28_800 }),
+      };
+    }) as unknown as typeof fetch;
+
+    const reading = getToken();
+    await vi.advanceTimersByTimeAsync(15_000);
+    release();
+    expect(await reading).toBe("gho_new");
+  });
+
+  it("forces at most one rotation per stored token", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    await setToken("gho_stale", {
+      authMethod: "oauth",
+      refreshToken: "ghr_refresh",
+      expiresIn: 28_800,
+    });
+    let rotations = 0;
+    globalThis.fetch = (async (url: string) => {
+      if (String(url).endsWith("/login/oauth/access_token")) {
+        rotations++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            access_token: `gho_fresh_${rotations}`,
+            refresh_token: `ghr_${rotations}`,
+            expires_in: 28_800,
+          }),
+        };
+      }
+      return { ok: false, status: 401, text: async () => JSON.stringify({ message: "Bad credentials" }) };
+    }) as unknown as typeof fetch;
+
+    await expect(status()).resolves.toMatchObject({ user: null, error: "Bad credentials" });
+    await expect(status()).resolves.toMatchObject({ user: null, error: "Bad credentials" });
+    expect(rotations).toBe(1);
+    expect(await getToken()).toBe("gho_fresh_1");
   });
 
   it("settles an in-flight refresh at shutdown and starts no new one", async () => {
@@ -1453,6 +1525,301 @@ describe("OAuth Device Flow", () => {
     await expect(status()).resolves.toMatchObject({ error: "OAuth token expired" });
     await deleteToken();
     await expect(status()).resolves.toEqual({ configured: false, authMethod: null, user: null });
+  });
+
+  it("adopts credentials another process rotated instead of refreshing", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    await setToken("gho_old", {
+      authMethod: "oauth",
+      refreshToken: "ghr_refresh",
+      expiresIn: 30,
+    });
+    await fs.writeFile(path.join(TMP, "github.json"), JSON.stringify({
+      token: "gho_elsewhere",
+      authMethod: "oauth",
+      refreshToken: "ghr_elsewhere",
+      expiresAt: 100_000_000,
+    }));
+    const fetch = vi.fn();
+    globalThis.fetch = fetch;
+
+    now = 32_000;
+    expect(await getToken()).toBe("gho_elsewhere");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("adopts credentials another process rotated when GitHub refuses the refresh", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await setToken("gho_old", {
+      authMethod: "oauth",
+      refreshToken: "ghr_refresh",
+      expiresIn: 30,
+    });
+    const fetch = vi.fn(async () => {
+      await fs.writeFile(path.join(TMP, "github.json"), JSON.stringify({
+        token: "gho_elsewhere",
+        authMethod: "oauth",
+        refreshToken: "ghr_elsewhere",
+        expiresAt: 100_000_000,
+      }));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ error: "incorrect_client_credentials" }),
+      };
+    });
+    globalThis.fetch = fetch;
+
+    now = 32_000;
+    expect(await getToken()).toBe("gho_elsewhere");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("never resends a refresh token GitHub has refused", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await setToken("gho_old", {
+      authMethod: "oauth",
+      refreshToken: "ghr_used",
+      expiresIn: 30,
+    });
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ error: "incorrect_client_credentials" }),
+    });
+    globalThis.fetch = fetch;
+
+    now = 32_000;
+    expect(await getToken()).toBeNull();
+    now = 100_000;
+    expect(await getToken()).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const result = await status();
+    expect(result.error).toContain("already used or revoked");
+    expect(result.transient).toBeUndefined();
+  });
+
+  it("rotates an OAuth token GitHub rejects before reporting it", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    await setToken("gho_stale", {
+      authMethod: "oauth",
+      refreshToken: "ghr_refresh",
+      expiresIn: 28_800,
+    });
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith("/login/oauth/access_token")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            access_token: "gho_fresh",
+            refresh_token: "ghr_rotated",
+            expires_in: 28_800,
+          }),
+        };
+      }
+      if (new Headers(init?.headers).get("Authorization") === "Bearer gho_fresh") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ login: "octocat", name: null, avatar_url: null, id: 1, email: null }),
+        };
+      }
+      return { ok: false, status: 401, text: async () => JSON.stringify({ message: "Bad credentials" }) };
+    });
+    globalThis.fetch = fetch as unknown as typeof fetch;
+
+    await expect(status()).resolves.toMatchObject({ user: { login: "octocat" } });
+    expect(await getToken()).toBe("gho_fresh");
+    expect(JSON.parse(await fs.readFile(path.join(TMP, "github.json"), "utf8")).token)
+      .toBe("gho_fresh");
+  });
+
+  it("reports an unreachable GitHub as transient rather than rejected", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await setToken("gho_fine", {
+      authMethod: "oauth",
+      refreshToken: "ghr_refresh",
+      expiresIn: 28_800,
+    });
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+
+    await expect(status()).resolves.toMatchObject({
+      user: null,
+      error: "fetch failed",
+      transient: true,
+    });
+    now = 28_802_000;
+    await expect(status()).resolves.toMatchObject({
+      user: null,
+      error: "OAuth token expired; refresh failed: fetch failed",
+      transient: true,
+    });
+  });
+
+  it("keeps a journal pending until its promotion lands", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await setToken("gho_old", {
+      authMethod: "oauth",
+      refreshToken: "ghr_old",
+      expiresIn: 3_600,
+    });
+    await fs.writeFile(path.join(TMP, "github-refresh.json"), JSON.stringify({
+      previousToken: "gho_old",
+      config: {
+        token: "gho_recovered",
+        authMethod: "oauth",
+        refreshToken: "ghr_recovered",
+        expiresAt: Date.now() + 7_200_000,
+      },
+    }));
+    _resetTokenCache();
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename")
+      .mockRejectedValueOnce(new Error("busy"))
+      .mockRejectedValueOnce(new Error("busy"))
+      .mockImplementation(rename);
+    const fetch = vi.fn();
+    globalThis.fetch = fetch;
+
+    expect(await getToken()).toBe("gho_recovered");
+    expect(JSON.parse(await fs.readFile(path.join(TMP, "github.json"), "utf8")).token)
+      .toBe("gho_old");
+    expect(await getToken()).toBe("gho_recovered");
+    expect(JSON.parse(await fs.readFile(path.join(TMP, "github.json"), "utf8")).token)
+      .toBe("gho_recovered");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("does not treat an unreadable credentials file as disconnected", async () => {
+    await setToken("ghp_example");
+    _resetTokenCache();
+    vi.spyOn(fs, "readFile")
+      .mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "EBUSY" }));
+
+    expect(await getToken()).toBeNull();
+    expect(await getToken()).toBe("ghp_example");
+  });
+
+  it("promotes a complete journal over a credentials file a crash left unreadable", async () => {
+    await fs.mkdir(TMP, { recursive: true });
+    await fs.writeFile(path.join(TMP, "github.json"), "");
+    await fs.writeFile(path.join(TMP, "github-refresh.json"), JSON.stringify({
+      previousToken: "gho_old",
+      config: {
+        token: "gho_recovered",
+        authMethod: "oauth",
+        refreshToken: "ghr_recovered",
+        expiresAt: Date.now() + 7_200_000,
+      },
+    }));
+
+    expect(await getToken()).toBe("gho_recovered");
+    expect(JSON.parse(await fs.readFile(path.join(TMP, "github.json"), "utf8")).token)
+      .toBe("gho_recovered");
+  });
+
+  it("leaves another live process's journal temp alone", async () => {
+    await setToken("ghp_example");
+    const foreign = path.join(TMP, `github-refresh.json.${process.ppid}.inflight.tmp`);
+    await fs.writeFile(foreign, "{");
+
+    await deleteToken();
+    await expect(fs.stat(foreign)).resolves.toBeTruthy();
+  });
+
+  it("rolls a cancelled Device Flow back to the pair a concurrent refresh rotated", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    await setToken("gho_old", {
+      authMethod: "oauth",
+      refreshToken: "ghr_old",
+      expiresIn: 30,
+    });
+    let releaseRefresh!: () => void;
+    const refreshReady = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    let markRefreshStarted!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => { markRefreshStarted = resolve; });
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith("/login/device/code")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            device_code: "secret",
+            user_code: "ABCD-EFGH",
+            verification_uri: "https://github.com/login/device",
+            expires_in: 900,
+            interval: 1,
+          }),
+        };
+      }
+      if (String(url).endsWith("/login/oauth/access_token")) {
+        if (new URLSearchParams(String(init?.body)).get("grant_type") === "refresh_token") {
+          markRefreshStarted();
+          await refreshReady;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              access_token: "gho_rotated",
+              refresh_token: "ghr_rotated",
+              expires_in: 28_800,
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: "gho_reconnected", scope: "repo,user:email" }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ login: "octocat", name: null, avatar_url: null, id: 1, email: null }),
+      };
+    }) as unknown as typeof fetch;
+
+    const flow = await beginOAuthDeviceFlow();
+    now = 32_000;
+    const refreshing = getToken();
+    await refreshStarted;
+
+    const rename = fs.rename.bind(fs);
+    let releaseCommit!: () => void;
+    const commitReady = new Promise<void>((resolve) => { releaseCommit = resolve; });
+    let markCommitStarted!: () => void;
+    const commitStarted = new Promise<void>((resolve) => { markCommitStarted = resolve; });
+    let held = false;
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      if (!held && String(args[1]) === path.join(TMP, "github.json")) {
+        held = true;
+        markCommitStarted();
+        await commitReady;
+      }
+      return rename(...args);
+    });
+
+    const polling = pollOAuthDeviceFlow(flow.flowId);
+    await commitStarted;
+    const cancelling = cancelOAuthDeviceFlow(flow.flowId);
+    releaseRefresh();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseCommit();
+    await Promise.all([polling, cancelling, refreshing]);
+
+    expect(JSON.parse(await fs.readFile(path.join(TMP, "github.json"), "utf8")).token)
+      .toBe("gho_rotated");
+    _resetTokenCache();
+    expect(await getToken()).toBe("gho_rotated");
   });
 });
 

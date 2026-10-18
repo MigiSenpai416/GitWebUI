@@ -63,6 +63,11 @@ function GitHubMethodDialog({
           Connected as <strong>@{user.login}</strong>
           {user.name ? ` (${user.name})` : ""} using {status?.authMethod === "oauth" ? "GitHub OAuth" : "a Personal Access Token"}.
         </div>
+      ) : connected && status?.transient ? (
+        <div className="acct-warn">
+          Couldn't reach GitHub to verify the saved credentials{status?.error ? `: ${status.error}` : ""}.
+          They are still saved and GitWebUI keeps retrying; reconnect below only if this persists.
+        </div>
       ) : connected ? (
         <div className="acct-warn">
           The saved GitHub credentials were rejected{status?.error ? `: ${status.error}` : ""}.
@@ -147,6 +152,11 @@ function GitHubPatDialog({ onBack, onClose }: { onBack: () => void; onClose: () 
         <div className="acct-connected" role="status" aria-live="polite">
           Connected as <strong>@{user.login}</strong>
           {user.name ? ` (${user.name})` : ""}.
+        </div>
+      ) : connected && status?.transient ? (
+        <div className="acct-warn">
+          Couldn't reach GitHub to verify the saved token{status?.error ? `: ${status.error}` : ""}.
+          It is still saved; enter a new token below only if this persists.
         </div>
       ) : connected ? (
         <div className="acct-warn">

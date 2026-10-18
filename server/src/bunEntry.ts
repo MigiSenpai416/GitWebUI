@@ -4,7 +4,7 @@
 import { createApp } from "./app.js";
 import { serveEmbedded } from "./embeddedServe.js";
 import { resolvePort, resolveHost, wantsHelp, HELP_TEXT } from "./args.js";
-import { installProcessGuards } from "./safety.js";
+import { installProcessGuards, installShutdownHold } from "./safety.js";
 import { listenOrExit } from "./listen.js";
 
 if (wantsHelp()) {
@@ -13,6 +13,7 @@ if (wantsHelp()) {
 }
 
 installProcessGuards();
+installShutdownHold();
 
 let port: number;
 let host: string;

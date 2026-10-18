@@ -746,11 +746,22 @@ const MAX_PR_REPOS = 5;
  */
 function gh(fn: (req: Request, res: Response) => Promise<void>) {
   return h(async (req, res) => {
+    const token = await github.getToken();
     try {
       await fn(req, res);
     } catch (e) {
       if ((e as { status?: number }).status !== 401) throw e;
       const message = e instanceof Error ? e.message : "GitHub authentication failed";
+      // A 401 for the token this request used: rotate it once and ask for a
+      // retry rather than a reconnect.
+      if ((e as { githubStatus?: number }).githubStatus === 401) {
+        if (token && (await github.refreshRejectedToken(token))) {
+          throw Object.assign(
+            new Error(`${message} — the GitHub token has been refreshed; try again.`),
+            { status: 403 },
+          );
+        }
+      }
       throw Object.assign(
         new Error(`${message} — reconnect your GitHub account in Actions → GitHub.`),
         { status: 403 },

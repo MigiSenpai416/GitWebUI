@@ -20,7 +20,8 @@ const GITHUB_OAUTH_CLIENT_ID = "Ov23liu2LXjA3dklsGu1";
 const OAUTH_FINISH_TTL_MS = 30 * 60_000;
 const GITHUB_REQUEST_TIMEOUT_MS = 15_000;
 const OAUTH_REFRESH_RETRY_MS = 30_000;
-const OAUTH_REFRESH_MARGIN_MS = 5 * 60_000;
+const OAUTH_REFRESH_TIMEOUT_MS = 120_000;
+const OAUTH_REFRESH_MARGIN_MS = 30 * 60_000;
 const OAUTH_REFRESH_LOG_INTERVAL_MS = 60_000;
 const TOKEN_TEMP_MAX_AGE_MS = 10 * 60_000;
 
@@ -59,7 +60,9 @@ let tokenRevision = 0;
 let refreshPromise: Promise<TokenConfig | null> | null = null;
 let pendingOAuthRefresh: PendingOAuthRefresh | null = null;
 let failedOAuthRefresh: { token: string; tokenRevision: number; retryAt: number } | null = null;
-let lastRefreshFailure: { message: string; loggedAt: number } | null = null;
+let lastRefreshFailure: { message: string; loggedAt: number; definitive: boolean } | null = null;
+let rejectedRefreshToken: string | null = null;
+let forcedRotationToken: string | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let shuttingDown = false;
 let tokenWriteQueue: Promise<void> = Promise.resolve();
@@ -106,6 +109,14 @@ async function writeConfigFile(target: string, value: unknown): Promise<void> {
       mode: 0o600,
       flag: "wx",
     });
+    // Flush before the rename: a power loss that lands after the rename but
+    // before the data reached the disk would leave an empty credentials file.
+    const handle = await fs.open(temporary, "r+");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     if (process.platform !== "win32") await fs.chmod(temporary, 0o600);
     await fs.rename(temporary, target);
   } catch (e) {
@@ -141,8 +152,18 @@ async function clearRefreshRecovery(): Promise<void> {
   await fs.rm(target, { force: true });
   try {
     for (const name of await fs.readdir(dir)) {
-      if (name.startsWith(prefix) && name.endsWith(".tmp")) {
-        await fs.rm(path.join(dir, name), { force: true });
+      if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
+      const pid = Number(name.slice(prefix.length).split(".", 1)[0]);
+      const candidate = path.join(dir, name);
+      const age = await fs.stat(candidate).then((stat) => Date.now() - stat.mtimeMs, () => Infinity);
+      // Another live process may be mid-write on its own journal temp.
+      if (
+        pid === process.pid ||
+        age >= TOKEN_TEMP_MAX_AGE_MS ||
+        !Number.isSafeInteger(pid) ||
+        !processIsRunning(pid)
+      ) {
+        await fs.rm(candidate, { force: true });
       }
     }
   } catch (e) {
@@ -197,44 +218,66 @@ async function readRefreshRecovery(): Promise<RefreshRecovery | null> {
 async function read(inWriteQueue = false): Promise<TokenConfig | null> {
   if (loaded) return cache;
   const revision = tokenRevision;
+  let main: TokenConfig | null = null;
+  let corrupt = false;
+  let recovered: RefreshRecovery | null;
   try {
     await cleanupTokenTemps();
-    const main = await fs.readFile(tokenFile(), "utf8").then(parseTokenConfig, () => null);
-    const recovered = await readRefreshRecovery();
-    if (loaded || revision !== tokenRevision) return cache;
-    if (recovered) {
-      const restore = async () => {
-        if (loaded || revision !== tokenRevision) return cache;
-        if (main && (
-          main.token === recovered.previousToken ||
-          main.token === recovered.config.token
-        )) {
-          try {
-            await persistTokenConfig(recovered.config);
-            await clearRefreshRecovery();
-          } catch {
-            // The complete recovery record remains authoritative until promotion succeeds.
-          }
-          cache = recovered.config;
-        } else {
-          await clearRefreshRecovery().catch(() => undefined);
-          cache = main;
-        }
-        loaded = true;
-        armRefreshTimer();
-        return cache;
-      };
-      if (inWriteQueue) return await restore();
-      const restoring = tokenWriteQueue.then(restore);
-      tokenWriteQueue = restoring.then(() => undefined, () => undefined);
-      return await restoring;
+    const raw = await fs.readFile(tokenFile(), "utf8").catch((e: NodeJS.ErrnoException) => {
+      if (e.code === "ENOENT") return null;
+      throw e;
+    });
+    if (raw !== null) {
+      try {
+        main = parseTokenConfig(raw);
+      } catch {
+        corrupt = true;
+      }
     }
-    if (loaded || revision !== tokenRevision) return cache;
-    cache = main;
+    recovered = await readRefreshRecovery();
   } catch {
-    if (loaded || revision !== tokenRevision) return cache;
-    cache = null;
+    // A file that cannot be read right now (a sharing violation, a permission
+    // hiccup) is not "no credentials": stay unloaded and read again next time.
+    return cache;
   }
+  if (loaded || revision !== tokenRevision) return cache;
+  if (recovered) {
+    const restore = async () => {
+      if (loaded || revision !== tokenRevision) return cache;
+      // A journal is promoted over the token it replaced, over its own token
+      // (the write landed but the journal clear did not), and over a main file
+      // a crash left unreadable. Never over credentials the user replaced.
+      if (corrupt || (main && (
+        main.token === recovered.previousToken ||
+        main.token === recovered.config.token
+      ))) {
+        try {
+          await persistTokenConfig(recovered.config);
+          await clearRefreshRecovery().catch(() => undefined);
+        } catch {
+          // The journal stays authoritative until promotion succeeds; keeping
+          // the pair pending retries the write and blocks any new refresh.
+          pendingOAuthRefresh = {
+            config: recovered.config,
+            previousToken: recovered.previousToken,
+            tokenRevision,
+          };
+        }
+        cache = recovered.config;
+      } else {
+        await clearRefreshRecovery().catch(() => undefined);
+        cache = main;
+      }
+      loaded = true;
+      armRefreshTimer();
+      return cache;
+    };
+    if (inWriteQueue) return await restore();
+    const restoring = tokenWriteQueue.then(restore);
+    tokenWriteQueue = restoring.then(() => undefined, () => undefined);
+    return await restoring;
+  }
+  cache = main;
   loaded = true;
   armRefreshTimer();
   return cache;
@@ -259,7 +302,8 @@ async function readUsableToken(): Promise<string | null> {
   ) {
     if (config.refreshToken && !shuttingDown) {
       try {
-        const refreshed = await refreshOAuthToken(config);
+        const refreshed = await awaitRefresh(refreshOAuthToken(config), config.expiresAt);
+        if (refreshed === undefined) return config.token;
         return refreshed?.token ?? null;
       } catch {
         // A token still inside its lifetime can make one final API attempt.
@@ -331,13 +375,109 @@ function armRefreshTimer(): void {
 
 function noteRefreshFailure(e: unknown): void {
   const message = e instanceof Error ? e.message : String(e);
+  const definitive = Boolean((e as { definitive?: boolean }).definitive);
   const now = Date.now();
   const last = lastRefreshFailure;
   if (last && last.message === message && now - last.loggedAt < OAUTH_REFRESH_LOG_INTERVAL_MS) {
     return;
   }
   console.error(`[gitwebui] GitHub OAuth token refresh failed: ${message}`);
-  lastRefreshFailure = { message, loggedAt: now };
+  lastRefreshFailure = { message, loggedAt: now, definitive };
+}
+
+/**
+ * Wait for a refresh, but not longer than a still-valid token justifies: every
+ * git command sits behind getToken(), and a slow GitHub answer must not stall
+ * them all for the refresh request's full timeout. Resolves to undefined when
+ * the caller should carry on with the token it has.
+ */
+function awaitRefresh(
+  refresh: Promise<TokenConfig | null>,
+  expiresAt: number,
+): Promise<TokenConfig | null | undefined> {
+  if (expiresAt <= Date.now()) return refresh;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      // Expired while waiting: there is nothing valid to hand back, so stay.
+      if (expiresAt <= Date.now()) return;
+      refresh.catch(() => undefined);
+      resolve(undefined);
+    }, GITHUB_REQUEST_TIMEOUT_MS);
+    timer.unref?.();
+    refresh.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+/**
+ * Another process sharing the config dir (the desktop app beside a headless
+ * server) may have rotated the credentials since this one loaded them. Adopt
+ * what is on disk when it differs, so a refresh token that process already
+ * used is never sent to GitHub from here. Resolves to the adopted pair, or
+ * null when the file still holds the pair this process knows.
+ */
+async function adoptExternalConfig(config: TokenConfig): Promise<TokenConfig | null> {
+  const revision = tokenRevision;
+  const adopt = tokenWriteQueue.then(async () => {
+    if (revision !== tokenRevision || pendingOAuthRefresh?.tokenRevision === tokenRevision) {
+      return null;
+    }
+    const stored = await fs.readFile(tokenFile(), "utf8").then(parseTokenConfig, () => null);
+    if (!stored || stored.token === config.token) return null;
+    tokenRevision++;
+    // A sign-in still in progress here should finish over the adopted pair
+    // rather than be told the credentials changed under it.
+    for (const flow of oauthFlows.values()) {
+      if (!flow.commitStarted && flow.tokenRevisionAtStart === revision) {
+        flow.tokenRevisionAtStart = tokenRevision;
+      }
+    }
+    pendingOAuthRefresh = null;
+    failedOAuthRefresh = null;
+    lastRefreshFailure = null;
+    cache = stored;
+    loaded = true;
+    armRefreshTimer();
+    return stored;
+  });
+  tokenWriteQueue = adopt.then(() => undefined, () => undefined);
+  return adopt;
+}
+
+/**
+ * GitHub answered 401 for an access token this process still believes is
+ * valid: the clock was ahead when it was issued, or GitHub retired the access
+ * token early. Rotate it once rather than reporting the account as rejected
+ * while the refresh token is still good. Resolves to the new access token, or
+ * null when there is nothing to rotate with (or it was rotated already).
+ */
+export async function refreshRejectedToken(token: string): Promise<string | null> {
+  const config = await read();
+  if (!config || config.authMethod !== "oauth" || !config.refreshToken || shuttingDown) {
+    return null;
+  }
+  // Rotated already by a concurrent caller: the current token is the retry.
+  if (config.token !== token) return config.token;
+  // A token minted by a forced rotation and refused again was never the
+  // cause (credentials embedded in the remote URL, say): one rotation per
+  // stored token, then the ordinary advice applies.
+  if (config.token === forcedRotationToken) return null;
+  try {
+    const refreshed = await refreshOAuthToken(config);
+    if (!refreshed || refreshed.token === token) return null;
+    forcedRotationToken = refreshed.token;
+    return refreshed.token;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -450,7 +590,7 @@ export function ghError(status: number, body: string): Error & { status: number 
   }
   // Map auth failures to 401 so the UI can prompt to reconnect.
   const outStatus = status === 401 || status === 403 ? 401 : 422;
-  return Object.assign(new Error(message), { status: outStatus });
+  return Object.assign(new Error(message), { status: outStatus, githubStatus: status });
 }
 
 function oauthError(value: unknown, fallback: string): Error & { status: number } {
@@ -477,6 +617,14 @@ async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | nul
     const commit = tokenWriteQueue.then(async () => {
       if (pendingOAuthRefresh !== pending || pending.tokenRevision !== tokenRevision) {
         if (pendingOAuthRefresh === pending) pendingOAuthRefresh = null;
+        // The credentials were replaced while GitHub rotated this pair. A
+        // Device Flow that rolls back to the replaced pair must restore the
+        // rotated one instead: GitHub has already retired its refresh token.
+        for (const flow of oauthFlows.values()) {
+          if (flow.previousConfig?.token === pending.previousToken) {
+            flow.previousConfig = pending.config;
+          }
+        }
         return read(true);
       }
       try {
@@ -485,7 +633,6 @@ async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | nul
           previousToken: pending.previousToken,
         } satisfies RefreshRecovery);
         await persistTokenConfig(pending.config);
-        await clearRefreshRecovery();
       } catch (e) {
         if (pending.tokenRevision === tokenRevision) {
           cache = pending.config;
@@ -494,6 +641,7 @@ async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | nul
         }
         throw e;
       }
+      await clearRefreshRecovery().catch(() => undefined);
       if (pendingOAuthRefresh === pending) pendingOAuthRefresh = null;
       lastRefreshFailure = null;
       cache = pending.config;
@@ -524,7 +672,18 @@ async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | nul
       config.refreshTokenExpiresAt !== undefined &&
       config.refreshTokenExpiresAt <= Date.now()
     ) {
-      throw new Error("The GitHub OAuth refresh token expired");
+      throw Object.assign(new Error("The GitHub OAuth refresh token expired"), { definitive: true });
+    }
+    // Another process may have rotated these credentials already: adopt its
+    // pair rather than sending GitHub a refresh token it has retired, and
+    // never resend one GitHub has already refused.
+    const external = await adoptExternalConfig(config);
+    if (external) return external;
+    if (config.refreshToken === rejectedRefreshToken) {
+      throw Object.assign(
+        new Error("GitHub no longer accepts the stored refresh token; it was already used or revoked."),
+        { status: 502, definitive: true },
+      );
     }
 
     const body = new URLSearchParams({
@@ -532,11 +691,13 @@ async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | nul
       grant_type: "refresh_token",
       refresh_token: config.refreshToken,
     });
+    // Generous on purpose: once GitHub has processed this request the old
+    // refresh token is gone, so giving up early only throws the answer away.
     const res = await fetch(`${GITHUB}/login/oauth/access_token`, {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
       body,
-      signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(OAUTH_REFRESH_TIMEOUT_MS),
     });
     const response = (await res.json()) as {
       access_token?: string;
@@ -556,9 +717,11 @@ async function refreshOAuthToken(config: TokenConfig): Promise<TokenConfig | nul
           "GitHub no longer accepts the stored refresh token; it was already used or revoked.",
       };
       const message = response.error && known[response.error];
-      throw message
-        ? Object.assign(new Error(message), { status: 502 })
-        : oauthError(response, `GitHub OAuth refresh failed (${res.status})`);
+      if (!message) throw oauthError(response, `GitHub OAuth refresh failed (${res.status})`);
+      rejectedRefreshToken = config.refreshToken ?? null;
+      const rotatedElsewhere = await adoptExternalConfig(config);
+      if (rotatedElsewhere) return rotatedElsewhere;
+      throw Object.assign(new Error(message), { status: 502, definitive: true });
     }
 
     const now = Date.now();
@@ -871,7 +1034,11 @@ async function storeOAuthToken(
       return;
     }
     flow.commitStarted = true;
-    flow.previousConfig = await read(true);
+    // A pair GitHub rotated but that is not on disk yet is the real previous
+    // credential; the on-disk one has a retired refresh token.
+    flow.previousConfig = pendingOAuthRefresh?.tokenRevision === tokenRevision
+      ? pendingOAuthRefresh.config
+      : await read(true);
     if (
       flow.cancelled ||
       oauthFlows.get(flowId) !== flow ||
@@ -1126,30 +1293,42 @@ export async function status(): Promise<{
   authMethod: GitHubAuthMethod | null;
   user: GitHubUser | null;
   error?: string;
+  /** The failure may clear on its own (offline, GitHub unavailable); nothing was rejected. */
+  transient?: boolean;
 }> {
   const stored = await read();
   if (!stored) return { configured: false, authMethod: null, user: null };
   const token = await getToken();
   const authMethod = (await read())?.authMethod ?? stored.authMethod;
   if (!token) {
+    const failure = lastRefreshFailure;
     return {
       configured: true,
       authMethod,
       user: null,
-      error: lastRefreshFailure
-        ? `OAuth token expired; refresh failed: ${lastRefreshFailure.message.replace(/\.$/, "")}`
+      error: failure
+        ? `OAuth token expired; refresh failed: ${failure.message.replace(/\.$/, "")}`
         : "OAuth token expired",
+      ...(failure && !failure.definitive ? { transient: true } : {}),
     };
   }
   try {
     return { configured: true, authMethod, user: await fetchUser(token) };
   } catch (e) {
-    return {
-      configured: true,
-      authMethod,
-      user: null,
-      error: e instanceof Error ? e.message : "Invalid token",
-    };
+    const error = e instanceof Error ? e.message : "Invalid token";
+    if ((e as { githubStatus?: number }).githubStatus !== 401) {
+      return { configured: true, authMethod, user: null, error, transient: true };
+    }
+    // Rejected outright: rotate once before telling the user to reconnect.
+    const refreshed = await refreshRejectedToken(token);
+    if (refreshed) {
+      try {
+        return { configured: true, authMethod, user: await fetchUser(refreshed) };
+      } catch {
+        // Reported below with the original rejection.
+      }
+    }
+    return { configured: true, authMethod, user: null, error };
   }
 }
 
@@ -1483,6 +1662,8 @@ export function _resetTokenCache(): void {
   pendingOAuthRefresh = null;
   failedOAuthRefresh = null;
   lastRefreshFailure = null;
+  rejectedRefreshToken = null;
+  forcedRotationToken = null;
   shuttingDown = false;
   if (refreshTimer) clearTimeout(refreshTimer);
   refreshTimer = null;

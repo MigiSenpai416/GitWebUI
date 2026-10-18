@@ -540,6 +540,11 @@ const initialTabs = readTabs();
 // hydrate over the newer selection.
 let tabSelectionGeneration = 0;
 
+// GitHub status is re-checked on focus and when the dialog opens; a response
+// that was in flight when the user connected or disconnected must not land
+// over the newer state.
+let githubStatusGeneration = 0;
+
 export const useStore = create<AppState>((set, get) => ({
   authState: "loading",
 
@@ -1538,8 +1543,10 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async loadGitHubStatus() {
+    const generation = ++githubStatusGeneration;
     try {
       const githubStatus = await api.githubStatus();
+      if (generation !== githubStatusGeneration) return;
       set({ githubStatus });
     } catch {
       /* non-fatal */
@@ -1549,6 +1556,7 @@ export const useStore = create<AppState>((set, get) => ({
   async setGitHubToken(token: string) {
     // Errors propagate to the dialog for inline display.
     const { user } = await api.githubSetToken(token);
+    githubStatusGeneration++;
     set({ githubStatus: { configured: true, authMethod: "pat", user } });
     // The connected account now provides the commit identity — refresh it.
     get().loadIdentity();
@@ -1558,6 +1566,7 @@ export const useStore = create<AppState>((set, get) => ({
   async revokeGitHubToken() {
     try {
       const status = await api.githubRevoke();
+      githubStatusGeneration++;
       set({ githubStatus: status });
       // GitHub no longer overrides the commit identity — refresh it.
       get().loadIdentity();
@@ -1573,6 +1582,7 @@ export const useStore = create<AppState>((set, get) => ({
   async pollGitHubOAuth(flowId: string) {
     const result = await api.githubOAuthPoll(flowId);
     if (result.status === "complete") {
+      githubStatusGeneration++;
       set({ githubStatus: { configured: true, authMethod: "oauth", user: result.user } });
       get().loadIdentity();
     }
@@ -1630,6 +1640,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
   openGitHubDialog() {
     set({ githubDialogOpen: true });
+    // A status loaded while offline or mid-refresh goes stale; re-check it
+    // before showing a "reconnect" prompt.
+    void get().loadGitHubStatus();
   },
   closeGitHubDialog() {
     set({ githubDialogOpen: false });
@@ -1780,6 +1793,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async refreshAll() {
+    const github = get().githubStatus;
+    if (github?.configured && !github.user) void get().loadGitHubStatus();
     const previous = get().repo;
     const root = previous?.root;
     if (!root || get().opening) return;

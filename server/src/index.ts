@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import express, { type Express } from "express";
 import { createApp } from "./app.js";
 import { resolvePort, resolveHost, wantsHelp, HELP_TEXT } from "./args.js";
-import { installProcessGuards } from "./safety.js";
+import { installProcessGuards, installShutdownHold } from "./safety.js";
 import { listenOrExit } from "./listen.js";
 
 if (wantsHelp()) {
@@ -13,6 +13,7 @@ if (wantsHelp()) {
 }
 
 installProcessGuards();
+installShutdownHold();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

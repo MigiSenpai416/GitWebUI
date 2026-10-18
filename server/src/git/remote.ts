@@ -1,7 +1,7 @@
 import path from "node:path";
 import { runGit } from "./gitRunner.js";
 import { currentBranch, createLocalRepo, openRepo, type RepoInfo } from "./repo.js";
-import { getToken, createRepo, type CreatedRepo } from "../github.js";
+import { getToken, createRepo, refreshRejectedToken, type CreatedRepo } from "../github.js";
 
 export interface Remote {
   name: string;
@@ -48,7 +48,7 @@ export async function removeRemote(root: string, name: string): Promise<void> {
  * A remote authentication failure must be 403, not 401: the web client reserves
  * 401 for expiry of GitWebUI's own login and responds by discarding that session.
  */
-export function rethrowRemoteError(e: unknown, token: string | null): never {
+export async function rethrowRemoteError(e: unknown, token: string | null): Promise<never> {
   const msg = e instanceof Error ? e.message : String(e);
   // GitHub rejects pushes that touch .github/workflows from OAuth App tokens and
   // PATs lacking the `workflow` scope (fine-grained: the Workflows permission).
@@ -67,11 +67,21 @@ export function rethrowRemoteError(e: unknown, token: string | null): never {
       msg,
     );
   if (looksAuth) {
+    // Git saw the stored token refused. When GitHub retired it early, or the
+    // clock was ahead when it was issued, one rotation makes the retry work.
+    const refreshed =
+      token &&
+      /github\.com/i.test(msg) &&
+      /Authentication failed|Invalid username or password/i.test(msg)
+        ? await refreshRejectedToken(token)
+        : null;
     throw Object.assign(
       new Error(
-        token
-          ? "Remote authentication failed. Reconnect your GitHub account, check the remote's credentials, or use an SSH remote."
-          : "Authentication required. Connect a GitHub account (Actions → Connect GitHub account), or use an SSH remote.",
+        refreshed
+          ? "Remote authentication failed because the GitHub token had expired; it has been refreshed, so try again."
+          : token
+            ? "Remote authentication failed. Reconnect your GitHub account, check the remote's credentials, or use an SSH remote."
+            : "Authentication required. Connect a GitHub account (Actions → Connect GitHub account), or use an SSH remote.",
       ),
       { status: 403 },
     );
@@ -193,7 +203,7 @@ export async function push(root: string, opts: { force?: PushForce } = {}): Prom
         { status: 409 },
       );
     }
-    rethrowRemoteError(e, token);
+    return rethrowRemoteError(e, token);
   }
 }
 
@@ -222,7 +232,7 @@ export async function deleteRemoteBranch(
       ],
     );
   } catch (e) {
-    rethrowRemoteError(e, token);
+    return rethrowRemoteError(e, token);
   }
 }
 
@@ -270,7 +280,7 @@ export async function pull(
     const { stdout, stderr } = await runGit(root, args);
     return { output: (stdout + stderr).trim() };
   } catch (e) {
-    rethrowRemoteError(e, token);
+    return rethrowRemoteError(e, token);
   }
 }
 
@@ -292,7 +302,7 @@ export async function cloneRepo(parentDir: string, url: string): Promise<RepoInf
   try {
     await runGit(parentDir, ["clone", url, target]);
   } catch (e) {
-    rethrowRemoteError(e, token);
+    return rethrowRemoteError(e, token);
   }
   return openRepo(target);
 }
@@ -327,7 +337,7 @@ export async function createGitHubRemote(
       ["push", "--set-upstream", opts.remoteName, branch],
     );
   } catch (e) {
-    rethrowRemoteError(e, token);
+    return rethrowRemoteError(e, token);
   }
   return { repo, remotes: await getRemotes(root) };
 }
@@ -378,7 +388,7 @@ export async function createGitHubRepoNew(opts: {
       ["push", "--set-upstream", "origin", info.branch],
     );
   } catch (e) {
-    rethrowRemoteError(e, token);
+    return rethrowRemoteError(e, token);
   }
   return { created, repo: await openRepo(info.root) };
 }

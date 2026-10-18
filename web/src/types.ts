@@ -228,6 +228,8 @@ export interface GitHubStatus {
   authMethod: "pat" | "oauth" | null;
   user: GitHubUser | null;
   error?: string;
+  /** The failure may clear on its own (offline, GitHub unavailable); nothing was rejected. */
+  transient?: boolean;
 }
 
 export interface GitHubOAuthDeviceFlow {

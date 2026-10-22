@@ -16,9 +16,12 @@ import {
  */
 
 const WINDOWS = process.platform === "win32";
+const MAC = process.platform === "darwin";
 const DOWNLOAD_URL = WINDOWS
   ? "https://git-scm.com/download/win"
-  : "https://git-scm.com/download/linux";
+  : MAC
+    ? "https://git-scm.com/download/mac"
+    : "https://git-scm.com/download/linux";
 
 let probe: Promise<string | null> | null = null;
 
@@ -59,8 +62,12 @@ export async function ensureGitOrPrompt(window: BrowserWindow | null): Promise<s
     (WINDOWS
       ? "Install Git for Windows and restart GitWebUI — or point it at an existing git.exe " +
         "if you already have one."
-      : "Install git with your package manager and restart GitWebUI — or point it at an " +
-        "existing git executable if you already have one.");
+      : MAC
+        ? "Install the Xcode Command Line Tools (run `xcode-select --install` in Terminal) or " +
+          "Homebrew's git and restart GitWebUI — or point it at an existing git executable " +
+          "if you already have one."
+        : "Install git with your package manager and restart GitWebUI — or point it at an " +
+          "existing git executable if you already have one.");
   const buttons = ["Locate git…", "Download Git", "Continue Anyway"];
   const options: Electron.MessageBoxOptions = {
     type: "warning",
@@ -114,7 +121,9 @@ export async function locateGit(window: BrowserWindow | null): Promise<string | 
         `${candidate} either isn't git or couldn't be started. ` +
         (WINDOWS
           ? "Look for git.exe in a Git installation's cmd folder — usually C:\\Program Files\\Git\\cmd\\git.exe."
-          : "Look for the git executable — usually /usr/bin/git."),
+          : MAC
+            ? "Look for the git executable — usually /usr/bin/git, or /opt/homebrew/bin/git from Homebrew."
+            : "Look for the git executable — usually /usr/bin/git."),
       buttons: ["Try Again", "Cancel"],
       defaultId: 0,
       cancelId: 1,

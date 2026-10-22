@@ -1,5 +1,5 @@
 import path from "node:path";
-import { app, BrowserWindow, dialog, shell } from "electron";
+import { app, BrowserWindow, dialog, nativeTheme, shell } from "electron";
 import { setConfigDir } from "../../../core/src/config.js";
 import { settleTokenWork } from "../../../core/src/github.js";
 import { setOpener } from "../../../core/src/system.js";
@@ -11,6 +11,7 @@ import { APP_VERSION } from "./version.js";
 import { registerIpc } from "./ipc.js";
 import { installMenu } from "./menu.js";
 import { APP_URL, isAppUrl, registerAppScheme, serveRenderer } from "./protocol.js";
+import { adoptLoginShellPath } from "./shellPath.js";
 import { loadWindowState, trackWindowState, WINDOW_MIN_SIZE } from "./windowState.js";
 
 /**
@@ -41,6 +42,10 @@ const TOKEN_SETTLE_TIMEOUT_MS = 3_000;
 const RENDERER_DIR = path.join(__dirname, "..", "renderer");
 
 let mainWindow: BrowserWindow | null = null;
+/** The window being created, so a second request for one joins it. */
+let windowPending: Promise<BrowserWindow> | null = null;
+/** Set once the interface is being served, which is what a window needs. */
+let started = false;
 let quitting = false;
 let tokenWorkSettled = false;
 
@@ -87,7 +92,12 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (!mainWindow) return;
+    if (!mainWindow) {
+      // Only macOS gets here without a window (the app lives on in the Dock
+      // after its window closes); the relaunch is the user asking for one.
+      if (started && !quitting) void ensureWindow();
+      return;
+    }
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
   });
@@ -115,15 +125,24 @@ async function main(): Promise<void> {
     await shell.openPath(target);
   });
 
-  // Not awaited: the search can spend seconds waiting on a login shell, and
-  // there is no reason for the window to wait behind it.
+  // macOS only; a no-op elsewhere. Before the git probe, which is the first
+  // thing to go looking down the PATH.
+  await adoptLoginShellPath();
+
+  // Not awaited: the search can spend seconds, and there is no reason for the
+  // window to wait behind it.
   void beginGitProbe();
 
   await app.whenReady();
 
+  // The UI is dark-only. On macOS the title bar and the native dialogs follow
+  // the system appearance, so on a light-mode Mac they would sit pale above a
+  // dark window; pinning the theme keeps the chrome matching the content.
+  if (process.platform === "darwin") nativeTheme.themeSource = "dark";
+
   registerIpc();
   registerApi();
-  installMenu();
+  installMenu(() => void ensureWindow());
 
   if (!DEV) {
     try {
@@ -134,13 +153,42 @@ async function main(): Promise<void> {
     }
   }
   log.info(`interface from ${DEV ? DEV_RENDERER_ORIGIN : RENDERER_DIR}`);
+  started = true;
 
-  mainWindow = await createWindow();
+  let window: BrowserWindow;
+  try {
+    window = await ensureWindow();
+  } catch (error) {
+    fatal("Could not open the GitWebUI window", error);
+    return;
+  }
   log.info("window ready");
 
   // Asked only once the window exists, so the dialog has something to attach to
   // and the user is looking at the app when it appears.
-  void ensureGitOrPrompt(mainWindow);
+  void ensureGitOrPrompt(window);
+}
+
+/**
+ * The main window, creating it if there isn't one.
+ *
+ * Creation is asynchronous, so a second request that lands while the first is
+ * still loading — the Dock icon clicked twice, a relaunch during startup —
+ * joins it rather than opening another window over the same remembered tabs.
+ */
+function ensureWindow(): Promise<BrowserWindow> {
+  if (mainWindow) return Promise.resolve(mainWindow);
+  if (!windowPending) {
+    windowPending = createWindow()
+      .then((window) => {
+        mainWindow = window;
+        return window;
+      })
+      .finally(() => {
+        windowPending = null;
+      });
+  }
+  return windowPending;
 }
 
 async function createWindow(): Promise<BrowserWindow> {
@@ -162,7 +210,8 @@ async function createWindow(): Promise<BrowserWindow> {
     // either way.
     autoHideMenuBar: true,
     title: "GitWebUI",
-    // Windows uses the executable's resources; Linux needs an explicit icon.
+    // Windows uses the executable's resources and macOS the bundle's; Linux
+    // needs an explicit icon.
     icon: process.platform === "linux" ? path.join(__dirname, "..", "build", "icon.png") : undefined,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -238,9 +287,15 @@ async function openExternally(url: string): Promise<void> {
 // Shutdown
 // ---------------------------------------------------------------------------
 
-// Closing the window closes the app. (On macOS the convention is the opposite,
-// which is one of the things that would need revisiting to ship there.)
-app.on("window-all-closed", () => app.quit());
+// Closing the window closes the app — except on macOS, where an app stays in
+// the Dock without a window and opens a fresh one when it is activated again.
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
+
+app.on("activate", () => {
+  if (started && !quitting) void ensureWindow();
+});
 
 app.on("before-quit", (event) => {
   if (quitting) {
@@ -282,15 +337,16 @@ app.on("before-quit", (event) => {
 
 /**
  * An uncaught exception here must not be swallowed silently: it would leave a
- * window rendering over a dead core with no signal at all. Before there is a
- * window to tell, a failure is fatal; afterwards it is reported and the app is
- * left running, because losing unsaved work in the commit box to a background
- * error would be worse than the error.
+ * window rendering over a dead core with no signal at all. During startup a
+ * failure is fatal; once the app is up it is reported and the app is left
+ * running, because losing unsaved work in the commit box to a background error
+ * would be worse than the error. (Not keyed on there being a window: on macOS
+ * the app runs on without one.)
  */
 function installCrashGuards(): void {
   process.on("uncaughtException", (error) => {
     log.error("uncaught exception:", error);
-    if (!mainWindow) fatal("GitWebUI hit an unexpected error during startup", error);
+    if (!started) fatal("GitWebUI hit an unexpected error during startup", error);
   });
 
   process.on("unhandledRejection", (reason) => {

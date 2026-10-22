@@ -8,9 +8,9 @@ It focuses on a **local** repo, and also supports GitHub remotes: connect with
 GitHub OAuth or a Personal Access Token to push, pull, add remotes, and create
 repositories.
 
-It ships as a standalone desktop app for **Windows** (a portable `.exe`) and
-**Linux x64** (an `.AppImage`): no install, no browser tab, no port. Native
-folder pickers and menus.
+It ships as a standalone desktop app for **Windows** (a portable `.exe`),
+**Linux x64** (an `.AppImage`) and, best effort, **macOS** (a `.dmg`/`.zip`):
+no install, no browser tab, no port. Native folder pickers and menus.
 
 ## Features
 
@@ -144,6 +144,7 @@ In the window, open a repository by its absolute path, for example:
 
 - Windows: `C:\Users\you\projects\my-repo`
 - Linux: `/home/you/projects/my-repo`
+- macOS: `/Users/you/projects/my-repo`
 
 ## The desktop app
 
@@ -227,19 +228,66 @@ On a system without FUSE, extract it and run the included launcher:
 ./squashfs-root/AppRun
 ```
 
+### macOS (best effort)
+
+The macOS build is configured and packages cleanly, but this project is
+developed on Windows and Linux and the app has **not been run on a Mac**.
+Everything platform-specific is in place — the app menu with About and Quit,
+the standard Window menu, Cmd shortcuts, staying open in the Dock with no
+window and reopening one on activation, a dark title bar to match the UI, git
+lookup through the Xcode Command Line Tools and Homebrew, zsh in the terminal —
+but treat it as untested until someone reports back.
+
+On a Mac:
+
+```bash
+npm ci
+npm run dist:mac     # → release/desktop/GitWebUI-0.3.0-mac-{x64,arm64}.{dmg,zip}
+```
+
+Off a Mac the packaging can be exercised but not shipped: the `.dmg` needs
+`hdiutil`, electron-builder refuses macOS targets on a Windows host, and the
+`.zip` it makes on Linux flattens the symbolic links inside `Electron
+Framework.framework` (the archiver there doesn't keep them), which breaks the
+bundle and triples its size. What can be made on Linux — in WSL, after
+`npm run build` — is the bare `.app`, which `tar` archives intact (naming a
+target on the command line replaces the configured ones, so the architectures
+have to be named again too):
+
+```bash
+cd desktop && npx electron-builder --config electron-builder.yml --mac dir --x64 --arm64 --publish never
+cd ../release/desktop && tar -czf GitWebUI-0.3.0-mac-arm64.tar.gz -C mac-arm64 GitWebUI.app
+```
+
+The app is not signed or notarized, so Gatekeeper refuses it. Clear the
+quarantine flag after copying it into place:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/GitWebUI.app
+```
+
+(On macOS 15 and later the alternative is System Settings → Privacy &
+Security → **Open Anyway** after the first refusal; right-click → Open no
+longer gets an unnotarized app past Gatekeeper there.)
+
+The host needs `git` — the Xcode Command Line Tools (`xcode-select --install`)
+or Homebrew's — and, for File Manager history deletion, `git-filter-repo` and
+Python.
+
 ### Where things are stored
 
 - **Config directory** — `%APPDATA%\gitwebui` on Windows,
-  `$XDG_CONFIG_HOME/gitwebui` or `~/.config/gitwebui` elsewhere; override with
-  `GITWEBUI_CONFIG_DIR`. Holds the GitHub credential (`github.json`, plus
+  `$XDG_CONFIG_HOME/gitwebui` or `~/.config/gitwebui` on Linux and macOS;
+  override with `GITWEBUI_CONFIG_DIR`. Holds the GitHub credential (`github.json`, plus
   `github-refresh.json` while a token refresh is in flight), commit identity
   (`identity.json`), AI settings (`ai-commit.json`), recent repositories
   (`recent.json`), a located git (`git-path.json`) and the recovery bundles
   history deletion writes (`history-backups/`). It is the same directory
   earlier releases used, so all of that carries over.
-- **Electron profile** — `%APPDATA%\gitwebui-desktop`, or
-  `$XDG_CONFIG_HOME/gitwebui-desktop` / `~/.config/gitwebui-desktop`; override
-  with `GITWEBUI_USER_DATA_DIR`. Holds window state, caches, the UI's open tabs
+- **Electron profile** — `%APPDATA%\gitwebui-desktop` on Windows,
+  `$XDG_CONFIG_HOME/gitwebui-desktop` / `~/.config/gitwebui-desktop` on Linux,
+  `~/Library/Application Support/gitwebui-desktop` on macOS; override with
+  `GITWEBUI_USER_DATA_DIR`. Holds window state, caches, the UI's open tabs
   and layout, and `main.log` — a packaged Windows app has no console, so a
   window that won't start leaves its reason there.
 

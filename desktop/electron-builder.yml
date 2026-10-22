@@ -54,3 +54,20 @@ linux:
   target:
     - target: AppImage
       arch: [x64]
+
+# Unsigned, and so not notarized: there is no Apple developer identity behind
+# this project, and electron-builder would otherwise go looking for one in the
+# keychain. Gatekeeper therefore refuses the app until the user clears its
+# quarantine flag (see the README). Both targets need a Mac to come out right:
+# the DMG needs hdiutil, and a zip made on Linux flattens the framework's
+# symbolic links. Off a Mac the `dir` target is what proves the packaging.
+mac:
+  icon: build/icon.icns
+  category: public.app-category.developer-tools
+  identity: null
+  artifactName: GitWebUI-${version}-mac-${arch}.${ext}
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]

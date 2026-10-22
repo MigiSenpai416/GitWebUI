@@ -12,7 +12,7 @@ import "./TerminalPanel.css";
  *
  * It is a command runner rather than a shell session: each command gets its own
  * shell, and the directory it ends in is carried into the next one. That's what
- * a terminal without a pseudo-terminal can honestly do — see server/terminal.ts
+ * a terminal without a pseudo-terminal can honestly do — see core/src/terminal.ts
  * — so the prompt is a plain input rather than a pretence that the output pane
  * accepts keystrokes. What it can do, it does properly: output streams as it
  * arrives, colours survive, and a command can be stopped while it runs.

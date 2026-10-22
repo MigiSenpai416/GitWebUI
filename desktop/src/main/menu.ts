@@ -7,16 +7,27 @@ import { APP_VERSION } from "./version.js";
  *
  * The Edit entries are roles rather than handlers so the OS wires them to
  * whichever control has focus; the rest send intents to the UI, which owns all
- * the state. The menu bar itself is hidden until Alt is pressed — the app draws
- * its own tab strip, so a permanently visible menu bar is redundant chrome —
- * but the accelerators work regardless.
+ * the state. On Windows and Linux the menu bar is hidden until Alt is pressed —
+ * the app draws its own tab strip, so a permanently visible menu bar is
+ * redundant chrome — but the accelerators work regardless. On macOS the bar
+ * lives at the top of the screen as always, led by the application menu.
  */
 
 const HOMEPAGE = "https://github.com/MigiSenpai/GitWebUi";
+const MAC = process.platform === "darwin";
+
+let openWindow: () => void = () => {};
 
 function send(command: MenuCommand): void {
   const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-  window?.webContents.send(CH.menuCommand, command);
+  if (!window) {
+    // On macOS the menu is there with no window open. A command then means
+    // "bring the app back" first; the command itself is dropped, as there is
+    // no UI yet to carry it out.
+    openWindow();
+    return;
+  }
+  window.webContents.send(CH.menuCommand, command);
 }
 
 /**
@@ -38,18 +49,20 @@ const item = (
 
 export function buildMenu(): Menu {
   const template: MenuItemConstructorOptions[] = [
+    // macOS puts About and Quit in the application menu; the File menu below
+    // only carries Quit where there is no such menu.
+    ...(MAC ? [{ role: "appMenu" as const }] : []),
     {
       label: "&File",
       submenu: [
-        item("New Tab", "new-tab", "Ctrl+T"),
+        item("New Tab", "new-tab", "CmdOrCtrl+T"),
         { type: "separator" },
-        item("Open Repository…", "open-repo", "Ctrl+O"),
-        item("Clone Repository…", "clone-repo", "Ctrl+Shift+O"),
-        item("Create Repository…", "create-repo", "Ctrl+Shift+N"),
+        item("Open Repository…", "open-repo", "CmdOrCtrl+O"),
+        item("Clone Repository…", "clone-repo", "CmdOrCtrl+Shift+O"),
+        item("Create Repository…", "create-repo", "CmdOrCtrl+Shift+N"),
         { type: "separator" },
-        item("Close Tab", "close-tab", "Ctrl+W"),
-        { type: "separator" },
-        { role: "quit" },
+        item("Close Tab", "close-tab", "CmdOrCtrl+W"),
+        ...(MAC ? [] : [{ type: "separator" as const }, { role: "quit" as const }]),
       ],
     },
     {
@@ -70,7 +83,9 @@ export function buildMenu(): Menu {
     {
       label: "&View",
       submenu: [
-        item("Refresh", "refresh", "Ctrl+R"),
+        item("Refresh", "refresh", "CmdOrCtrl+R"),
+        // Ctrl rather than Cmd on macOS too: Cmd+` is the system's own
+        // "next window" shortcut there.
         item("Toggle Terminal", "toggle-terminal", "Ctrl+`"),
         { type: "separator" },
         { role: "resetZoom" },
@@ -81,10 +96,22 @@ export function buildMenu(): Menu {
         { role: "toggleDevTools" },
       ],
     },
-    {
-      label: "&Window",
-      submenu: [{ role: "minimize" }, { role: "zoom" }],
-    },
+    MAC
+      ? {
+          // Cmd+W is Close Tab, so closing the window gets a shortcut of its own.
+          role: "window",
+          submenu: [
+            { role: "minimize" },
+            { role: "zoom" },
+            { role: "close", accelerator: "CmdOrCtrl+Shift+W" },
+            { type: "separator" },
+            { role: "front" },
+          ],
+        }
+      : {
+          label: "&Window",
+          submenu: [{ role: "minimize" }, { role: "zoom" }],
+        },
     {
       label: "&Help",
       submenu: [
@@ -99,6 +126,8 @@ export function buildMenu(): Menu {
   return Menu.buildFromTemplate(template);
 }
 
-export function installMenu(): void {
+/** `onNoWindow` is what a command does when there is no window to send it to. */
+export function installMenu(onNoWindow: () => void): void {
+  openWindow = onNoWindow;
   Menu.setApplicationMenu(buildMenu());
 }

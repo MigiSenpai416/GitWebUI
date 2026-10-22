@@ -1,4 +1,4 @@
-// Shared API shapes (kept in sync with server/src/git/*).
+// Shared API shapes (kept in sync with core/src/git/*).
 
 export interface CommitRef {
   name: string;
@@ -230,6 +230,8 @@ export interface GitHubStatus {
   error?: string;
   /** The failure may clear on its own (offline, GitHub unavailable); nothing was rejected. */
   transient?: boolean;
+  /** Scopes a push needs that the stored grant lacks; a reconnect is the fix. */
+  missingScopes?: string[];
 }
 
 export interface GitHubOAuthDeviceFlow {

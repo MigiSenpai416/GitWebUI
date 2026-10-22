@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { api, AuthError, setRequestRepoRoot } from "../api/client";
+import { api, setRequestRepoRoot } from "../api/client";
 import { openExternal } from "../desktop";
 import type {
   Branch,
@@ -187,12 +187,6 @@ type ViewMode = "diff" | "file";
 export type FileLayout = "path" | "tree";
 export type ResetMode = "hard" | "soft" | "mixed";
 
-/**
- * WebUI auth gate state: `loading` until the first status check resolves, then
- * `setup` (no password yet), `login` (password required), or `ok` (authed).
- */
-export type AuthState = "loading" | "setup" | "login" | "ok";
-
 /** Right-click context menu anchored to a commit. */
 export interface CommitMenu {
   hash: string;
@@ -281,8 +275,6 @@ function raise(set: StoreSet, kind: ToastKind, message: string): void {
 }
 
 interface AppState {
-  authState: AuthState;
-
   /** Open workspace tabs and which one is active. */
   tabs: RepoTab[];
   activeTabId: string | null;
@@ -373,11 +365,7 @@ interface AppState {
   confirmCheckbox: boolean;
 
   init: () => Promise<void>;
-  /** Set the initial password (first run), then enter the app. */
-  setupPassword: (password: string, remember: boolean) => Promise<void>;
-  login: (password: string, remember: boolean) => Promise<void>;
-  logout: () => Promise<void>;
-  /** Load recent list + current repo once authenticated. */
+  /** Load the recent list and restore the open tabs. */
   loadWorkspace: () => Promise<void>;
   loadRecent: () => Promise<void>;
   openRepo: (path: string) => Promise<void>;
@@ -546,8 +534,6 @@ let tabSelectionGeneration = 0;
 let githubStatusGeneration = 0;
 
 export const useStore = create<AppState>((set, get) => ({
-  authState: "loading",
-
   tabs: initialTabs.tabs,
   activeTabId: initialTabs.activeTabId,
   cloneDialogOpen: false,
@@ -615,55 +601,7 @@ export const useStore = create<AppState>((set, get) => ({
   confirmCheckbox: false,
 
   async init() {
-    try {
-      const st = await api.authStatus();
-      const authState: AuthState = st.configured
-        ? st.authenticated
-          ? "ok"
-          : "login"
-        : "setup";
-      set({ authState });
-      if (authState !== "ok") return;
-    } catch (e) {
-      // Server unreachable or unexpected error — fall back to the login screen.
-      set({ authState: "login" });
-      raise(set, "error", errMsg(e));
-      return;
-    }
     await get().loadWorkspace();
-  },
-
-  async setupPassword(password: string, remember: boolean) {
-    // Errors propagate to the AuthGate so it can show them inline.
-    await api.authSetup(password, remember);
-    set({ authState: "ok" });
-    await get().loadWorkspace();
-  },
-
-  async login(password: string, remember: boolean) {
-    await api.authLogin(password, remember);
-    set({ authState: "ok" });
-    await get().loadWorkspace();
-  },
-
-  async logout() {
-    try {
-      await api.authLogout();
-    } catch {
-      /* clear locally regardless */
-    }
-    setRequestRepoRoot(null);
-    set({
-      authState: "login",
-      repo: null,
-      commits: [],
-      hasMore: false,
-      selectedCommitHash: null,
-      commitFiles: [],
-      status: EMPTY_STATUS,
-      selectedFile: null,
-      branches: [],
-    });
   },
 
   async loadWorkspace() {
@@ -770,7 +708,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ opening: true });
     try {
       // Re-open on the backend: idempotent, and re-registers the repo after a
-      // server restart so data requests for this tab keep working.
+      // main-process restart so calls for this tab keep working.
       const { repo } = await api.openRepo(tab.root);
       // A later tab click won while this repository was opening. Applying this
       // stale response would show one tab as active while targeting another
@@ -1014,7 +952,7 @@ export const useStore = create<AppState>((set, get) => ({
       syncActiveTab(get, set, repo);
       await refreshRepoData(get, set, root);
       if (!isActiveRepo(get, root)) return;
-      // A same-named local branch may already exist. In that case the server
+      // A same-named local branch may already exist. In that case the core
       // deliberately checks out the local branch without rewriting its
       // upstream, so report the refreshed branch's real tracking state rather
       // than claiming it tracks the remote row the user clicked.
@@ -2021,7 +1959,7 @@ async function refreshRepoData(
     return;
   }
   // Reload as many commits as are currently paged in, so a deep scroll position
-  // survives the refresh (server caps the page at 1000).
+  // survives the refresh (the core caps the page at 1000).
   const count = Math.min(1000, Math.max(PAGE, get().commits.length));
   const commitsPromise = api
     .commits(0, count, get().visibleRefs)
@@ -2269,7 +2207,7 @@ async function hydrateRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promis
 }
 
 /**
- * Fold a server merge-state response into the store: track which paths have been
+ * Fold a core merge-state response into the store: track which paths have been
  * seen conflicted (so resolved ones can be listed), apply the fresh status, and
  * close the resolver when its file is no longer conflicted (or the op ended).
  */
@@ -2346,7 +2284,7 @@ async function adoptRepo(get: StoreGet, set: StoreSet, info: RepoInfo): Promise<
   await hydrateRepo(get, set, info);
 }
 
-/** Keep the active tab's branch/name label in sync with a server repo response. */
+/** Keep the active tab's branch/name label in sync with a core repo response. */
 function syncActiveTab(get: StoreGet, set: StoreSet, info: RepoInfo): void {
   const tabs = get().tabs.map((t) =>
     t.root === info.root ? { ...t, branch: info.branch, name: basename(info.root) } : t,
@@ -2392,14 +2330,7 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/**
- * Route an action error: a 401 (session expired/invalid) drops back to the
- * login screen; anything else surfaces as the error toast.
- */
+/** Route an action error to the error toast. */
 function reportError(set: StoreSet, e: unknown): void {
-  if (e instanceof AuthError) {
-    set({ authState: "login" });
-    return;
-  }
   raise(set, "error", errMsg(e));
 }

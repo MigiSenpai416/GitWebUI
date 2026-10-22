@@ -1,5 +1,5 @@
 import { test, expect, type ElectronApplication, type Page } from "@playwright/test";
-import { cleanupApp, launchApp, makeRepo, removeRepo, type TestApp } from "./helpers";
+import { callApi, cleanupApp, launchApp, makeRepo, removeRepo, type TestApp } from "./helpers";
 
 /**
  * One window, shared by every test in the file — launching Electron per test
@@ -50,15 +50,14 @@ test.afterAll(async () => {
   await removeRepo(repoDir);
 });
 
-test("opens a window served from its own loopback API", async () => {
+test("opens a window served from its own app scheme", async () => {
+  // Not file:, and not a socket: the scheme is what gives the page an origin
+  // of its own, and nothing else may be serving it.
   const url = window.url();
-  expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//);
+  expect(url).toMatch(/^gitwebui:\/\/app\//);
 });
 
-test("never shows the login screen", async () => {
-  // The whole point of desktop mode. If the token or the cookie is wrong this
-  // is where it shows up — the store falls back to AuthGate.
-  await expect(window.locator(".auth-gate, .authgate")).toHaveCount(0);
+test("opens straight onto the repository picker", async () => {
   await expect(window.getByRole("heading", { name: "Repositories" })).toBeVisible();
 });
 
@@ -67,19 +66,19 @@ test("exposes the desktop bridge, and nothing more", async () => {
     const w = window as unknown as { gitwebui?: Record<string, unknown> };
     return {
       present: Boolean(w.gitwebui),
-      isDesktop: w.gitwebui?.isDesktop,
       platform: w.gitwebui?.platform,
       keys: w.gitwebui ? Object.keys(w.gitwebui).sort() : [],
     };
   });
   expect(bridge.present).toBe(true);
-  expect(bridge.isDesktop).toBe(true);
   expect(bridge.platform).toBe(process.platform);
   expect(bridge.keys).toEqual([
     "appVersion",
+    "call",
+    "cancel",
     "homeDir",
-    "isDesktop",
     "onMenuCommand",
+    "onTerminalEvent",
     "openExternal",
     "pathSep",
     "pickDirectory",
@@ -87,6 +86,14 @@ test("exposes the desktop bridge, and nothing more", async () => {
     "reload",
     "writeClipboard",
   ]);
+});
+
+test("reaches the core through the bridge", async () => {
+  // The renderer's only way to its data. A broken preload, a missing handler
+  // or a reply that doesn't survive the trip all show up here first.
+  const recent = await callApi<{ recent: unknown }>(window, "recent");
+  expect(Array.isArray(recent.recent)).toBe(true);
+  await expect(callApi(window, "noSuchRoute")).rejects.toThrow(/\(404\): Unknown operation/);
 });
 
 test("keeps Node out of the renderer", async () => {
@@ -109,31 +116,9 @@ test("opens a repository and lists its history", async () => {
   await expect(window.getByText("first commit").first()).toBeVisible();
 });
 
-test("does not offer a way to sign out of a session it never started", async () => {
-  // The Toolbar only exists once a repo is open (web/src/App.tsx), so on the
-  // picker screen this assertion would pass whether or not the isDesktop()
-  // guard existed. Hence the precondition — and hence its message, which is
-  // what an isolated `--grep` run of this test will report.
-  await expect(
-    window.locator(".toolbar"),
-    "no repository is open, so there is no toolbar to check. This test runs " +
-      "after 'opens a repository' — the suite is serial and cannot be grepped " +
-      "down to a single test.",
-  ).toHaveCount(1);
-  // A sibling button, as a control — it proves the toolbar really rendered its
-  // right-hand group, so a zero count below means the Lock button was omitted
-  // rather than the whole group being missing.
-  await expect(
-    window.getByRole("button", { name: "Search", exact: true }),
-    "the toolbar's right-hand group did not render, so a missing Lock button " +
-      "would prove nothing",
-  ).toHaveCount(1);
-  await expect(window.getByRole("button", { name: "Lock", exact: true })).toHaveCount(0);
-});
-
 test("runs a command in the terminal and streams its output", async () => {
-  // The streaming NDJSON endpoint is the one non-request/response channel in
-  // the app, and the reason a loopback server beat a custom protocol.
+  // The terminal is the one call that doesn't answer all at once: its output
+  // arrives as events pushed from main while the call is still in flight.
   // Driven through the real menu item rather than its accelerator: injected key
   // events go straight to the renderer and never reach the native menu. This
   // exercises the whole path — menu click, IPC, the renderer's handler, store.
@@ -161,16 +146,25 @@ test("refuses to open a second window for an external link", async () => {
   expect(app.windows().length).toBe(before);
 });
 
+/** Request one of the app's own pages from main, where the scheme is handled. */
+async function fetchAppPage(url: string): Promise<{ status: number; csp: string | null }> {
+  // Not from the page: its policy has `connect-src 'none'`, so a fetch there
+  // would be refused before it reached the handler.
+  return await app.evaluate(async ({ net }, target) => {
+    const res = await net.fetch(target);
+    return { status: res.status, csp: res.headers.get("content-security-policy") };
+  }, url);
+}
+
 test("serves the UI under a content security policy", async () => {
   // Only meaningful in a packaged/served build — in dev the page comes from
   // Vite, which needs eval and a websocket and so is deliberately exempt.
-  const csp = await window.evaluate(async () => {
-    const res = await fetch("/index.html");
-    return res.headers.get("content-security-policy");
-  });
+  const { csp } = await fetchAppPage("gitwebui://app/index.html");
   expect(csp).toContain("default-src 'self'");
   expect(csp).toContain("object-src 'none'");
   expect(csp).toContain("frame-ancestors 'none'");
+  // Everything the page needs from outside itself goes through the bridge.
+  expect(csp).toContain("connect-src 'none'");
   // CodeMirror injects <style> at runtime and xterm sets inline styles, so
   // style-src has to allow inline; script-src must not.
   expect(csp).toContain("script-src 'self'");
@@ -180,19 +174,21 @@ test("serves the UI under a content security policy", async () => {
 test("answers an unknown asset path with a 404 rather than the app shell", async () => {
   // Serving index.html for a missing .js turns a broken script tag into a
   // confusing syntax error instead of a clear miss.
-  const status = await window.evaluate(async () => {
-    const res = await fetch("/assets/does-not-exist.js");
-    return res.status;
-  });
+  const { status } = await fetchAppPage("gitwebui://app/assets/does-not-exist.js");
   expect(status).toBe(404);
 });
 
 test("survives a reload", async () => {
-  // Confirms the cookie is a real cookie in the session rather than something
-  // that only happened to be present on the first navigation.
+  // Main gives up the old page's calls as it navigates away; the new page's
+  // must still be answered, and the open repository must come back with it.
   await window.reload();
   await window.waitForLoadState("domcontentloaded");
-  await expect(window.locator(".auth-gate, .authgate")).toHaveCount(0);
+  expect(window.url()).toMatch(/^gitwebui:\/\/app\//);
+  await expect(
+    window.getByText("first commit").first(),
+    "the repository from 'opens a repository' did not come back — or that test " +
+      "never ran: the suite is serial and cannot be grepped down to a single test.",
+  ).toBeVisible();
 });
 
 });

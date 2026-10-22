@@ -2,20 +2,23 @@ import { test, expect, type ElectronApplication } from "@playwright/test";
 import { execFileSync, execSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { cleanupApp, launchApp, makeRepo, removeRepo, type TestApp } from "./helpers";
+import { callApi, cleanupApp, launchApp, makeRepo, removeRepo, type TestApp } from "./helpers";
 
 /**
  * Shutdown behaviour. Separate from the smoke suite because each of these has to
  * quit the app, and that suite shares one instance across its tests.
  *
- * The thing under test is that quitting is immediate. Blocking the quit on a
- * graceful HTTP close meant the window sat there unresponsive for seconds
- * whenever a command was running, because a graceful close waits for the
- * terminal's streaming response to drain.
+ * The thing under test is that quitting is immediate. An earlier version
+ * blocked the quit on a graceful close of its HTTP server, and the window sat
+ * there unresponsive for seconds whenever a command was running, because a
+ * graceful close waits for the terminal's streaming response to drain. The
+ * server is gone, but a call left in flight must not take its place.
  */
 
 /** How long a quit may take before it reads as a hang. */
 const QUIT_BUDGET_MS = 3000;
+
+const WINDOWS = process.platform === "win32";
 
 /**
  * Kill anything left over from this file's `sleep 417`.
@@ -23,14 +26,17 @@ const QUIT_BUDGET_MS = 3000;
  * Necessary because that command *is* orphaned on Windows (see the note in the
  * second test), and an orphan keeps the stdio pipes it inherited from the app
  * open — which stalls Playwright's worker teardown for a full minute waiting
- * for a process it thinks is still alive.
+ * for a process it thinks is still alive. Elsewhere the whole process group is
+ * signalled, so this is only a safety net.
  */
 function reapStrayCommands(): void {
   try {
     execSync(
-      'powershell -NoProfile -Command "Get-CimInstance Win32_Process | ' +
-        "Where-Object { $_.CommandLine -like '*sleep.exe*417*' } | " +
-        'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"',
+      WINDOWS
+        ? 'powershell -NoProfile -Command "Get-CimInstance Win32_Process | ' +
+            "Where-Object { $_.CommandLine -like '*sleep.exe*417*' } | " +
+            'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"'
+        : "pkill -f 'sleep 417'",
       { stdio: "ignore" },
     );
   } catch {
@@ -44,8 +50,10 @@ test.afterAll(() => reapStrayCommands());
 function commandLines(): string {
   try {
     return execSync(
-      'powershell -NoProfile -Command "Get-CimInstance Win32_Process | ' +
-        'Select-Object -ExpandProperty CommandLine"',
+      WINDOWS
+        ? 'powershell -NoProfile -Command "Get-CimInstance Win32_Process | ' +
+            'Select-Object -ExpandProperty CommandLine"'
+        : "ps -eo args",
       { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
     );
   } catch {
@@ -82,8 +90,8 @@ test("quits promptly with nothing running", async () => {
   const app: ElectronApplication = started.app;
   const window = await app.firstWindow();
   await window.waitForLoadState("domcontentloaded");
-  // Make sure a keep-alive connection to the API really exists.
-  expect(await window.evaluate(async () => (await fetch("/api/auth/status")).status)).toBe(200);
+  // Make sure the core is really up and answering before asking it to stop.
+  expect(await callApi(window, "recent")).toHaveProperty("recent");
 
   const elapsed = await timeQuit(app);
   expect(elapsed, `quit took ${elapsed}ms`).toBeLessThan(QUIT_BUDGET_MS);
@@ -109,7 +117,7 @@ test("quits promptly with a terminal command still running", async () => {
   await expect(window.locator(".term-dock")).not.toHaveClass(/term-hidden/);
   await window.locator(".term-input").fill("sleep 417");
   await window.locator(".term-input").press("Enter");
-  // Let it actually spawn, so the streaming response is genuinely open.
+  // Let it actually spawn, so the terminal's call is genuinely in flight.
   await new Promise((r) => setTimeout(r, 2000));
 
   // Our shell, identified by the scratch script it was handed.

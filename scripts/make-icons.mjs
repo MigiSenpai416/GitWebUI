@@ -1,10 +1,9 @@
 // Draws the desktop application icons from the brand mark in web/src/brand.ts.
 //
 // The mark is the app's own commit-graph column, and it is already defined once
-// as geometry so the React icon, the auth screen and the favicon can't drift
-// apart. The desktop icon is the fourth drawing of it, so it comes from the same
-// numbers rather than a hand-exported image that would go stale the first time
-// the mark changed.
+// as geometry for the React icon in the tab strip. The desktop icon is the
+// second drawing of it, so it comes from the same numbers rather than a
+// hand-exported image that would go stale the first time the mark changed.
 //
 // The rasteriser, the PNG writer and the ICO container are all written by hand,
 // because the alternative is a native image toolchain for three shapes.
@@ -18,8 +17,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = path.join(root, "desktop", "build");
 
 // ---------------------------------------------------------------------------
-// The mark (mirrors web/src/brand.ts — see markSvg for the heavier weights,
-// which are tuned for small renderings and so suit a taskbar icon too)
+// The mark (mirrors the geometry in web/src/brand.ts, drawn a little heavier
+// than the in-app icon because a taskbar icon renders as small as 16px, where
+// the chrome weight thins out to about one device pixel)
 // ---------------------------------------------------------------------------
 
 const VIEW = 24;
@@ -207,6 +207,37 @@ function encodeIco(images) {
 }
 
 // ---------------------------------------------------------------------------
+// ICNS — a list of typed PNG entries, one per size and scale. Only the PNG-
+// capable types are written; the 16px ones predate PNG support and macOS
+// scales the 32px entry down for them anyway.
+// ---------------------------------------------------------------------------
+
+const ICNS_TYPES = [
+  ["ic11", 32], // 16pt @2x
+  ["ic12", 64], // 32pt @2x
+  ["ic07", 128],
+  ["ic13", 256], // 128pt @2x
+  ["ic08", 256],
+  ["ic14", 512], // 256pt @2x
+  ["ic09", 512],
+  ["ic10", 1024], // 512pt @2x
+];
+
+function encodeIcns(entries) {
+  const chunks = entries.map(({ type, png }) => {
+    const header = Buffer.alloc(8);
+    header.write(type, 0, 4, "ascii");
+    header.writeUInt32BE(8 + png.length, 4);
+    return Buffer.concat([header, png]);
+  });
+  const body = Buffer.concat(chunks);
+  const header = Buffer.alloc(8);
+  header.write("icns", 0, 4, "ascii");
+  header.writeUInt32BE(8 + body.length, 4);
+  return Buffer.concat([header, body]);
+}
+
+// ---------------------------------------------------------------------------
 
 // 16 for the taskbar and title bar, 256 for the large icon in Explorer, and the
 // steps in between so Windows never has to scale one of them itself.
@@ -215,12 +246,24 @@ const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256];
 async function main() {
   await fs.mkdir(outDir, { recursive: true });
 
-  const images = ICO_SIZES.map((size) => ({ size, png: encodePng(size, render(size)) }));
+  // Each size is drawn once however many containers want it.
+  const pngs = new Map();
+  const png = (size) => {
+    if (!pngs.has(size)) pngs.set(size, encodePng(size, render(size)));
+    return pngs.get(size);
+  };
+
+  const images = ICO_SIZES.map((size) => ({ size, png: png(size) }));
   await fs.writeFile(path.join(outDir, "icon.ico"), encodeIco(images));
-  await fs.writeFile(path.join(outDir, "icon.png"), encodePng(512, render(512)));
+  await fs.writeFile(path.join(outDir, "icon.png"), png(512));
+  await fs.writeFile(
+    path.join(outDir, "icon.icns"),
+    encodeIcns(ICNS_TYPES.map(([type, size]) => ({ type, png: png(size) }))),
+  );
 
   console.log(
-    `[make-icons] wrote icon.ico (${ICO_SIZES.join(", ")}px) and icon.png (512px) to ` +
+    `[make-icons] wrote icon.ico (${ICO_SIZES.join(", ")}px), icon.png (512px) and ` +
+      `icon.icns (${ICNS_TYPES.map(([, size]) => size).join(", ")}px) to ` +
       `${path.relative(root, outDir)}`,
   );
 }

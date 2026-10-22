@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { launchApp, cleanupApp, makeRepo, removeRepo, type TestApp } from "./helpers";
+import { callApi, launchApp, cleanupApp, makeRepo, removeRepo, stubRoute, type TestApp } from "./helpers";
 
 test("creating from a different branch uses its fork alias and actual upstream branch name", async () => {
   const repo = makeRepo();
@@ -44,15 +44,12 @@ test("creating from a different branch uses its fork alias and actual upstream b
     });
     const window = await started.app.firstWindow();
     await window.waitForLoadState("domcontentloaded");
-    await window.evaluate(async () => {
-      const response = await fetch("/api/github/token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: "test-token" }) });
-      if (!response.ok) throw new Error(await response.text());
-    });
+    await callApi(window, "githubSetToken", { token: "test-token" });
     await window.reload();
     await window.getByRole("button", { name: "Open", exact: true }).first().click();
     await window.locator(".picker-form input").fill(repo);
     await window.locator(".picker-form button[type=submit]").click();
-    await window.route("**/api/pr/meta?**", (route) => route.fulfill({ json: { collaborators: [], assignees: [], labels: [{ name: "needs-review", color: "abcdef" }] } }));
+    await stubRoute(started.app, "prMeta", () => ({ collaborators: [], assignees: [], labels: [{ name: "needs-review", color: "abcdef" }] }));
     await window.getByRole("button", { name: "Actions", exact: true }).click();
     await window.getByRole("button", { name: "Create pull request…" }).click();
     const dialog = window.locator(".pr-dialog");
@@ -64,19 +61,18 @@ test("creating from a different branch uses its fork alias and actual upstream b
     await expect(dialog.locator(".pr-repos select").nth(0)).toHaveValue("team/fork");
     await expect(dialog.locator(".pr-chip")).toHaveText(["needs-review"]);
     await dialog.getByLabel("Title", { exact: true }).fill("Add feature from fork");
-    let releaseBranches: (() => Promise<void>) | undefined;
-    await window.route("**/api/pr/branches?**", async (route) => {
-      if (new URL(route.request().url()).searchParams.get("repo") !== "team/fork") return route.continue();
-      await new Promise<void>((resolve) => {
-        releaseBranches = async () => { await route.fulfill({ json: { branches: ["fork-main"] } }); resolve(); };
-      });
+    await stubRoute(started.app, "prBranches", async (input, proceed) => {
+      if (input.repo !== "team/fork") return await proceed();
+      const state = globalThis as unknown as { releaseBranches?: () => void };
+      await new Promise<void>((resolve) => { state.releaseBranches = resolve; });
+      return { branches: ["fork-main"] };
     });
     await dialog.locator(".pr-repos select").nth(1).selectOption("team/fork");
     await expect(dialog.getByRole("button", { name: "Create Pull Request", exact: true })).toBeDisabled();
     await expect(dialog.locator(".pr-repos select").nth(3)).toBeDisabled();
     await expect(dialog.locator(".pr-repos select").nth(3).locator("option")).toHaveText(["Loading branches…"]);
-    await expect.poll(() => !!releaseBranches).toBe(true);
-    await releaseBranches!();
+    await expect.poll(() => started!.app.evaluate(() => !!(globalThis as unknown as { releaseBranches?: () => void }).releaseBranches)).toBe(true);
+    await started.app.evaluate(() => (globalThis as unknown as { releaseBranches?: () => void }).releaseBranches?.());
     await expect(dialog.locator(".pr-repos select").nth(3)).toHaveValue("fork-main");
     await dialog.locator(".pr-repos select").nth(1).selectOption("team/project");
     await expect(dialog.locator(".pr-repos select").nth(3)).toHaveValue("main");

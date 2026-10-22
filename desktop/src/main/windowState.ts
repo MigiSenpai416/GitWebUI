@@ -6,8 +6,7 @@ import { app, screen, type BrowserWindow, type Rectangle } from "electron";
  * Remembers where the window was.
  *
  * Kept under Electron's own `userData` rather than with the git config: it is a
- * property of this installation's UI, not of the user's repositories, and a
- * headless server has no use for it.
+ * property of this installation's UI, not of the user's repositories.
  */
 
 const DEFAULT_WIDTH = 1440;

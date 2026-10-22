@@ -17,7 +17,7 @@ const base = (props: P) => ({
 
 /**
  * The GitWebUI mark: a commit lane with one branch leaving it. Drawn from the
- * shared geometry in brand.ts, so the favicon can't drift from the app's.
+ * shared geometry in brand.ts, so the application icon can't drift from it.
  */
 export const IconMark = (p: P) => (
   <svg {...base(p)} strokeWidth={MARK_STROKE}>

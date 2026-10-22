@@ -3,10 +3,10 @@ import { defineConfig } from "@playwright/test";
 /**
  * Electron smoke tests. Deliberately few and load-bearing: they exist to catch
  * the failures that only appear once the app is actually assembled — a preload
- * that doesn't load, a window that opens on the login screen, a renderer that
- * can't reach its own API — not to re-test the UI.
+ * that doesn't load, a page the private scheme fails to serve, a renderer that
+ * can't reach the core over IPC — not to re-test the UI.
  *
- * Runs against `dist/` and `renderer/`, so `npm run build:desktop` first.
+ * Runs against `dist/` and `renderer/`, so `npm run build` first.
  */
 export default defineConfig({
   testDir: "./tests",

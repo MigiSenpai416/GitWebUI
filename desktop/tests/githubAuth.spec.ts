@@ -1,5 +1,5 @@
 import { test, expect, type ElectronApplication, type Page } from "@playwright/test";
-import { cleanupApp, launchApp, makeRepo, removeRepo, type TestApp } from "./helpers";
+import { callLog, cleanupApp, launchApp, makeRepo, removeRepo, stubRoute, type TestApp } from "./helpers";
 
 test.describe.serial("GitHub account connection", () => {
   let started: TestApp;
@@ -62,30 +62,27 @@ test.describe.serial("GitHub account connection", () => {
   });
 
   test("cancels an active flow on Back and completes an authorized flow", async () => {
-    let intervalMs = 60_000;
-    let cancellations = 0;
-    await window.route("**/api/github/oauth/device", async (route) => {
-      if (route.request().method() === "DELETE") {
-        cancellations++;
-        await route.fulfill({ json: { ok: true } });
-        return;
-      }
-      await route.fulfill({
-        json: {
-          flowId: `flow-${intervalMs}`,
-          userCode: "ABCD-EFGH",
-          verificationUri: "https://github.com/login/device",
-          verificationUriComplete: null,
-          expiresAt: Date.now() + 900_000,
-          intervalMs,
-        },
-      });
+    const setIntervalMs = (intervalMs: number) => app.evaluate((_electron, ms) => {
+      (globalThis as unknown as { oauthIntervalMs: number }).oauthIntervalMs = ms;
+    }, intervalMs);
+    const cancelledBefore = (await callLog(app, "githubOAuthCancel")).length;
+    const cancellations = async () => (await callLog(app, "githubOAuthCancel")).length - cancelledBefore;
+    await setIntervalMs(60_000);
+    await stubRoute(app, "githubOAuthStart", () => {
+      const intervalMs = (globalThis as unknown as { oauthIntervalMs: number }).oauthIntervalMs;
+      return {
+        flowId: `flow-${intervalMs}`,
+        userCode: "ABCD-EFGH",
+        verificationUri: "https://github.com/login/device",
+        verificationUriComplete: null,
+        expiresAt: Date.now() + 900_000,
+        intervalMs,
+      };
     });
-    await window.route("**/api/github/oauth/poll", (route) => route.fulfill({
-      json: {
-        status: "complete",
-        user: { login: "octocat", name: "The Octocat", avatarUrl: null },
-      },
+    await stubRoute(app, "githubOAuthCancel", () => ({ ok: true }));
+    await stubRoute(app, "githubOAuthPoll", () => ({
+      status: "complete",
+      user: { login: "octocat", name: "The Octocat", avatarUrl: null },
     }));
 
     await window.getByRole("button", { name: "Actions", exact: true }).click();
@@ -98,20 +95,20 @@ test.describe.serial("GitHub account connection", () => {
     await expect(oauth.getByRole("button", { name: "Back" })).toBeEnabled();
     await oauth.getByRole("button", { name: "Back" }).click();
     await expect(choice).toBeVisible();
-    await expect.poll(() => cancellations).toBe(1);
+    await expect.poll(cancellations).toBe(1);
 
     await choice.getByRole("button", { name: /GitHub OAuth/ }).click();
     oauth = window.getByRole("dialog", { name: "GitHub OAuth" });
     await oauth.getByRole("button", { name: "Continue with GitHub" }).click();
     await expect(oauth.getByText("ABCD-EFGH")).toBeVisible();
     await oauth.getByRole("button", { name: "Close" }).click();
-    await expect.poll(() => cancellations).toBe(2);
+    await expect.poll(cancellations).toBe(2);
 
     await window.getByRole("button", { name: "Actions", exact: true }).click();
     await window.getByRole("button", { name: "Connect GitHub account…" }).click();
     await choice.getByRole("button", { name: /GitHub OAuth/ }).click();
     oauth = window.getByRole("dialog", { name: "GitHub OAuth" });
-    intervalMs = 1;
+    await setIntervalMs(1);
     await oauth.getByRole("button", { name: "Continue with GitHub" }).click();
     await expect(oauth).toContainText("Signed in as @octocat");
     await oauth.getByRole("button", { name: "Done" }).click();

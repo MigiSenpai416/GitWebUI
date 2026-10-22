@@ -4,9 +4,7 @@ dist/
 .DS_Store
 .env
 web/dist/
-server/dist/
 release/
-server/src/generated/
 
 # Desktop build output. All generated: the renderer is staged from web/dist,
 # and the icon is drawn from web/src/brand.ts by scripts/make-icons.mjs.

@@ -1,6 +1,12 @@
 import { test, expect } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { cleanupApp, launchApp, makeRepo, removeRepo, type TestApp } from "./helpers";
+import { callLog, cleanupApp, launchApp, makeRepo, removeRepo, stubRoute, type TestApp } from "./helpers";
+
+interface BatchTestState {
+  active: number;
+  peak: number;
+  batches: number;
+}
 
 for (const count of [1500, 10000]) {
   test(`commit search stays virtualized and idle with ${count} commits`, async () => {
@@ -20,10 +26,11 @@ for (const count of [1500, 10000]) {
       await window.locator(".picker-form input").fill(root);
       await window.locator(".picker-form button[type=submit]").click();
       await expect(window.locator(".commit-row").first()).toBeVisible();
-      const requests: string[] = [];
-      window.on("request", (request) => {
-        if (/\/api\/commits\/(?:search|batch)/.test(request.url())) requests.push(request.url());
-      });
+      const app = started.app;
+      const searchCalls = async () =>
+        (await callLog(app, "searchCommits")).length + (await callLog(app, "commitsByHash")).length;
+      const callsBefore = await searchCalls();
+      const requests = async () => (await searchCalls()) - callsBefore;
       const cdp = await window.context().newCDPSession(window);
       await cdp.send("Performance.enable");
       const metrics = async () => {
@@ -45,10 +52,10 @@ for (const count of [1500, 10000]) {
       const rowCount = await window.locator(".commit-row").count();
       expect(rowCount).toBeLessThan(100);
       const idleBefore = await metrics();
-      const idleRequestCount = requests.length;
+      const idleRequestCount = await requests();
       await window.waitForTimeout(1000);
       const idleAfter = await metrics();
-      expect(requests).toHaveLength(idleRequestCount);
+      expect(await requests()).toBe(idleRequestCount);
       const fullStart = performance.now();
       await window.getByTitle("Show full commit graph", { exact: true }).click();
       await expect(window.locator(".search-active .full-graph-svg")).toBeVisible();
@@ -61,32 +68,35 @@ for (const count of [1500, 10000]) {
       console.log(JSON.stringify({
         commits: count, searchMs: Math.round(searchMs), fullGraphMs: Math.round(fullMs),
         navigationMs: Math.round(navigationMs), renderedRows: rowCount,
-        requests: requests.length, idleTaskMs: Math.round((idleAfter.TaskDuration - idleBefore.TaskDuration) * 1000),
+        requests: await requests(), idleTaskMs: Math.round((idleAfter.TaskDuration - idleBefore.TaskDuration) * 1000),
         rendererTaskMs: Math.round((after.TaskDuration - before.TaskDuration) * 1000),
         heapGrowthMiB: Math.round((after.JSHeapUsedSize - before.JSHeapUsedSize) / 1024 / 1024),
       }));
-      let active = 0;
-      let peak = 0;
-      let batches = 0;
-      await window.route("**/api/commits/batch?**", async (route) => {
-        active += 1;
-        peak = Math.max(peak, active);
-        batches += 1;
+      await app.evaluate(() => {
+        (globalThis as unknown as { batchTest: BatchTestState }).batchTest = { active: 0, peak: 0, batches: 0 };
+      });
+      await stubRoute(app, "commitsByHash", async (_input, proceed) => {
+        const state = (globalThis as unknown as { batchTest: BatchTestState }).batchTest;
+        state.active += 1;
+        state.peak = Math.max(state.peak, state.active);
+        state.batches += 1;
         try {
-          const response = await route.fetch();
+          const reply = await proceed();
           await new Promise((resolve) => setTimeout(resolve, 150));
-          await route.fulfill({ response });
+          return reply;
         } finally {
-          active -= 1;
+          state.active -= 1;
         }
       });
+      const batchTest = () => app.evaluate(() => (globalThis as unknown as { batchTest: BatchTestState }).batchTest);
       for (let index = 0; index < 30; index += 1) {
         await window.locator(".commit-scroll").evaluate((element, offset) => { element.scrollTop = offset; }, Math.floor(count * index / 30) * 28);
         await window.waitForTimeout(10);
       }
       await window.locator(".commit-scroll").evaluate((element, offset) => { element.scrollTop = offset; }, Math.floor(count / 2) * 28);
       await expect(window.locator(".commit-placeholder")).toHaveCount(0);
-      await expect.poll(() => active).toBe(0);
+      await expect.poll(async () => (await batchTest()).active).toBe(0);
+      const { peak, batches } = await batchTest();
       expect(peak).toBeLessThanOrEqual(2);
       expect(batches).toBeGreaterThan(0);
       expect(await window.locator(".commit-row").count()).toBeLessThan(100);

@@ -1,10 +1,9 @@
 /**
- * The desktop bridge, when there is one.
+ * The bridge the preload exposes as `window.gitwebui`.
  *
- * The app is the same web app whether it is running in a browser or inside the
- * Electron window, so every one of these is optional and every caller needs a
- * path for "there is no bridge". The helpers below exist so that fallback is
- * written once rather than at each call site.
+ * The UI only ever runs inside the app's own window, so the bridge is always
+ * there. The helpers below are the one place that reaches for it, which keeps
+ * the components free of `window.gitwebui` and lets tests mock this module.
  */
 
 export type DesktopPlatform = "win32" | "darwin" | "linux" | (string & {});
@@ -24,12 +23,28 @@ export interface PickDirectoryOptions {
   defaultPath?: string;
 }
 
+/** What a call into the core comes back as. */
+export type ApiReply =
+  | { ok: true; json: string }
+  | { ok: false; status: number; error: string };
+
+/** One line of a running terminal command's output. */
+export interface RunEvent {
+  t: "out" | "err" | "exit";
+  d?: string;
+  code?: number | null;
+  cwd?: string;
+  killed?: boolean;
+}
+
 export interface DesktopBridge {
-  isDesktop: true;
   platform: DesktopPlatform;
   pathSep: string;
   homeDir: string;
   appVersion: string;
+  call(id: number, route: string, input: unknown, root: string | null): Promise<ApiReply>;
+  cancel(id: number): void;
+  onTerminalEvent(handler: (id: number, event: RunEvent) => void): () => void;
   pickDirectory(options?: PickDirectoryOptions): Promise<string | null>;
   openExternal(url: string): Promise<void>;
   writeClipboard(text: string): Promise<void>;
@@ -43,87 +58,38 @@ declare global {
   }
 }
 
-/** The bridge, or null in a browser. */
-export function desktop(): DesktopBridge | null {
-  return typeof window !== "undefined" && window.gitwebui ? window.gitwebui : null;
+/** The bridge. Throws if the page is not running inside the app's window. */
+export function desktop(): DesktopBridge {
+  const bridge = typeof window !== "undefined" ? window.gitwebui : undefined;
+  if (!bridge) throw new Error("GitWebUI must be run as the desktop app");
+  return bridge;
 }
 
-export function isDesktop(): boolean {
-  return desktop() !== null;
-}
-
-/**
- * Which OS the *server* is on. In the desktop app that is this machine; in a
- * browser the only clue available is the browser's own platform, which is the
- * client and may not be the same machine at all. It is used for cosmetic
- * things — an example path in a placeholder — so a wrong guess is survivable.
- */
-export function hostPlatform(): DesktopPlatform {
-  const bridge = desktop();
-  if (bridge) return bridge.platform;
-  return typeof navigator !== "undefined" && navigator.userAgent.includes("Win")
-    ? "win32"
-    : "linux";
-}
-
-export function isWindowsHost(): boolean {
-  return hostPlatform() === "win32";
-}
-
-/** An example absolute path for the host OS, for empty-field placeholders. */
+/** An example absolute path for this machine, for empty-field placeholders. */
 export function examplePath(...segments: string[]): string {
   const bridge = desktop();
-  if (isWindowsHost()) {
-    const home = bridge?.homeDir ?? "C:\\Users\\you";
-    return [home, ...segments].join("\\");
-  }
-  const home = bridge?.homeDir ?? "/home/you";
-  return [home, ...segments].join("/");
+  return [bridge.homeDir, ...segments].join(bridge.pathSep);
 }
 
-/**
- * Open a URL outside the app. In the desktop app `window.open` would be
- * intercepted anyway, but going through the bridge keeps the intent explicit.
- */
+/** Open a URL in the user's browser rather than in an app window. */
 export function openExternal(url: string): void {
-  const bridge = desktop();
-  if (bridge) {
-    void bridge.openExternal(url);
-    return;
-  }
-  window.open(url, "_blank", "noopener");
+  void desktop().openExternal(url);
 }
 
 /**
- * Copy text, preferring the bridge. `navigator.clipboard` does work in the
- * desktop app — http://127.0.0.1 counts as a secure context — but it is
+ * Copy text through the bridge. `navigator.clipboard` would work too, but it is
  * permission-gated and the bridge never is.
  */
 export async function writeClipboard(text: string): Promise<void> {
-  const bridge = desktop();
-  if (bridge) {
-    await bridge.writeClipboard(text);
-    return;
-  }
-  await navigator.clipboard.writeText(text);
+  await desktop().writeClipboard(text);
 }
 
 /** Reload the app, bypassing any cached bundle. */
 export function reload(): void {
-  const bridge = desktop();
-  if (bridge) {
-    bridge.reload();
-    return;
-  }
-  window.location.reload();
+  desktop().reload();
 }
 
-/**
- * Ask for a folder with the OS chooser. Returns null when there is no bridge,
- * which callers read as "carry on with the text field".
- */
+/** Ask for a folder with the OS chooser. Resolves to null when the user cancels. */
 export async function pickDirectory(options?: PickDirectoryOptions): Promise<string | null> {
-  const bridge = desktop();
-  if (!bridge) return null;
-  return bridge.pickDirectory(options);
+  return desktop().pickDirectory(options);
 }

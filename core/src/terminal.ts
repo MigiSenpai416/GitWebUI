@@ -12,9 +12,10 @@ import { gitAuthEnv } from "./git/gitRunner.js";
  * own shell and stream what it prints.
  *
  * This is a command runner, not a terminal session. A real terminal needs a
- * pseudo-terminal, which neither Node nor Bun provides without a native addon —
- * and a native addon can't be cross-compiled, which is what lets `build:exe`
- * emit both the Windows and Linux binaries from one machine. So each command
+ * pseudo-terminal, which Node doesn't provide without a native addon — and a
+ * native addon would have to be rebuilt against Electron's ABI for every
+ * platform the app ships on, which is what keeps the packaging free of any
+ * native rebuild step. So each command
  * gets a fresh shell, and the two things a session would otherwise carry —
  * where you are, and what the command exited with — are carried explicitly:
  * the shell reports its final directory and status, and the client sends the
@@ -242,11 +243,11 @@ const DRAIN_GRACE_MS = 200;
 /**
  * Every command currently running.
  *
- * A request that goes away takes its own command with it (`res.on("close")`),
- * which covers the ordinary case. What it doesn't cover is the server itself
- * going away: in the desktop app these are child processes of the process the
- * user just quit, and without this they would be left running with nothing
- * reading their output.
+ * A call that is cancelled — or whose window goes away — takes its own command
+ * with it, which covers the ordinary case. What it doesn't cover is the app
+ * itself going away: these are child processes of the process the user just
+ * quit, and without this they would be left running with nothing reading
+ * their output.
  */
 const running = new Set<RunHandle>();
 

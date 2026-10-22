@@ -1,10 +1,9 @@
 // Draws the desktop application icons from the brand mark in web/src/brand.ts.
 //
 // The mark is the app's own commit-graph column, and it is already defined once
-// as geometry so the React icon, the auth screen and the favicon can't drift
-// apart. The desktop icon is the fourth drawing of it, so it comes from the same
-// numbers rather than a hand-exported image that would go stale the first time
-// the mark changed.
+// as geometry for the React icon in the tab strip. The desktop icon is the
+// second drawing of it, so it comes from the same numbers rather than a
+// hand-exported image that would go stale the first time the mark changed.
 //
 // The rasteriser, the PNG writer and the ICO container are all written by hand,
 // because the alternative is a native image toolchain for three shapes.
@@ -18,8 +17,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = path.join(root, "desktop", "build");
 
 // ---------------------------------------------------------------------------
-// The mark (mirrors web/src/brand.ts — see markSvg for the heavier weights,
-// which are tuned for small renderings and so suit a taskbar icon too)
+// The mark (mirrors the geometry in web/src/brand.ts, drawn a little heavier
+// than the in-app icon because a taskbar icon renders as small as 16px, where
+// the chrome weight thins out to about one device pixel)
 // ---------------------------------------------------------------------------
 
 const VIEW = 24;

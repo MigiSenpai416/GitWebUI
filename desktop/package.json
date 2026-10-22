@@ -15,8 +15,10 @@
     "build": "node build.mjs",
     "dev": "node build.mjs --watch",
     "start": "electron dist/main.js",
+    "typecheck": "tsc -p tsconfig.json",
     "test": "playwright test",
-    "dist": "npm run build && electron-builder --config electron-builder.yml --win",
+    "dist": "npm run build && electron-builder --config electron-builder.yml --publish never",
+    "dist:win": "npm run build && electron-builder --config electron-builder.yml --win --x64 --publish never",
     "dist:linux": "npm run build && electron-builder --config electron-builder.yml --linux --x64 --publish never"
   },
   "devDependencies": {

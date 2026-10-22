@@ -20,9 +20,9 @@ files:
 # rules and no extraResources.
 asar: true
 
-# There are no native modules (the server's only runtime dependency is
-# express, and it is bundled into dist/main.js), so there is nothing to
-# rebuild against Electron's ABI.
+# There are no native modules and no runtime dependencies at all: core and the
+# main process are bundled into dist/main.js, so there is nothing to rebuild
+# against Electron's ABI.
 npmRebuild: false
 
 # Git is required; history deletion additionally needs git-filter-repo. Said
@@ -33,8 +33,8 @@ extraMetadata:
 
 win:
   icon: build/icon.ico
-  # One standalone executable, no installer. Electron, the Express server and
-  # the built UI are inside it; git and optional git-filter-repo remain host tools.
+  # One standalone executable, no installer. Electron, the app's core and the
+  # built UI are inside it; git and optional git-filter-repo remain host tools.
   target:
     - target: portable
       arch: [x64]

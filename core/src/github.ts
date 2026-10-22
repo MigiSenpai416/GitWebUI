@@ -418,8 +418,8 @@ function awaitRefresh(
 }
 
 /**
- * Another process sharing the config dir (the desktop app beside a headless
- * server) may have rotated the credentials since this one loaded them. Adopt
+ * Another process sharing the config dir (a second copy of the app started
+ * with a profile of its own) may have rotated the credentials since this one loaded them. Adopt
  * what is on disk when it differs, so a refresh token that process already
  * used is never sent to GitHub from here. Resolves to the adopted pair, or
  * null when the file still holds the pair this process knows.

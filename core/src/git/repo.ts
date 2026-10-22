@@ -17,7 +17,7 @@ function badRequest(message: string): Error & { status: number } {
  * normalized repo info. Every failure mode (empty/garbage string, missing path,
  * a file, a non-repo folder, git not installed) yields a clean 400 message
  * instead of a raw `spawn git ENOENT`, so a bad path can never destabilize the
- * server.
+ * app.
  */
 export async function openRepo(input: string): Promise<RepoInfo> {
   const path = (input ?? "").trim();

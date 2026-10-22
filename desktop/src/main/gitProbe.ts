@@ -4,7 +4,7 @@ import {
   resolveGitPath,
   saveGitPathOverride,
   setGitPath,
-} from "../../../server/src/git/gitPath.js";
+} from "../../../core/src/git/gitPath.js";
 
 /**
  * Finding git, and asking the user for help when it can't be found.

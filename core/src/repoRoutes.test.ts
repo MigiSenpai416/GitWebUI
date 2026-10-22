@@ -1,86 +1,79 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import express from "express";
-import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { api, apiErrorHandler } from "./routes.js";
+import { dispatch, errorMessage, errorStatus } from "./api.js";
 import { beginRepoMutation } from "./git/historyFiles.js";
 import { openRepo } from "./git/repo.js";
 import { runGit } from "./git/gitRunner.js";
 import { registerRepo, unregisterRepo } from "./session.js";
 
 const TMP = path.join(os.tmpdir(), `gitwebui-reporoutes-${randomBytes(6).toString("hex")}`);
-let server: Server;
-let base = "";
+
+/** Make one call the way the main process does, JSON round-trip included. */
+async function call(route: string, root: string, input: Record<string, unknown> = {}) {
+  try {
+    const result = await dispatch(route, input, { root, signal: new AbortController().signal });
+    return { status: 200, body: JSON.parse(JSON.stringify(result)) };
+  } catch (e) {
+    return { status: errorStatus(e), body: { error: errorMessage(e) } };
+  }
+}
 
 beforeAll(async () => {
   await fs.mkdir(TMP, { recursive: true });
   await runGit(TMP, ["init", "-b", "main"]);
   await runGit(TMP, ["config", "user.name", "Test User"]);
   await runGit(TMP, ["config", "user.email", "test@example.com"]);
-  const app = express();
-  app.use(express.json());
-  app.use("/api", api);
-  app.use("/api", apiErrorHandler);
-  server = app.listen(0, "127.0.0.1");
-  await new Promise<void>((resolve) => server.once("listening", resolve));
-  const addr = server.address();
-  base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
 });
 
 afterAll(async () => {
   // Git normalizes the registered root (notably path separators on Windows).
   unregisterRepo((await openRepo(TMP)).root);
-  await new Promise<void>((resolve) => server.close(() => resolve()));
   await fs.rm(TMP, { recursive: true, force: true });
 });
 
-describe("GET /repo/current", () => {
+describe("currentRepo", () => {
   it("re-reads branch metadata changed outside GitWebUI", async () => {
     const opened = registerRepo(await openRepo(TMP));
     expect(opened.branch).toBe("main");
 
     // Model a branch switch performed in the built-in terminal or another Git
-    // client. The registered object still says main until the refresh route is
-    // called.
+    // client. The registered object still says main until the refresh call is
+    // made.
     await runGit(TMP, ["branch", "-m", "outside-change"]);
 
-    const res = await fetch(base + "/api/repo/current", {
-      headers: { "X-Repo-Root": opened.root },
-    });
+    const res = await call("currentRepo", opened.root);
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({
+    expect(res.body).toMatchObject({
       repo: { root: opened.root, branch: "outside-change", head: null },
     });
   });
 });
 
-describe("POST /commit", () => {
+describe("commit", () => {
   it("refreshes an unborn repository so its first commit is immediately listed", async () => {
     const opened = registerRepo(await openRepo(TMP));
     expect(opened.head).toBeNull();
     await fs.writeFile(path.join(TMP, "first.txt"), "first\n", "utf8");
     await runGit(TMP, ["add", "--", "first.txt"]);
 
-    const committed = await fetch(base + "/api/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
-      body: JSON.stringify({ title: "first commit", description: "first body", amend: false }),
+    const committed = await call("commit", opened.root, {
+      title: "first commit",
+      description: "first body",
+      amend: false,
     });
     expect(committed.status).toBe(200);
-    const result = await committed.json() as {
+    const result = committed.body as {
       hash: string;
       repo: { head: string | null };
     };
     expect(result.repo.head).toBe(result.hash);
 
-    const listed = await fetch(base + "/api/commits?skip=0&limit=10", {
-      headers: { "X-Repo-Root": opened.root },
-    });
+    const listed = await call("commits", opened.root, { skip: 0, limit: 10 });
     expect(listed.status).toBe(200);
-    await expect(listed.json()).resolves.toMatchObject({
+    expect(listed.body).toMatchObject({
       commits: [{ hash: result.hash, subject: "first commit", body: "first body" }],
       hasMore: false,
     });
@@ -92,23 +85,17 @@ describe("POST /commit", () => {
     const original = opened.head;
     await runGit(TMP, ["checkout", "--detach", "HEAD"]);
     try {
-      const committed = await fetch(base + "/api/commit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
-        body: JSON.stringify({ title: "detached amendment", amend: true }),
-      });
+      const committed = await call("commit", opened.root, { title: "detached amendment", amend: true });
       expect(committed.status).toBe(200);
-      const result = await committed.json() as { hash: string };
+      const result = committed.body as { hash: string };
       expect(result.hash).not.toBe(original);
       expect(result).toMatchObject({
         repo: { root: opened.root, branch: "HEAD", head: result.hash },
         status: { staged: [], unstaged: [] },
       });
       expect((await runGit(TMP, ["rev-parse", branch])).stdout.trim()).toBe(original);
-      const current = await fetch(base + "/api/repo/current", {
-        headers: { "X-Repo-Root": opened.root },
-      });
-      await expect(current.json()).resolves.toMatchObject({
+      const current = await call("currentRepo", opened.root);
+      expect(current.body).toMatchObject({
         repo: { branch: "HEAD", head: result.hash },
       });
     } finally {
@@ -125,21 +112,15 @@ describe("POST /commit", () => {
       await fs.writeFile(path.join(linkedPath, "first.txt"), "staged version\n", "utf8");
       await runGit(linkedPath, ["add", "--", "first.txt"]);
       await fs.writeFile(path.join(linkedPath, "first.txt"), "unstaged version\n", "utf8");
-      const status = await fetch(base + "/api/status", {
-        headers: { "X-Repo-Root": linked.root },
-      });
+      const status = await call("status", linked.root);
       expect(status.status).toBe(200);
-      await expect(status.json()).resolves.toEqual({
+      expect(status.body).toEqual({
         staged: [{ path: "first.txt", status: "M", staged: true }],
         unstaged: [{ path: "first.txt", status: "M", staged: false }],
       });
-      const committed = await fetch(base + "/api/commit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Repo-Root": linked.root },
-        body: JSON.stringify({ title: "linked staged change" }),
-      });
+      const committed = await call("commit", linked.root, { title: "linked staged change" });
       expect(committed.status).toBe(200);
-      const result = await committed.json() as { hash: string };
+      const result = committed.body as { hash: string };
       expect(result).toMatchObject({
         repo: { root: linked.root, branch: "linked-review", head: result.hash },
         status: { staged: [], unstaged: [{ path: "first.txt", status: "M", staged: false }] },
@@ -156,21 +137,17 @@ describe("POST /commit", () => {
   });
 });
 
-describe("POST /merge", () => {
+describe("merge", () => {
   it("rejects an unknown merge strategy before running git", async () => {
     const opened = registerRepo(await openRepo(TMP));
-    const response = await fetch(base + "/api/merge", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
-      body: JSON.stringify({ branch: "feature", strategy: "squash" }),
-    });
+    const response = await call("merge", opened.root, { branch: "feature", strategy: "squash" });
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "A valid merge strategy is required" });
+    expect(response.body).toEqual({ error: "A valid merge strategy is required" });
   });
 });
 
-describe("POST /repo/prune", () => {
+describe("pruneRepo", () => {
   it("prunes unreachable Git objects, preserves recovery files, and waits for mutations", async () => {
     const opened = registerRepo(await openRepo(TMP));
     const unreachable = (
@@ -188,53 +165,37 @@ describe("POST /repo/prune", () => {
 
     const release = beginRepoMutation(opened.root);
     try {
-      const busy = await fetch(base + "/api/repo/prune", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
-        body: "{}",
-      });
+      const busy = await call("pruneRepo", opened.root);
       expect(busy.status).toBe(409);
-      await expect(busy.json()).resolves.toMatchObject({
+      expect(busy.body).toMatchObject({
         error: expect.stringContaining("other repository operations"),
       });
     } finally {
       release();
     }
 
-    const pruned = await fetch(base + "/api/repo/prune", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
-      body: "{}",
-    });
+    const pruned = await call("pruneRepo", opened.root);
     expect(pruned.status).toBe(200);
-    await expect(pruned.json()).resolves.toEqual({ ok: true });
+    expect(pruned.body).toEqual({ ok: true });
     await expect(runGit(TMP, ["cat-file", "-e", unreachable])).rejects.toThrow();
     await expect(fs.readFile(recoveryFile, "utf8")).resolves.toBe("keep this recovery file\n");
   });
 });
 
 describe("history rewrite mutation reservations", () => {
-  it("releases unmatched mutations and exempts the trailing-slash delete route", async () => {
+  it("refuses unknown routes without reserving the repository and exempts history deletion", async () => {
     const opened = registerRepo(await openRepo(TMP));
-    const unmatched = await fetch(base + "/api/not-a-route", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
-      body: "{}",
-    });
+    const unmatched = await call("not-a-route", opened.root);
     expect(unmatched.status).toBe(404);
 
     const head = (await runGit(TMP, ["rev-parse", "HEAD"])).stdout.trim();
-    const deletion = await fetch(base + "/api/history-files/delete/", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Repo-Root": opened.root },
-      body: JSON.stringify({
-        path: "does-not-exist.txt",
-        expectedHead: head,
-        confirmation: "does-not-exist.txt",
-      }),
+    const deletion = await call("deleteFromHistory", opened.root, {
+      path: "does-not-exist.txt",
+      expectedHead: head,
+      confirmation: "does-not-exist.txt",
     });
     expect(deletion.status).toBe(409);
-    await expect(deletion.json()).resolves.toMatchObject({
+    expect(deletion.body).toMatchObject({
       error: expect.stringContaining("no longer exists in reachable history"),
     });
   });

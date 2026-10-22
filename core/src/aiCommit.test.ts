@@ -3,12 +3,12 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import type { Server } from "node:http";
+import { createServer, type Server } from "node:http";
 import { runGit } from "./git/gitRunner.js";
 import { openRepo } from "./git/repo.js";
 import { registerRepo, unregisterRepo } from "./session.js";
 import { setConfigDir } from "./config.js";
-import { createApp } from "./app.js";
+import { dispatch, errorMessage, errorStatus } from "./api.js";
 import {
   clearAiCommitInfo, collectCommitDiff, generateAiCommitInfo, getAiCommitInfo, setAiCommitInfo,
 } from "./aiCommit.js";
@@ -16,11 +16,9 @@ import { commitParts, type CommitPart } from "./aiCommitChunks.js";
 
 const TMP = path.join(os.tmpdir(), `gitwebui-ai-${randomBytes(6).toString("hex")}`);
 const config = path.join(TMP, "config");
-const realFetch = globalThis.fetch;
 let root: string;
 let server: Server;
 let base: string;
-const headers = { Cookie: "gwui_desktop=ai-test-token", "Content-Type": "application/json" };
 const message = { title: "Add an accurate commit draft", description: "Describe the new behavior.\n\n- Include all relevant changes." };
 const response = (value: unknown = message) => Response.json({
   candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(value) }] } }],
@@ -30,14 +28,31 @@ const chatBody = (value: unknown = message) => ({
 });
 let providerRequest: { authorization?: string; body: Record<string, unknown> } | null = null;
 
+/** Make one call the way the main process does, JSON round-trip included. */
+async function call(route: string, input: Record<string, unknown> = {}, repoRoot = "") {
+  try {
+    const result = await dispatch(route, input, { root: repoRoot, signal: new AbortController().signal });
+    return { status: 200, body: JSON.parse(JSON.stringify(result)) };
+  } catch (e) {
+    return { status: errorStatus(e), body: { error: errorMessage(e) } };
+  }
+}
+
 beforeAll(async () => {
   setConfigDir(config);
-  const app = createApp({ desktopToken: "ai-test-token" });
-  app.post("/compatible/v1/chat/completions", (req, res) => {
-    providerRequest = { authorization: req.headers.authorization, body: req.body };
-    res.json(chatBody());
+  server = createServer((req, res) => {
+    if (req.method !== "POST" || req.url !== "/compatible/v1/chat/completions") {
+      res.writeHead(404).end();
+      return;
+    }
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      providerRequest = { authorization: req.headers.authorization, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) };
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(chatBody()));
+    });
   });
-  server = app.listen(0, "127.0.0.1");
+  server.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const address = server.address();
   base = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
@@ -84,39 +99,32 @@ describe("AI settings and API", () => {
     await setAiCommitInfo("", "gemini-next");
     expect(JSON.parse(await fs.readFile(path.join(config, "ai-commit.json"), "utf8")))
       .toMatchObject({ provider: "google", google: { apiKey: "test-key", model: "gemini-next" } });
-    const saved = await realFetch(base + "/api/ai-commit/settings", { headers });
-    const info = await saved.json();
+    const saved = await call("aiCommitInfo");
+    const info = saved.body;
     expect(info).toMatchObject({ configured: true, model: "gemini-next" });
     expect(JSON.stringify(info)).not.toContain("test-key");
-    const cleared = await realFetch(base + "/api/ai-commit/settings", { method: "DELETE", headers });
-    expect(await cleared.json()).toMatchObject({ configured: false, model: "" });
+    const cleared = await call("clearAiCommitInfo");
+    expect(cleared.body).toMatchObject({ configured: false, model: "" });
     await expect(fs.stat(path.join(config, "ai-commit.json"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("validates settings and requires authentication for every endpoint", async () => {
+  it("validates settings", async () => {
     await expect(setAiCommitInfo("", "gemini-test")).rejects.toMatchObject({ status: 400 });
     await expect(setAiCommitInfo("key", "https://other.example/model")).rejects.toMatchObject({ status: 400 });
     await expect(setAiCommitInfo("key\nheader", "gemini-test")).rejects.toMatchObject({ status: 400 });
-    for (const [url, method] of [["settings", "GET"], ["settings", "POST"], ["settings", "DELETE"], ["generate", "POST"]]) {
-      expect((await realFetch(`${base}/api/ai-commit/${url}`, { method })).status).toBe(401);
-    }
   });
 
   it("routes generation to the requested repo and maps upstream 401 to an application error", async () => {
     await ready();
     const repo = registerRepo(await openRepo(root));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response()));
-    const generated = await realFetch(base + "/api/ai-commit/generate", {
-      method: "POST", headers: { ...headers, "X-Repo-Root": repo.root }, body: "{}",
-    });
+    const generated = await call("generateAiCommitInfo", {}, repo.root);
     expect(generated.status).toBe(200);
-    expect(await generated.json()).toEqual({ ...message, source: "unstaged", chunked: false });
+    expect(generated.body).toEqual({ ...message, source: "unstaged", chunked: false });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: { message: "Invalid key test-key" } }, { status: 401 })));
-    const failed = await realFetch(base + "/api/ai-commit/generate", {
-      method: "POST", headers: { ...headers, "X-Repo-Root": repo.root }, body: "{}",
-    });
+    const failed = await call("generateAiCommitInfo", {}, repo.root);
     expect(failed.status).toBe(502);
-    const error = await failed.text();
+    const error = failed.body.error;
     expect(error).toContain("Google AI Studio (401)");
     expect(error).not.toContain("test-key");
   });
@@ -175,20 +183,15 @@ describe("AI settings and API", () => {
     for (const baseUrl of ["", "not a URL", "file:///tmp/model", "https://user:pass@provider.example/v1", "https://provider.example/v1?key=secret", "https://provider.example/v1#fragment"]) {
       await expect(setAiCommitInfo("key", "model", "openai", baseUrl)).rejects.toMatchObject({ status: 400 });
     }
-    const invalid = await realFetch(base + "/api/ai-commit/settings", {
-      method: "POST", headers, body: JSON.stringify({ provider: "unknown", apiKey: "key", model: "model" }),
-    });
+    const invalid = await call("setAiCommitInfo", { provider: "unknown", apiKey: "key", model: "model" });
     expect(invalid.status).toBe(400);
-    const saved = await realFetch(base + "/api/ai-commit/settings", {
-      method: "POST", headers,
-      body: JSON.stringify({ provider: "openai", apiKey: "key", model: "org/model:latest", baseUrl: "https://provider.example/api/v1/" }),
+    const saved = await call("setAiCommitInfo", {
+      provider: "openai", apiKey: "key", model: "org/model:latest", baseUrl: "https://provider.example/api/v1/",
     });
     expect(saved.status).toBe(200);
-    expect(await saved.json()).toMatchObject({ provider: "openai", model: "org/model:latest", baseUrl: "https://provider.example/api/v1" });
-    const cleared = await realFetch(base + "/api/ai-commit/settings", {
-      method: "DELETE", headers, body: JSON.stringify({ provider: "openai" }),
-    });
-    expect((await cleared.json()).configured).toBe(false);
+    expect(saved.body).toMatchObject({ provider: "openai", model: "org/model:latest", baseUrl: "https://provider.example/api/v1" });
+    const cleared = await call("clearAiCommitInfo", { provider: "openai" });
+    expect(cleared.body.configured).toBe(false);
   });
 });
 

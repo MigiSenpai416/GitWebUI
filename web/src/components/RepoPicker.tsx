@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
-import { examplePath, isDesktop, pickDirectory } from "../desktop";
+import { examplePath, pickDirectory } from "../desktop";
 import { IconCloud, IconFolder, IconPlus } from "./icons";
 import "./RepoPicker.css";
 
@@ -75,11 +75,9 @@ export function RepoPicker() {
             />
             {/* Browsing and pasting are both worth having: a path copied from a
                 terminal is quicker to paste than to navigate to. */}
-            {isDesktop() && (
-              <button className="btn" type="button" onClick={browse} disabled={opening}>
-                Browse…
-              </button>
-            )}
+            <button className="btn" type="button" onClick={browse} disabled={opening}>
+              Browse…
+            </button>
             <button className="btn btn-primary" type="submit" disabled={opening || !path.trim()}>
               {opening ? "Opening…" : "Open"}
             </button>

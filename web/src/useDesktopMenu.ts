@@ -7,13 +7,11 @@ import { desktop, pickDirectory, type MenuCommand } from "./desktop";
  *
  * The menu lives in the main process and knows nothing about the UI, so it
  * sends intents ("open-repo") rather than reaching into state. This is the
- * translation, and it is a no-op in a browser — where there is no menu to
- * listen to.
+ * translation.
  */
 export function useDesktopMenu(): void {
   useEffect(() => {
     const bridge = desktop();
-    if (!bridge) return;
 
     const run = async (command: MenuCommand): Promise<void> => {
       const store = useStore.getState();

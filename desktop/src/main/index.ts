@@ -1,33 +1,31 @@
-import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { app, BrowserWindow, dialog, session, shell } from "electron";
-import { setConfigDir } from "../../../server/src/config.js";
-import { settleTokenWork } from "../../../server/src/github.js";
-import { setOpener } from "../../../server/src/system.js";
-import { killAllCommands, runningCommandCount } from "../../../server/src/terminal.js";
+import { app, BrowserWindow, dialog, shell } from "electron";
+import { setConfigDir } from "../../../core/src/config.js";
+import { settleTokenWork } from "../../../core/src/github.js";
+import { setOpener } from "../../../core/src/system.js";
+import { killAllCommands, runningCommandCount } from "../../../core/src/terminal.js";
+import { abortAllCalls, registerApi } from "./api.js";
 import { beginGitProbe, ensureGitOrPrompt } from "./gitProbe.js";
 import { log } from "./log.js";
 import { APP_VERSION } from "./version.js";
 import { registerIpc } from "./ipc.js";
 import { installMenu } from "./menu.js";
-import { desktopPort, startServer, type StartedServer } from "./server.js";
+import { APP_URL, isAppUrl, registerAppScheme, serveRenderer } from "./protocol.js";
 import { loadWindowState, trackWindowState, WINDOW_MIN_SIZE } from "./windowState.js";
 
 /**
- * GitWebUI as a desktop app.
+ * GitWebUI.
  *
- * The frontend is unchanged: it is still a web app talking to the Express API
- * over HTTP. What changes is that both halves live in this process — the API
- * listens on an ephemeral loopback port, and the window is pointed at it. The
- * page really is served from that server, so every relative `/api/…` request
- * the UI already makes resolves correctly with nothing rewritten.
+ * Two halves in one app. The main process owns everything that touches the
+ * machine — git, the GitHub and AI APIs, the terminal, the config directory —
+ * through core/src/api.ts. The window is the React UI, sandboxed, served from
+ * the private `gitwebui://app` scheme, and it reaches the core only through
+ * the preload's IPC bridge. Nothing listens on a port.
  */
 
 const DEV = process.env.GITWEBUI_DESKTOP_DEV === "1";
 /** Where Vite serves the UI in development, per web/vite.config.ts. */
 const DEV_RENDERER_ORIGIN = "http://localhost:5173";
-/** The port Vite's dev proxy forwards /api to, also per web/vite.config.ts. */
-const DEV_API_PORT = 5174;
 const BACKGROUND = "#0d1117";
 /** The most a quit waits for a GitHub token refresh in flight to reach disk. */
 const TOKEN_SETTLE_TIMEOUT_MS = 3_000;
@@ -42,15 +40,6 @@ const TOKEN_SETTLE_TIMEOUT_MS = 3_000;
  */
 const RENDERER_DIR = path.join(__dirname, "..", "renderer");
 
-
-/**
- * The secret this window presents to the API. New every launch and never
- * written down: a token that outlived the process it belonged to would be a
- * credential lying around for no reason.
- */
-const DESKTOP_TOKEN = randomBytes(32).toString("base64url");
-
-let server: StartedServer | null = null;
 let mainWindow: BrowserWindow | null = null;
 let quitting = false;
 let tokenWorkSettled = false;
@@ -60,15 +49,15 @@ let tokenWorkSettled = false;
 // ---------------------------------------------------------------------------
 
 /**
- * Chromium's caches, cookies, local storage and this app's window state, kept
- * well away from the git config directory.
+ * Chromium's caches, local storage and this app's window state, kept well away
+ * from the git config directory.
  *
  * Both defaults are wrong. Unpackaged, Electron names the directory after the
  * package — `@gitwebui/desktop` — which turns a scope into a stray directory
  * level. Packaged, it would be `%APPDATA%\GitWebUI`, which on a
  * case-insensitive filesystem is the *same directory* as the `%APPDATA%\gitwebui`
- * the server keeps `auth.json` and `github.json` in: Chromium's cache would be
- * emptied on top of the user's credentials, and only on Windows, since
+ * the core keeps `github.json` and the other credentials in: Chromium's cache
+ * would be emptied on top of the user's credentials, and only on Windows, since
  * elsewhere the two names stay distinct.
  *
  * Set before the single-instance lock is taken, because the lock is keyed on
@@ -76,20 +65,23 @@ let tokenWorkSettled = false;
  *
  * `GITWEBUI_USER_DATA_DIR` overrides it, which is what the end-to-end tests use
  * to get a profile of their own. Without that they share this one with the
- * installed app — and since the port is fixed, they would share its origin too,
- * which means reading and overwriting the developer's real open tabs.
+ * installed app, which means reading and overwriting the developer's real open
+ * tabs.
  */
 app.setPath(
   "userData",
   process.env.GITWEBUI_USER_DATA_DIR || path.join(app.getPath("appData"), "gitwebui-desktop"),
 );
 
+// Privileges can only be granted to a scheme before the app is ready.
+registerAppScheme();
+
 // ---------------------------------------------------------------------------
 // Single instance
 // ---------------------------------------------------------------------------
 
-// Two copies would mean two servers and two writers racing on recent.json, and
-// the second window would be the one that "didn't work".
+// Two copies would mean two writers racing on recent.json and the GitHub
+// credentials, and the second window would be the one that "didn't work".
 if (!app.requestSingleInstanceLock()) {
   log.info("another instance already holds the lock — handing over to it");
   app.quit();
@@ -110,16 +102,15 @@ async function main(): Promise<void> {
   installCrashGuards();
   log.info(`starting GitWebUI ${APP_VERSION} (packaged=${app.isPackaged}, dev=${DEV})`);
 
-  // Share the config directory with the headless server rather than using
-  // Electron's userData. The password, GitHub token, commit identity and
-  // recent repositories are then the same whichever way the app is launched,
-  // and there is nothing to migrate for anyone already using it.
+  // Keep the config directory earlier releases used rather than Electron's
+  // userData, so the GitHub token, commit identity, AI settings and recent
+  // repositories carry over with nothing to migrate.
   setConfigDir(null);
 
   // Reveal-in-folder goes through Electron rather than spawning explorer.exe:
   // the desktop app already has a shell integration that handles quoting and
   // odd paths, and it doesn't leave a detached process behind. Registered
-  // before the server starts so no request can arrive ahead of it.
+  // before the API is, so no call can arrive ahead of it.
   setOpener(async (target: string) => {
     await shell.openPath(target);
   });
@@ -131,62 +122,25 @@ async function main(): Promise<void> {
   await app.whenReady();
 
   registerIpc();
+  registerApi();
   installMenu();
 
-  try {
-    server = await startServer({
-      desktopToken: DESKTOP_TOKEN,
-      webDist: DEV ? undefined : RENDERER_DIR,
-      port: DEV ? DEV_API_PORT : undefined,
-    });
-  } catch (error) {
-    fatal("Could not start the GitWebUI server", error);
-    return;
+  if (!DEV) {
+    try {
+      await serveRenderer(RENDERER_DIR);
+    } catch (error) {
+      fatal("Could not load the GitWebUI interface", error);
+      return;
+    }
   }
-  log.info(`serving on ${server.origin} (assets from ${DEV ? "vite" : RENDERER_DIR})`);
-  if (!DEV && server.port !== desktopPort()) {
-    // Worth saying out loud: the port is part of the origin, and the origin is
-    // what the open tabs and the rest of the UI's remembered state are filed
-    // under. On a different port they are still there, just not reachable —
-    // this run will look like a fresh install.
-    log.info(
-      `port ${desktopPort()} was taken, so this run is on ${server.port}. ` +
-        `Open tabs and other saved UI state belong to the usual port and will ` +
-        `come back once it is free.`,
-    );
-  }
+  log.info(`interface from ${DEV ? DEV_RENDERER_ORIGIN : RENDERER_DIR}`);
 
-  await plantSessionCookie();
   mainWindow = await createWindow();
   log.info("window ready");
 
   // Asked only once the window exists, so the dialog has something to attach to
   // and the user is looking at the app when it appears.
   void ensureGitOrPrompt(mainWindow);
-}
-
-/**
- * Hand the window its credential.
- *
- * The token goes in as an HttpOnly cookie rather than, say, a command-line
- * argument: argv is readable by every process on the machine, whereas a cookie
- * in this session is not, and it rides every request — including the terminal's
- * streaming POST — without the frontend knowing it exists.
- */
-async function plantSessionCookie(): Promise<void> {
-  if (!server) return;
-  // In development the page is served by Vite, so the cookie has to belong to
-  // Vite's origin. Chromium treats localhost and 127.0.0.1 as different hosts,
-  // and getting this wrong shows up as a login screen inside the desktop app.
-  const url = DEV ? DEV_RENDERER_ORIGIN : server.origin;
-  await session.defaultSession.cookies.set({
-    url,
-    name: "gwui_desktop",
-    value: DESKTOP_TOKEN,
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-  });
 }
 
 async function createWindow(): Promise<BrowserWindow> {
@@ -231,37 +185,43 @@ async function createWindow(): Promise<BrowserWindow> {
     if (mainWindow === window) mainWindow = null;
   });
 
-  const target = DEV ? DEV_RENDERER_ORIGIN : (server?.origin ?? "");
-  await window.loadURL(target);
+  await window.loadURL(DEV ? DEV_RENDERER_ORIGIN : APP_URL);
   if (DEV) window.webContents.openDevTools({ mode: "detach" });
 
   return window;
 }
 
 /**
- * Keep the window on its own origin.
+ * Keep the window on its own pages.
  *
  * The frontend calls `window.open` to show a created pull request. Left alone
  * that opens a chrome-less Electron window, carrying this app's preload,
  * pointed at github.com — a bad experience and a genuine hole. Navigation is
- * pinned for the same reason: a renderer that wandered off the local origin
+ * pinned for the same reason: a renderer that wandered off the app's own pages
  * would still be a privileged one.
  */
 function hardenNavigation(window: BrowserWindow): void {
-  const allowedOrigin = DEV ? DEV_RENDERER_ORIGIN : (server?.origin ?? "");
-
   window.webContents.setWindowOpenHandler(({ url }) => {
     void openExternally(url);
     return { action: "deny" };
   });
 
   window.webContents.on("will-navigate", (event, url) => {
-    if (url.startsWith(allowedOrigin)) return;
+    if (isOwnPage(url)) return;
     event.preventDefault();
     void openExternally(url);
   });
 
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());
+}
+
+function isOwnPage(url: string): boolean {
+  if (!DEV) return isAppUrl(url);
+  try {
+    return new URL(url).origin === DEV_RENDERER_ORIGIN;
+  } catch {
+    return false;
+  }
 }
 
 async function openExternally(url: string): Promise<void> {
@@ -296,11 +256,9 @@ app.on("before-quit", (event) => {
   const reaped = runningCommandCount();
   killAllCommands();
   log.info(`shutting down (${reaped} terminal command(s) reaped)`);
-  // Deliberately not awaited. Blocking shutdown on a graceful server close made
-  // quitting take seconds whenever a command was running, because a graceful
-  // close waits for the terminal's streaming response to drain.
-  server?.dispose();
-  server = null;
+  // Whatever else is in flight — a log walk, a search, an AI request — has
+  // nobody left to answer. Aborting stops the git processes behind them.
+  abortAllCalls();
   // The one thing worth deferring the quit for: a GitHub token refresh in
   // flight. GitHub retires the old refresh token the moment it answers, so
   // quitting before the new pair reaches disk leaves the stored credentials
@@ -323,12 +281,11 @@ app.on("before-quit", (event) => {
 // ---------------------------------------------------------------------------
 
 /**
- * The server's own `installProcessGuards` is wrong for this process: swallowing
- * an uncaught exception in a CLI leaves a logged message someone may read,
- * while here it leaves a window rendering over a dead backend with no signal at
- * all. Before there is a window to tell, a failure is fatal; afterwards it is
- * reported and the app is left running, because losing unsaved work in the
- * commit box to a background error would be worse than the error.
+ * An uncaught exception here must not be swallowed silently: it would leave a
+ * window rendering over a dead core with no signal at all. Before there is a
+ * window to tell, a failure is fatal; afterwards it is reported and the app is
+ * left running, because losing unsaved work in the commit box to a background
+ * error would be worse than the error.
  */
 function installCrashGuards(): void {
   process.on("uncaughtException", (error) => {

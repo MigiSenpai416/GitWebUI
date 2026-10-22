@@ -37,44 +37,75 @@ import type {
   StatusResult,
   Worktree,
 } from "../types";
+import { desktop, type ApiReply, type RunEvent } from "../desktop";
 
-/** Thrown on a 401 so the store can drop back to the login screen. */
-export class AuthError extends Error {}
+export type { RunEvent };
 
 /**
- * Root of the repo the current tab targets. Sent as `X-Repo-Root` on every
- * request so the server knows which of the open repos to act on. The store
- * updates this whenever the active tab changes.
+ * Root of the repo the current tab targets. Sent with every call so the core
+ * knows which of the open repos to act on. The store updates this whenever the
+ * active tab changes.
  */
 let activeRepoRoot: string | null = null;
 export function setRequestRepoRoot(root: string | null): void {
   activeRepoRoot = root;
 }
 
-async function req<T>(url: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...((init?.headers as Record<string, string>) ?? {}),
-  };
-  if (activeRepoRoot) headers["X-Repo-Root"] = activeRepoRoot;
-  const res = await fetch(url, { ...init, headers });
-  if (!res.ok) {
-    let message = `Request failed (${res.status})`;
-    try {
-      const body = await res.json();
-      if (body?.error) message = body.error;
-    } catch {
-      /* non-JSON error */
-    }
-    if (res.status === 401) throw new AuthError(message);
-    throw new Error(message);
-  }
-  return (await res.json()) as T;
+let lastCallId = 0;
+
+function abortError(): DOMException {
+  return new DOMException("The operation was aborted.", "AbortError");
 }
 
-export interface AuthStatus {
-  configured: boolean;
-  authenticated: boolean;
+/**
+ * Make one call into the core over the desktop bridge.
+ *
+ * Behaves the way the `fetch` it replaced did: a failed call rejects with the
+ * core's message, and aborting `signal` rejects at once with an `AbortError`
+ * while the core is told to stop working on it.
+ */
+function send(
+  route: string,
+  input: Record<string, unknown>,
+  signal: AbortSignal | undefined,
+  onStart?: (id: number) => void,
+): Promise<ApiReply> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  const bridge = desktop();
+  const id = ++lastCallId;
+  onStart?.(id);
+  const reply = bridge.call(id, route, input, activeRepoRoot);
+  if (!signal) return reply;
+  return new Promise<ApiReply>((resolve, reject) => {
+    const onAbort = () => {
+      bridge.cancel(id);
+      reject(abortError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    reply.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function unwrap<T>(reply: ApiReply): T {
+  if (!reply.ok) throw new Error(reply.error || `Request failed (${reply.status})`);
+  return JSON.parse(reply.json) as T;
+}
+
+async function req<T>(
+  route: string,
+  input: Record<string, unknown> = {},
+  signal?: AbortSignal,
+): Promise<T> {
+  return unwrap<T>(await send(route, input, signal));
 }
 
 export interface ShellInfo {
@@ -84,93 +115,63 @@ export interface ShellInfo {
   kind: "bash" | "zsh" | "sh" | "powershell" | "pwsh";
 }
 
-/** One line of the terminal's output stream. */
-export interface RunEvent {
-  t: "out" | "err" | "exit";
-  d?: string;
-  code?: number | null;
-  cwd?: string;
-  killed?: boolean;
-}
+/**
+ * How long to wait for a command's exit event after the call itself has
+ * settled. Events and the reply travel separately, so the reply can overtake
+ * the last of the output; this is the bound on waiting for it to catch up.
+ */
+const EXIT_EVENT_GRACE_MS = 1_000;
 
 /**
  * Run a command, handing each chunk to `onEvent` as it arrives rather than
- * waiting for the whole response. Aborting `signal` closes the request, which
- * is what stops the command server-side.
+ * waiting for it to finish. Aborting `signal` is what stops the command.
  */
 export async function runTerminalCommand(
   body: { command: string; cwd: string; shell: string },
   onEvent: (e: RunEvent) => void,
   signal: AbortSignal,
 ): Promise<void> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (activeRepoRoot) headers["X-Repo-Root"] = activeRepoRoot;
-  const res = await fetch("/api/terminal/run", {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal,
+  let callId: number | null = null;
+  let exited = false;
+  let notifyExit = () => {};
+  const exitSeen = new Promise<void>((resolve) => {
+    notifyExit = resolve;
   });
-  if (!res.ok || !res.body) {
-    let message = `Request failed (${res.status})`;
-    try {
-      const parsed = await res.json();
-      if (parsed?.error) message = parsed.error;
-    } catch {
-      /* non-JSON error */
+  const unsubscribe = desktop().onTerminalEvent((id, event) => {
+    if (id !== callId || exited) return;
+    if (event.t === "exit") {
+      exited = true;
+      notifyExit();
     }
-    if (res.status === 401) throw new AuthError(message);
-    throw new Error(message);
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    // Events are newline-delimited JSON; a chunk can split one in half.
-    let nl: number;
-    while ((nl = buffer.indexOf("\n")) !== -1) {
-      const line = buffer.slice(0, nl);
-      buffer = buffer.slice(nl + 1);
-      if (line.trim()) onEvent(JSON.parse(line) as RunEvent);
+    onEvent(event);
+  });
+  try {
+    const reply = await send("terminalRun", body, signal, (id) => {
+      callId = id;
+    });
+    unwrap<unknown>(reply);
+    if (!exited) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        exitSeen,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, EXIT_EVENT_GRACE_MS);
+        }),
+      ]);
+      clearTimeout(timer);
     }
+  } finally {
+    unsubscribe();
   }
 }
 
 export const api = {
-  authStatus: () => req<AuthStatus>("/api/auth/status"),
-  authSetup: (password: string, remember: boolean) =>
-    req<{ ok: true }>("/api/auth/setup", {
-      method: "POST",
-      body: JSON.stringify({ password, remember }),
-    }),
-  authLogin: (password: string, remember: boolean) =>
-    req<{ ok: true }>("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ password, remember }),
-    }),
-  authLogout: () => req<{ ok: true }>("/api/auth/logout", { method: "POST", body: "{}" }),
-
-  currentRepo: () => req<{ repo: RepoInfo | null }>("/api/repo/current"),
-  recent: () => req<{ recent: string[] }>("/api/repo/recent"),
-  openRepo: (path: string) =>
-    req<{ repo: RepoInfo }>("/api/repo/open", {
-      method: "POST",
-      body: JSON.stringify({ path }),
-    }),
-  cloneRepo: (dir: string, url: string) =>
-    req<{ repo: RepoInfo }>("/api/repo/clone", {
-      method: "POST",
-      body: JSON.stringify({ dir, url }),
-    }),
+  currentRepo: () => req<{ repo: RepoInfo | null }>("currentRepo"),
+  recent: () => req<{ recent: string[] }>("recent"),
+  openRepo: (path: string) => req<{ repo: RepoInfo }>("openRepo", { path }),
+  cloneRepo: (dir: string, url: string) => req<{ repo: RepoInfo }>("cloneRepo", { dir, url }),
   createRepo: (dir: string, name: string, branch: string) =>
-    req<{ repo: RepoInfo }>("/api/repo/create", {
-      method: "POST",
-      body: JSON.stringify({ dir, name, branch }),
-    }),
+    req<{ repo: RepoInfo }>("createRepo", { dir, name, branch }),
   createGitHubRepoNew: (opts: {
     name: string;
     description: string;
@@ -182,198 +183,93 @@ export const api = {
     req<{
       created: { fullName: string; cloneUrl: string; htmlUrl: string };
       repo: RepoInfo | null;
-    }>("/api/repo/create-github", { method: "POST", body: JSON.stringify(opts) }),
-  closeRepo: (root: string) =>
-    req<{ ok: true }>("/api/repo/close", {
-      method: "POST",
-      body: JSON.stringify({ root }),
-    }),
+    }>("createGitHubRepoNew", opts),
+  closeRepo: (root: string) => req<{ ok: true }>("closeRepo", { root }),
 
-  commits: (skip: number, limit: number, revs: string[] = []) => {
-    const params = new URLSearchParams({ skip: String(skip), limit: String(limit) });
-    if (revs.length > 0) params.set("revs", revs.join(","));
-    return req<{ commits: Commit[]; hasMore: boolean }>(`/api/commits?${params.toString()}`);
-  },
+  commits: (skip: number, limit: number, revs: string[] = []) =>
+    req<{ commits: Commit[]; hasMore: boolean }>("commits", { skip, limit, revs }),
   commitFiles: (hash: string, signal?: AbortSignal) =>
-    req<{ files: CommitFile[] }>(`/api/commits/${hash}/files`, { signal }),
-  mainHistory: (signal?: AbortSignal) => req<{ hashes: string[] }>("/api/commits/main-history", { signal }),
+    req<{ files: CommitFile[] }>("commitFiles", { hash }, signal),
+  mainHistory: (signal?: AbortSignal) => req<{ hashes: string[] }>("mainHistory", {}, signal),
   searchCommits: (query: string, signal?: AbortSignal) =>
     req<{ rows: Pick<Commit, "hash" | "parents">[]; matches: number[] }>(
-      `/api/commits/search?${new URLSearchParams({ q: query })}`, { signal },
+      "searchCommits", { q: query }, signal,
     ),
   commitsByHash: (hashes: string[], signal?: AbortSignal) =>
-    req<{ commits: Commit[] }>(`/api/commits/batch?${new URLSearchParams({ hashes: hashes.join(",") })}`, { signal }),
+    req<{ commits: Commit[] }>("commitsByHash", { hashes }, signal),
 
-  status: () => req<StatusResult>("/api/status"),
+  status: () => req<StatusResult>("status"),
 
-  branches: () => req<{ branches: Branch[] }>("/api/branches"),
-  remoteBranches: () => req<{ branches: RemoteBranch[] }>("/api/remote-branches"),
+  branches: () => req<{ branches: Branch[] }>("branches"),
+  remoteBranches: () => req<{ branches: RemoteBranch[] }>("remoteBranches"),
 
-  worktrees: () => req<{ worktrees: Worktree[] }>("/api/worktrees"),
+  worktrees: () => req<{ worktrees: Worktree[] }>("worktrees"),
   addWorktree: (path: string, ref: string, branch: string) =>
-    req<{ worktrees: Worktree[] }>("/api/worktree/add", {
-      method: "POST",
-      body: JSON.stringify({ path, ref, branch }),
-    }),
-  removeWorktree: (path: string) =>
-    req<{ worktrees: Worktree[] }>("/api/worktree/remove", {
-      method: "POST",
-      body: JSON.stringify({ path }),
-    }),
-  pruneWorktrees: () =>
-    req<{ worktrees: Worktree[] }>("/api/worktree/prune", { method: "POST", body: "{}" }),
-  revealWorktree: (path: string) =>
-    req<{ ok: true }>("/api/worktree/reveal", { method: "POST", body: JSON.stringify({ path }) }),
-  checkout: (branch: string) =>
-    req<{ repo: RepoInfo }>("/api/checkout", {
-      method: "POST",
-      body: JSON.stringify({ branch }),
-    }),
+    req<{ worktrees: Worktree[] }>("addWorktree", { path, ref, branch }),
+  removeWorktree: (path: string) => req<{ worktrees: Worktree[] }>("removeWorktree", { path }),
+  pruneWorktrees: () => req<{ worktrees: Worktree[] }>("pruneWorktrees"),
+  revealWorktree: (path: string) => req<{ ok: true }>("revealWorktree", { path }),
+  checkout: (branch: string) => req<{ repo: RepoInfo }>("checkout", { branch }),
   checkoutRemote: (remote: string, local: string) =>
-    req<{ repo: RepoInfo }>("/api/checkout-remote", {
-      method: "POST",
-      body: JSON.stringify({ remote, local }),
-    }),
-  createBranch: (name: string, hash: string) =>
-    req<{ repo: RepoInfo }>("/api/branch/create", {
-      method: "POST",
-      body: JSON.stringify({ name, hash }),
-    }),
-  deleteBranch: (name: string) =>
-    req<{ branches: Branch[] }>("/api/branch/delete", {
-      method: "POST",
-      body: JSON.stringify({ name }),
-    }),
+    req<{ repo: RepoInfo }>("checkoutRemote", { remote, local }),
+  createBranch: (name: string, hash: string) => req<{ repo: RepoInfo }>("createBranch", { name, hash }),
+  deleteBranch: (name: string) => req<{ branches: Branch[] }>("deleteBranch", { name }),
   deleteRemoteBranch: (remote: string, branch: string) =>
-    req<{ branches: RemoteBranch[] }>("/api/remote-branch/delete", {
-      method: "POST",
-      body: JSON.stringify({ remote, branch }),
-    }),
+    req<{ branches: RemoteBranch[] }>("deleteRemoteBranch", { remote, branch }),
   reset: (hash: string, mode: "hard" | "soft" | "mixed") =>
-    req<{ repo: RepoInfo }>("/api/reset", {
-      method: "POST",
-      body: JSON.stringify({ hash, mode }),
-    }),
+    req<{ repo: RepoInfo }>("reset", { hash, mode }),
   revert: (hash: string) =>
-    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("/api/revert", {
-      method: "POST",
-      body: JSON.stringify({ hash }),
-    }),
-  discardAll: () =>
-    req<StatusResult>("/api/discard", { method: "POST", body: JSON.stringify({}) }),
-  discardPaths: (paths: string[]) =>
-    req<StatusResult>("/api/discard", { method: "POST", body: JSON.stringify({ paths }) }),
-  deleteFile: (path: string) =>
-    req<StatusResult>("/api/file/delete", { method: "POST", body: JSON.stringify({ path }) }),
-  historyFiles: (includeHistory = false) =>
-    req<HeadFileTree>(`/api/history-files${includeHistory ? "?includeHistory=true" : ""}`),
-  historyFileContent: (path: string, head: string) => {
-    const params = new URLSearchParams({ path, head });
-    return req<HeadFileContent>(`/api/history-files/content?${params.toString()}`);
-  },
+    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("revert", { hash }),
+  discardAll: () => req<StatusResult>("discard"),
+  discardPaths: (paths: string[]) => req<StatusResult>("discard", { paths }),
+  deleteFile: (path: string) => req<StatusResult>("deleteFile", { path }),
+  historyFiles: (includeHistory = false) => req<HeadFileTree>("historyFiles", { includeHistory }),
+  historyFileContent: (path: string, head: string) =>
+    req<HeadFileContent>("historyFileContent", { path, head }),
   deleteFromHistory: (paths: string[], expectedHead: string, confirmation: string, recursive: boolean) =>
-    req<HistoryDeleteResult>("/api/history-files/delete", {
-      method: "POST",
-      body: JSON.stringify({ paths, expectedHead, confirmation, recursive }),
-    }),
-  pruneRepo: () => req<{ ok: true }>("/api/repo/prune", { method: "POST", body: "{}" }),
-  reveal: (path: string) =>
-    req<{ ok: true }>("/api/reveal", { method: "POST", body: JSON.stringify({ path }) }),
+    req<HistoryDeleteResult>("deleteFromHistory", { paths, expectedHead, confirmation, recursive }),
+  pruneRepo: () => req<{ ok: true }>("pruneRepo"),
+  reveal: (path: string) => req<{ ok: true }>("reveal", { path }),
 
-  diff: (source: DiffSource, path: string, hash?: string) => {
-    const params = new URLSearchParams({ source, path });
-    if (hash) params.set("hash", hash);
-    return req<DiffResult>(`/api/diff?${params.toString()}`);
-  },
-  blame: (path: string, revision?: string) => {
-    const params = new URLSearchParams({ path });
-    if (revision) params.set("revision", revision);
-    return req<BlameResult>(`/api/blame?${params.toString()}`);
-  },
-  fileHistory: (path: string, skip: number, limit: number, query = "") => {
-    const params = new URLSearchParams({
-      path,
-      skip: String(skip),
-      limit: String(limit),
-    });
-    if (query) params.set("query", query);
-    return req<FileHistoryResult>(`/api/file-history?${params.toString()}`);
-  },
+  diff: (source: DiffSource, path: string, hash?: string) =>
+    req<DiffResult>("diff", { source, path, hash }),
+  blame: (path: string, revision?: string) => req<BlameResult>("blame", { path, revision }),
+  fileHistory: (path: string, skip: number, limit: number, query = "") =>
+    req<FileHistoryResult>("fileHistory", { path, skip, limit, query }),
 
-  stage: (paths: string[]) =>
-    req<StatusResult>("/api/stage", {
-      method: "POST",
-      body: JSON.stringify({ paths }),
-    }),
-  stageAll: () =>
-    req<StatusResult>("/api/stage", {
-      method: "POST",
-      body: JSON.stringify({ all: true }),
-    }),
-  unstage: (paths: string[]) =>
-    req<StatusResult>("/api/unstage", {
-      method: "POST",
-      body: JSON.stringify({ paths }),
-    }),
+  stage: (paths: string[]) => req<StatusResult>("stage", { paths }),
+  stageAll: () => req<StatusResult>("stage", { all: true }),
+  unstage: (paths: string[]) => req<StatusResult>("unstage", { paths }),
   commit: (title: string, description: string, amend: boolean) =>
-    req<{ hash: string; status: StatusResult; repo: RepoInfo | null }>("/api/commit", {
-      method: "POST",
-      body: JSON.stringify({ title, description, amend }),
-    }),
+    req<{ hash: string; status: StatusResult; repo: RepoInfo | null }>("commit", { title, description, amend }),
 
   // AI commit information
-  aiCommitInfo: (signal?: AbortSignal) => req<AiCommitInfo>("/api/ai-commit/settings", { signal }),
+  aiCommitInfo: (signal?: AbortSignal) => req<AiCommitInfo>("aiCommitInfo", {}, signal),
   setAiCommitInfo: (apiKey: string, model: string, provider: AiCommitProvider, baseUrl: string) =>
-    req<AiCommitInfo>("/api/ai-commit/settings", { method: "POST", body: JSON.stringify({ apiKey, model, provider, baseUrl }) }),
-  clearAiCommitInfo: (provider: AiCommitProvider) =>
-    req<AiCommitInfo>("/api/ai-commit/settings", { method: "DELETE", body: JSON.stringify({ provider }) }),
+    req<AiCommitInfo>("setAiCommitInfo", { apiKey, model, provider, baseUrl }),
+  clearAiCommitInfo: (provider: AiCommitProvider) => req<AiCommitInfo>("clearAiCommitInfo", { provider }),
   generateAiCommitInfo: (amend: boolean, signal: AbortSignal) =>
-    req<AiCommitMessage>("/api/ai-commit/generate", { method: "POST", body: JSON.stringify({ amend }), signal }),
+    req<AiCommitMessage>("generateAiCommitInfo", { amend }, signal),
 
   // Commit identity
-  identity: () => req<IdentityInfo>("/api/identity"),
-  setIdentity: (name: string, email: string) =>
-    req<IdentityInfo>("/api/identity", { method: "POST", body: JSON.stringify({ name, email }) }),
-  clearIdentity: () => req<IdentityInfo>("/api/identity", { method: "DELETE", body: "{}" }),
+  identity: () => req<IdentityInfo>("identity"),
+  setIdentity: (name: string, email: string) => req<IdentityInfo>("setIdentity", { name, email }),
+  clearIdentity: () => req<IdentityInfo>("clearIdentity"),
 
   // GitHub account (OAuth or Personal Access Token)
-  githubStatus: () => req<GitHubStatus>("/api/github/status"),
+  githubStatus: () => req<GitHubStatus>("githubStatus"),
   githubSetToken: (token: string) =>
-    req<{ configured: true; authMethod: "pat"; user: GitHubUser }>("/api/github/token", {
-      method: "POST",
-      body: JSON.stringify({ token }),
-    }),
-  githubRevoke: () =>
-    req<{ configured: false; authMethod: null; user: null }>("/api/github/token", {
-      method: "DELETE",
-      body: "{}",
-    }),
-  githubOAuthStart: () =>
-    req<GitHubOAuthDeviceFlow>("/api/github/oauth/device", { method: "POST", body: "{}" }),
-  githubOAuthPoll: (flowId: string) =>
-    req<GitHubOAuthPoll>("/api/github/oauth/poll", {
-      method: "POST",
-      body: JSON.stringify({ flowId }),
-    }),
-  githubOAuthCancel: (flowId: string) =>
-    req<{ ok: true }>("/api/github/oauth/device", {
-      method: "DELETE",
-      body: JSON.stringify({ flowId }),
-    }),
-  githubRepos: () => req<{ repos: GitHubRepo[] }>("/api/github/repos"),
+    req<{ configured: true; authMethod: "pat"; user: GitHubUser }>("githubSetToken", { token }),
+  githubRevoke: () => req<{ configured: false; authMethod: null; user: null }>("githubRevoke"),
+  githubOAuthStart: () => req<GitHubOAuthDeviceFlow>("githubOAuthStart"),
+  githubOAuthPoll: (flowId: string) => req<GitHubOAuthPoll>("githubOAuthPoll", { flowId }),
+  githubOAuthCancel: (flowId: string) => req<{ ok: true }>("githubOAuthCancel", { flowId }),
+  githubRepos: () => req<{ repos: GitHubRepo[] }>("githubRepos"),
 
   // Remotes
-  remotes: () => req<{ remotes: Remote[] }>("/api/remotes"),
-  addRemote: (name: string, url: string) =>
-    req<{ remotes: Remote[] }>("/api/remote/add", {
-      method: "POST",
-      body: JSON.stringify({ name, url }),
-    }),
-  removeRemote: (name: string) =>
-    req<{ remotes: Remote[] }>("/api/remote/remove", {
-      method: "POST",
-      body: JSON.stringify({ name }),
-    }),
+  remotes: () => req<{ remotes: Remote[] }>("remotes"),
+  addRemote: (name: string, url: string) => req<{ remotes: Remote[] }>("addRemote", { name, url }),
+  removeRemote: (name: string) => req<{ remotes: Remote[] }>("removeRemote", { name }),
   createGitHubRepo: (opts: {
     name: string;
     description: string;
@@ -381,31 +277,30 @@ export const api = {
     remoteName: string;
   }) =>
     req<{ repo: { fullName: string; cloneUrl: string; htmlUrl: string }; remotes: Remote[] }>(
-      "/api/github/create-repo",
-      { method: "POST", body: JSON.stringify(opts) },
+      "createGitHubRepo",
+      opts,
     ),
 
   // Pull requests (GitHub)
-  prContext: (signal?: AbortSignal, branch?: string) => req<PrContext>(`/api/pr/context${branch ? `?branch=${encodeURIComponent(branch)}` : ""}`, { signal }),
+  prContext: (signal?: AbortSignal, branch?: string) => req<PrContext>("prContext", { branch }, signal),
   prList: (repo: string, state: string, page: number, signal?: AbortSignal) =>
-    req<{ items: PullRequestSummary[]; hasMore: boolean }>(`/api/pr/list?repo=${encodeURIComponent(repo)}&state=${state}&page=${page}`, { signal }),
+    req<{ items: PullRequestSummary[]; hasMore: boolean }>("prList", { repo, state, page }, signal),
   prDetails: (repo: string, number: number, signal?: AbortSignal) =>
-    req<PullRequestDetails>(`/api/pr/details?repo=${encodeURIComponent(repo)}&number=${number}`, { signal }),
+    req<PullRequestDetails>("prDetails", { repo, number }, signal),
   prActivity: (repo: string, number: number, kind: string, page: number, signal?: AbortSignal) =>
-    req<{ items: PrActivity[]; hasMore: boolean; sha?: string; warning?: string }>(`/api/pr/activity?repo=${encodeURIComponent(repo)}&number=${number}&kind=${kind}&page=${page}`, { signal }),
+    req<{ items: PrActivity[]; hasMore: boolean; sha?: string; warning?: string }>(
+      "prActivity", { repo, number, kind, page }, signal,
+    ),
   prChecks: (repo: string, number: number, page: number, signal?: AbortSignal) =>
-    req<PrChecks>(`/api/pr/checks?repo=${encodeURIComponent(repo)}&number=${number}&page=${page}`, { signal }),
+    req<PrChecks>("prChecks", { repo, number, page }, signal),
   prAction: (repo: string, number: number, input: Record<string, unknown>) =>
-    req<{ ok: boolean }>("/api/pr/action", { method: "POST", body: JSON.stringify({ ...input, repo, number }) }),
+    req<{ ok: boolean }>("prAction", { ...input, repo, number }),
   prReply: (repo: string, number: number, commentId: number, body: string) =>
-    req<{ ok: boolean; reply: PrActivity }>("/api/pr/action", { method: "POST", body: JSON.stringify({ action: "reply", repo, number, commentId, body }) }),
-  prBranches: (repo: string) =>
-    req<{ branches: string[] }>(`/api/pr/branches?repo=${encodeURIComponent(repo)}`),
-  prMeta: (repo: string) => req<PrMeta>(`/api/pr/meta?repo=${encodeURIComponent(repo)}`),
-  prTemplate: (path: string) =>
-    req<{ body: string }>(`/api/pr/template?path=${encodeURIComponent(path)}`),
-  prCreate: (input: CreatePrInput) =>
-    req<CreatedPr>("/api/pr/create", { method: "POST", body: JSON.stringify(input) }),
+    req<{ ok: boolean; reply: PrActivity }>("prAction", { action: "reply", repo, number, commentId, body }),
+  prBranches: (repo: string) => req<{ branches: string[] }>("prBranches", { repo }),
+  prMeta: (repo: string) => req<PrMeta>("prMeta", { repo }),
+  prTemplate: (path: string) => req<{ body: string }>("prTemplate", { path }),
+  prCreate: (input: CreatePrInput) => req<CreatedPr>("prCreate", { ...input }),
 
   // Push / Pull
   push: (force: PushForce | null = null) =>
@@ -417,76 +312,39 @@ export const api = {
       remote?: string;
       remoteBranch?: string;
       branches: Branch[];
-    }>("/api/push", { method: "POST", body: JSON.stringify({ force: force ?? false }) }),
+    }>("push", { force: force ?? false }),
   pull: (remote?: string, branch?: string) =>
-    req<{ repo: RepoInfo | null; output: string; merge: MergeState; status: StatusResult }>("/api/pull", {
-      method: "POST",
-      body: JSON.stringify({ remote, branch }),
-    }),
+    req<{ repo: RepoInfo | null; output: string; merge: MergeState; status: StatusResult }>(
+      "pull", { remote, branch },
+    ),
 
   // Checkout a commit (detached HEAD) / cherry-pick
   checkoutCommit: (hash: string) =>
-    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("/api/checkout-commit", {
-      method: "POST",
-      body: JSON.stringify({ hash }),
-    }),
+    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("checkoutCommit", { hash }),
   cherryPick: (hash: string, noCommit: boolean) =>
-    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("/api/cherry-pick", {
-      method: "POST",
-      body: JSON.stringify({ hash, noCommit }),
-    }),
+    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("cherryPick", { hash, noCommit }),
 
   // Merge / conflict resolution
   merge: (branch: string, strategy: MergeStrategy) =>
-    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("/api/merge", {
-      method: "POST",
-      body: JSON.stringify({ branch, strategy }),
-    }),
-  mergeState: () => req<{ merge: MergeState }>("/api/merge/state"),
-  conflictFile: (path: string) =>
-    req<ConflictFileData>(`/api/conflict?path=${encodeURIComponent(path)}`),
+    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("merge", { branch, strategy }),
+  mergeState: () => req<{ merge: MergeState }>("mergeState"),
+  conflictFile: (path: string) => req<ConflictFileData>("conflictFile", { path }),
   resolveConflict: (path: string, content: string, resolved: boolean) =>
-    req<{ merge: MergeState; status: StatusResult }>("/api/conflict/resolve", {
-      method: "POST",
-      body: JSON.stringify({ path, content, resolved }),
-    }),
-  resolveAll: () =>
-    req<{ merge: MergeState; status: StatusResult }>("/api/merge/resolve-all", {
-      method: "POST",
-      body: "{}",
-    }),
+    req<{ merge: MergeState; status: StatusResult }>("resolveConflict", { path, content, resolved }),
+  resolveAll: () => req<{ merge: MergeState; status: StatusResult }>("resolveAll"),
   abortMerge: () =>
-    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("/api/merge/abort", {
-      method: "POST",
-      body: "{}",
-    }),
+    req<{ repo: RepoInfo | null; merge: MergeState; status: StatusResult }>("abortMerge"),
 
   // Stash
-  stashes: () => req<{ stashes: StashEntry[] }>("/api/stashes"),
+  stashes: () => req<{ stashes: StashEntry[] }>("stashes"),
   stashPush: () =>
-    req<{ stashed: boolean; output: string; status: StatusResult; stashes: StashEntry[] }>(
-      "/api/stash/push",
-      { method: "POST", body: "{}" },
-    ),
+    req<{ stashed: boolean; output: string; status: StatusResult; stashes: StashEntry[] }>("stashPush"),
   stashPop: (index: number) =>
-    req<{ output: string; status: StatusResult; stashes: StashEntry[] }>("/api/stash/pop", {
-      method: "POST",
-      body: JSON.stringify({ index }),
-    }),
+    req<{ output: string; status: StatusResult; stashes: StashEntry[] }>("stashPop", { index }),
   stashApply: (index: number) =>
-    req<{ output: string; status: StatusResult; stashes: StashEntry[] }>("/api/stash/apply", {
-      method: "POST",
-      body: JSON.stringify({ index }),
-    }),
-  stashDrop: (index: number) =>
-    req<{ stashes: StashEntry[] }>("/api/stash/drop", {
-      method: "POST",
-      body: JSON.stringify({ index }),
-    }),
-  terminalShells: () => req<{ shells: ShellInfo[]; cwd: string }>("/api/terminal/shells"),
+    req<{ output: string; status: StatusResult; stashes: StashEntry[] }>("stashApply", { index }),
+  stashDrop: (index: number) => req<{ stashes: StashEntry[] }>("stashDrop", { index }),
+  terminalShells: () => req<{ shells: ShellInfo[]; cwd: string }>("terminalShells"),
   stashNote: (hash: string, title: string, description: string) =>
-    req<{ stashes: StashEntry[] }>("/api/stash/note", {
-      method: "POST",
-      body: JSON.stringify({ hash, title, description }),
-    }),
+    req<{ stashes: StashEntry[] }>("stashNote", { hash, title, description }),
 };

@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 
 /**
- * Directory where GitWebUI persists its state (recent repos, auth, GitHub
- * token, commit identity). Resolved per-OS so it works the same for a
- * `node`/`tsx` run, a compiled binary, and the desktop app.
+ * Directory where GitWebUI persists its state (recent repos, GitHub token,
+ * commit identity, AI settings). Resolved per-OS, and kept where earlier
+ * releases kept it so upgrading leaves every credential in place.
  *
  * Resolved *on every call* rather than once at import time. An embedder — the
  * Electron main process — has to be able to choose the directory before

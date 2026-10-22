@@ -1,6 +1,13 @@
 import { test, expect } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { cleanupApp, launchApp, makeRepo, removeRepo, type TestApp } from "./helpers";
+import { callLog, cleanupApp, launchApp, makeRepo, removeRepo, stubRoute, type TestApp } from "./helpers";
+
+interface PerfTestState {
+  /** Row count of each search answered, in order. */
+  searchRows: number[];
+  /** Each main-history lookup answered: how long the core took, and its answer. */
+  pins: Array<{ ms: number; hashes: string[] }>;
+}
 
 for (const { count, lanes } of [{ count: 10000, lanes: 8 }, { count: 50000, lanes: 8 }, { count: 10000, lanes: 40 }]) {
   test(`main pinning stays responsive with ${count} commits and ${lanes} feature paths`, async () => {
@@ -35,9 +42,22 @@ for (const { count, lanes } of [{ count: 10000, lanes: 8 }, { count: 50000, lane
       await window.locator(".picker-form button[type=submit]").click();
       await expect(window.locator(".commit-row").first()).toBeVisible();
       await expect(window.locator(".sb-branch-checkout")).toHaveCount(lanes + 2);
-      let pinRequests = 0;
-      window.on("request", (request) => {
-        if (new URL(request.url()).pathname === "/api/commits/main-history") pinRequests += 1;
+      const app = started.app;
+      const pinsBefore = (await callLog(app, "mainHistory")).length;
+      const pinRequests = async () => (await callLog(app, "mainHistory")).length - pinsBefore;
+      await app.evaluate(() => {
+        (globalThis as unknown as { perfTest: PerfTestState }).perfTest = { searchRows: [], pins: [] };
+      });
+      await stubRoute(app, "searchCommits", async (_input, proceed) => {
+        const reply = await proceed() as { rows: unknown[] };
+        (globalThis as unknown as { perfTest: PerfTestState }).perfTest.searchRows.push(reply.rows.length);
+        return reply;
+      });
+      await stubRoute(app, "mainHistory", async (_input, proceed) => {
+        const start = performance.now();
+        const reply = await proceed() as { hashes: string[] };
+        (globalThis as unknown as { perfTest: PerfTestState }).perfTest.pins.push({ ms: performance.now() - start, hashes: reply.hashes });
+        return reply;
       });
       const cdp = await window.context().newCDPSession(window);
       await cdp.send("Performance.enable");
@@ -46,22 +66,20 @@ for (const { count, lanes } of [{ count: 10000, lanes: 8 }, { count: 50000, lane
         return Object.fromEntries(result.metrics.map((metric: { name: string; value: number }) => [metric.name, metric.value]));
       };
       await window.getByRole("button", { name: "Search", exact: true }).click();
-      const searchResponse = window.waitForResponse((response) => new URL(response.url()).pathname === "/api/commits/search");
       await window.getByRole("textbox", { name: "Find in commits" }).fill(`History ${count + 1} work`);
-      const search = await (await searchResponse).json();
-      expect(search.rows).toHaveLength(count + 2);
+      await expect.poll(() => app.evaluate(() => (globalThis as unknown as { perfTest: PerfTestState }).perfTest.searchRows.length)).toBeGreaterThan(0);
+      expect(await app.evaluate(() => (globalThis as unknown as { perfTest: PerfTestState }).perfTest.searchRows[0])).toBe(count + 2);
       await expect(window.locator(".commit-find-count")).toHaveText("1 of 1");
       await expect(window.locator(".commit-placeholder")).toHaveCount(0);
       const before = await metrics();
-      const pinResponse = window.waitForResponse((response) => new URL(response.url()).pathname === "/api/commits/main-history");
       const coldStart = performance.now();
       await window.locator(".graph-mode-toggle").click();
       await expect(window.locator(`.full-graph-node[data-commit-hash="${tip}"]`)).toHaveAttribute("data-node-lane", "1");
       const coldMs = performance.now() - coldStart;
-      const response = await pinResponse;
-      await response.finished();
-      const pinLookupMs = response.request().timing().responseEnd;
-      const pinned = new Set<string>((await response.json()).hashes);
+      await expect.poll(() => app.evaluate(() => (globalThis as unknown as { perfTest: PerfTestState }).perfTest.pins.length)).toBeGreaterThan(0);
+      const pin = await app.evaluate(() => (globalThis as unknown as { perfTest: PerfTestState }).perfTest.pins[0]);
+      const pinLookupMs = pin.ms;
+      const pinned = new Set<string>(pin.hashes);
       expect(pinned.size).toBe(count / 5 + 1);
       const scrollStart = performance.now();
       for (let index = 0; index < 30; index += 1) {
@@ -88,15 +106,15 @@ for (const { count, lanes } of [{ count: 10000, lanes: 8 }, { count: 50000, lane
       const cachedMs = performance.now() - cachedStart;
       await expect(window.getByText("Loading commit graph…", { exact: true })).toHaveCount(0);
       const idleBefore = await metrics();
-      const idleRequests = pinRequests;
+      const idleRequests = await pinRequests();
       await window.waitForTimeout(1000);
       const after = await metrics();
-      expect(pinRequests).toBe(idleRequests);
-      expect(pinRequests).toBe(2);
+      expect(await pinRequests()).toBe(idleRequests);
+      expect(await pinRequests()).toBe(2);
       console.log(JSON.stringify({
         commits: count + 2, merges: count / 5, featurePaths: lanes, coldFullMs: Math.round(coldMs), pinLookupMs: Math.round(pinLookupMs),
         cachedFullMs: Math.round(cachedMs), scroll30PositionsMs: Math.round(scrollMs), renderedRows: nodes.length,
-        pinRequests, idleTaskMs: Math.round((after.TaskDuration - idleBefore.TaskDuration) * 1000),
+        pinRequests: await pinRequests(), idleTaskMs: Math.round((after.TaskDuration - idleBefore.TaskDuration) * 1000),
         rendererTaskMs: Math.round((after.TaskDuration - before.TaskDuration) * 1000),
         heapGrowthMiB: Math.round((after.JSHeapUsedSize - before.JSHeapUsedSize) / 1024 / 1024),
       }));

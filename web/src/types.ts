@@ -1,4 +1,4 @@
-// Shared API shapes (kept in sync with server/src/git/*).
+// Shared API shapes (kept in sync with core/src/git/*).
 
 export interface CommitRef {
   name: string;

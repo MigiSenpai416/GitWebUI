@@ -72,10 +72,6 @@ select option {
   flex-direction: column;
   height: 100%;
 }
-.app-loading {
-  height: 100%;
-  background: var(--bg-app);
-}
 .app-body {
   flex: 1;
   display: flex;

@@ -1,33 +1,44 @@
 import { test, expect } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { launchApp, cleanupApp, makeRepo, removeRepo, type TestApp } from "./helpers";
+import { callApi, launchApp, cleanupApp, makeRepo, removeRepo, stubRoute, type TestApp } from "./helpers";
+
+interface PrTestState {
+  fail: boolean;
+  release?: () => void;
+}
 
 test("pull request pagination, refresh failures and late details keep repository context", async () => {
   const repo = makeRepo();
   let started: TestApp | undefined;
   try {
     started = await launchApp();
-    const window = await started.app.firstWindow();
+    const app = started.app;
+    const window = await app.firstWindow();
     await window.waitForLoadState("domcontentloaded");
     const repository = (name: string) => ({ fullName: `example/${name}`, name, owner: "example", defaultBranch: "main", private: false, isFork: false, parentFullName: null });
     const summary = (number: number, name: string) => ({ number, title: `${name} change ${number}`, body: "Details", state: "open", draft: false, author: "viewer", assignees: [], reviewers: [], teams: [], labels: [], updatedAt: "2026-09-08T00:00:00Z", head: "topic", base: "main", sha: "a".repeat(40) });
-    let fail = false;
-    let release: (() => void) | undefined;
-    await window.route("**/api/github/status", (route) => route.fulfill({ json: { configured: true, user: { login: "viewer" } } }));
-    await window.route("**/api/pr/context", (route) => route.fulfill({ json: {
-      baseCandidates: [repository("first"), repository("second")], defaults: { baseRepo: "example/first" },
-    } }));
-    await window.route("**/api/pr/list?**", (route) => {
-      const params = new URL(route.request().url()).searchParams;
-      if (fail) return route.fulfill({ status: 422, json: { error: "GitHub temporarily unavailable" } });
-      const name = params.get("repo")!.split("/")[1];
-      const page = Number(params.get("page"));
-      return route.fulfill({ json: { items: page === 1 ? [summary(1, name)] : [summary(2, name)], hasMore: page === 1 } });
+    const setFail = (fail: boolean) => app.evaluate((_electron, value) => {
+      (globalThis as unknown as { prTest: PrTestState }).prTest.fail = value;
+    }, fail);
+    await app.evaluate(() => {
+      (globalThis as unknown as { prTest: PrTestState }).prTest = { fail: false };
     });
-    await window.route("**/api/pr/details?**", async (route) => {
-      await new Promise<void>((resolve) => { release = resolve; });
-      await route.fulfill({ json: { ...summary(1, "late first"), mergeable: false, mergeableState: "dirty", canEdit: false, canMerge: false, canComment: false, canReview: false, mergeMethods: [], changedFiles: 0, commits: 0 } }).catch(() => {});
-    });
+    await stubRoute(app, "githubStatus", () => ({ configured: true, user: { login: "viewer" } }));
+    await stubRoute(app, "prContext", (_input, _proceed, candidates) => ({
+      baseCandidates: candidates, defaults: { baseRepo: "example/first" },
+    }), [repository("first"), repository("second")]);
+    await stubRoute(app, "prList", (input, _proceed, template) => {
+      if ((globalThis as unknown as { prTest: PrTestState }).prTest.fail) throw Object.assign(new Error("GitHub temporarily unavailable"), { status: 422 });
+      const name = String(input.repo).split("/")[1];
+      const page = Number(input.page);
+      const number = page === 1 ? 1 : 2;
+      return { items: [{ ...template, number, title: `${name} change ${number}` }], hasMore: page === 1 };
+    }, summary(0, ""));
+    await stubRoute(app, "prDetails", async (_input, _proceed, details) => {
+      const state = (globalThis as unknown as { prTest: PrTestState }).prTest;
+      await new Promise<void>((resolve) => { state.release = resolve; });
+      return details;
+    }, { ...summary(1, "late first"), mergeable: false, mergeableState: "dirty", canEdit: false, canMerge: false, canComment: false, canReview: false, mergeMethods: [], changedFiles: 0, commits: 0 });
     await window.reload();
     await window.getByRole("button", { name: "Open", exact: true }).first().click();
     await window.locator(".picker-form input").fill(repo);
@@ -47,10 +58,10 @@ test("pull request pagination, refresh failures and late details keep repository
     await window.getByRole("button", { name: "Refresh pull requests" }).click({ force: true });
     await expect(window.getByLabel("Pull request repository")).toHaveValue("example/second");
     await expect(window.locator(".prs-item")).toContainText("second change 1");
-    fail = true;
+    await setFail(true);
     await window.getByRole("button", { name: "Refresh pull requests" }).click({ force: true });
     await expect(window.getByRole("alert")).toContainText("GitHub temporarily unavailable");
-    fail = false;
+    await setFail(false);
     await window.getByRole("button", { name: "Retry", exact: true }).click();
     await expect(window.locator(".prs-item")).toContainText("second change 1");
     await window.locator(".prs-item").click();
@@ -59,7 +70,7 @@ test("pull request pagination, refresh failures and late details keep repository
     await window.getByLabel("Pull request repository").selectOption("example/first");
     await expect(window.locator(".prs-group[aria-expanded=true]")).toHaveCount(0);
     await window.getByRole("button", { name: "All Pull Requests" }).click();
-    release?.();
+    await app.evaluate(() => (globalThis as unknown as { prTest: PrTestState }).prTest.release?.());
     await expect(window.locator(".prs-item")).toContainText("first change 1");
     await expect(window.getByRole("dialog", { name: "Pull request #1" })).toHaveCount(0);
     await expect(window.getByText("late first change 1")).toHaveCount(0);
@@ -170,10 +181,7 @@ test("pull requests browse, review, edit, close, reopen and merge through the lo
     });
     const window = await started.app.firstWindow();
     await window.waitForLoadState("domcontentloaded");
-    await window.evaluate(async () => {
-      const res = await fetch("/api/github/token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: "test-token" }) });
-      if (!res.ok) throw new Error(await res.text());
-    });
+    await callApi(window, "githubSetToken", { token: "test-token" });
     await window.reload();
     await window.getByRole("button", { name: "Open", exact: true }).first().click();
     await window.locator(".picker-form input").fill(repo);
@@ -327,25 +335,28 @@ test("conversation pagination keeps native event order and waits for a review be
   let started: TestApp | undefined;
   try {
     started = await launchApp();
-    const window = await started.app.firstWindow();
+    const app = started.app;
+    const window = await app.firstWindow();
     await window.waitForLoadState("domcontentloaded");
     const pr = { number: 1, title: "Timeline ordering", body: "Description", state: "open", draft: false, author: "author", assignees: [], reviewers: [], teams: [], labels: [], updatedAt: "2026-09-08T00:00:00Z", head: "topic", base: "main", sha: "a".repeat(40), mergeable: false, mergeableState: "dirty", canEdit: false, canMerge: false, canComment: true, canReview: false, mergeMethods: [], changedFiles: 0, commits: 2 };
-    let fail = true;
-    await window.route("**/api/github/status", (route) => route.fulfill({ json: { configured: true, user: { login: "viewer" } } }));
-    await window.route("**/api/pr/context", (route) => route.fulfill({ json: { baseCandidates: [{ fullName: "example/project", name: "project", owner: "example" }], defaults: { baseRepo: "example/project" } } }));
-    await window.route("**/api/pr/list?**", (route) => route.fulfill({ json: { items: [pr], hasMore: false } }));
-    await window.route("**/api/pr/details?**", (route) => route.fulfill({ json: pr }));
-    await window.route("**/api/pr/activity?**", (route) => {
-      const params = new URL(route.request().url()).searchParams;
-      const kind = params.get("kind");
-      const page = Number(params.get("page"));
-      if (kind === "thread-states") return route.fulfill({ status: 403, json: { error: "Thread metadata unavailable" } });
-      if (kind === "threads") return route.fulfill({ json: { items: [{ id: 10, pull_request_review_id: 2, path: "later.ts", body: "Later code discussion" }], hasMore: false } });
-      if (page === 2 && fail) return route.fulfill({ status: 503, json: { error: "Timeline temporarily unavailable" } });
-      return route.fulfill({ json: { items: page === 1 ? [
+    await app.evaluate(() => {
+      (globalThis as unknown as { prTest: PrTestState }).prTest = { fail: true };
+    });
+    await stubRoute(app, "githubStatus", () => ({ configured: true, user: { login: "viewer" } }));
+    await stubRoute(app, "prContext", () => ({ baseCandidates: [{ fullName: "example/project", name: "project", owner: "example" }], defaults: { baseRepo: "example/project" } }));
+    await stubRoute(app, "prList", (_input, _proceed, item) => ({ items: [item], hasMore: false }), pr);
+    await stubRoute(app, "prDetails", (_input, _proceed, details) => details, pr);
+    await stubRoute(app, "prActivity", (input) => {
+      const kind = input.kind;
+      const page = Number(input.page);
+      const status = (message: string, code: number) => Object.assign(new Error(message), { status: code });
+      if (kind === "thread-states") throw status("Thread metadata unavailable", 403);
+      if (kind === "threads") return { items: [{ id: 10, pull_request_review_id: 2, path: "later.ts", body: "Later code discussion" }], hasMore: false };
+      if (page === 2 && (globalThis as unknown as { prTest: PrTestState }).prTest.fail) throw status("Timeline temporarily unavailable", 503);
+      return { items: page === 1 ? [
         { event: "committed", sha: "a", message: "First change", author: { name: "Author" } },
         { event: "cross-referenced", created_at: "2026-09-08T00:00:00Z", source: { issue: { number: 9, title: "Related work", html_url: "https://github.com/example/project/pull/9", state: "open" } } },
-      ] : [{ event: "ready_for_review", id: 1, actor: { login: "author" } }, { event: "reviewed", id: 2, user: { login: "reviewer" }, state: "approved", body: "" }], hasMore: page === 1 } });
+      ] : [{ event: "ready_for_review", id: 1, actor: { login: "author" } }, { event: "reviewed", id: 2, user: { login: "reviewer" }, state: "approved", body: "" }], hasMore: page === 1 };
     });
     await window.reload();
     await window.getByRole("button", { name: "Open", exact: true }).first().click();
@@ -359,7 +370,9 @@ test("conversation pagination keeps native event order and waits for a review be
     await dialog.getByRole("button", { name: "Load more activity" }).click();
     await expect(dialog.getByRole("alert")).toContainText("Timeline temporarily unavailable");
     await expect(dialog.locator(".prv-timeline-entry")).toHaveCount(2);
-    fail = false;
+    await app.evaluate(() => {
+      (globalThis as unknown as { prTest: PrTestState }).prTest.fail = false;
+    });
     await dialog.getByRole("button", { name: "Retry conversation" }).click();
     await expect(dialog.locator(".prv-timeline-entry")).toHaveCount(4);
     await expect(dialog.locator(".prv-timeline-entry").nth(0)).toContainText("First change");
@@ -368,20 +381,16 @@ test("conversation pagination keeps native event order and waits for a review be
     await expect(dialog.locator(".prv-timeline-entry").nth(3)).toContainText("approved these changes");
     await expect(dialog.locator(".prv-timeline-review")).toContainText("Later code discussion");
     await expect(dialog.getByText(/Thread resolution status unavailable/)).toBeVisible();
-    let releaseReply: (() => Promise<void>) | undefined;
-    await window.route("**/api/pr/action", async (route) => {
-      await new Promise<void>((resolve) => {
-        releaseReply = async () => {
-          await route.fulfill({ json: { ok: true, reply: { id: 11, in_reply_to_id: 10, user: { login: "viewer" }, body: "Reply survives loading", created_at: "2026-09-08T01:00:00Z" } } });
-          resolve();
-        };
-      });
+    await stubRoute(app, "prAction", async () => {
+      const state = (globalThis as unknown as { prTest: PrTestState }).prTest;
+      await new Promise<void>((resolve) => { state.release = resolve; });
+      return { ok: true, reply: { id: 11, in_reply_to_id: 10, user: { login: "viewer" }, body: "Reply survives loading", created_at: "2026-09-08T01:00:00Z" } };
     });
     await dialog.getByRole("textbox", { name: "Reply to code comment" }).fill("Reply survives loading");
     await dialog.getByRole("button", { name: "Reply", exact: true }).click();
-    await expect.poll(() => !!releaseReply).toBe(true);
+    await expect.poll(() => app.evaluate(() => !!(globalThis as unknown as { prTest: PrTestState }).prTest.release)).toBe(true);
     await expect(dialog.getByRole("button", { name: "Retry thread status" })).toBeDisabled();
-    await releaseReply!();
+    await app.evaluate(() => (globalThis as unknown as { prTest: PrTestState }).prTest.release?.());
     await expect(dialog.getByText("Reply survives loading", { exact: true })).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Retry thread status" })).toBeEnabled();
   } finally {

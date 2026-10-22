@@ -58,6 +58,19 @@ test.describe.serial("diff viewer layout", () => {
     await removeRepo(repoDir);
   });
 
+  /**
+   * Let a freshly built editor finish landing on its first hunk. The landing is
+   * a frame late by design (so it measures a laid-out view), and the editor
+   * applies it in a measure of its own one frame later again.
+   */
+  const settleEditor = () =>
+    window.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        }),
+    );
+
   test("defaults to unified and splits deletions from additions on demand", async () => {
     const unifiedButton = window.getByRole("button", { name: "Unified layout" });
     const splitButton = window.getByRole("button", { name: "Split layout" });
@@ -264,6 +277,12 @@ test.describe.serial("diff viewer layout", () => {
     await window.getByRole("button", { name: "Unified layout" }).click();
     await window.locator(".file-row", { hasText: "focus-early.txt" }).click();
     const unifiedScroller = window.locator(".dv-editor-unified .cm-scroller");
+    // Opening a file lands on its first hunk once the diff arrives and the
+    // editor has settled. Scrolling before that merely gets overridden by the
+    // landing — not the refresh under test — so wait for it to happen first.
+    await expect(window.locator(".dv-editor-unified .cm-content")).toContainText("new early change");
+    await expect.poll(() => unifiedScroller.evaluate((element) => element.scrollTop)).toBeLessThan(500);
+    await settleEditor();
     await unifiedScroller.evaluate((element) => {
       element.scrollTop = 900;
     });
@@ -279,6 +298,9 @@ test.describe.serial("diff viewer layout", () => {
     await window.getByRole("button", { name: "Split layout" }).click();
     const oldScroller = window.locator(".dv-split-old .cm-scroller");
     const newScroller = window.locator(".dv-split-new .cm-scroller");
+    // A layout switch lands on the first hunk the same way.
+    await expect(window.locator(".dv-split-new .cm-content")).toContainText("refreshed context 60");
+    await settleEditor();
     await newScroller.evaluate((element) => {
       element.scrollTop = 1_400;
     });

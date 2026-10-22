@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../state/store";
 import { useCommitSearch } from "../state/commitSearch";
-import { isDesktop } from "../desktop";
 import { BranchMenu } from "./BranchMenu";
 import { ActionsMenu } from "./ActionsMenu";
 import { FileManager } from "./FileManager";
@@ -30,7 +29,6 @@ export function Toolbar() {
   const worktreeCreateOpen = useStore((s) => s.worktreeCreateOpen);
   const repo = useStore((s) => s.repo);
   const setNotice = useStore((s) => s.setNotice);
-  const logout = useStore((s) => s.logout);
   const push = useStore((s) => s.push);
   const pull = useStore((s) => s.pull);
   const remoteBusy = useStore((s) => s.remoteBusy);
@@ -178,13 +176,6 @@ export function Toolbar() {
         <ToolButton label="Search" onClick={() => { closeWorktreeCreate(); if (!searchOpen || !worktreeCreateOpen) toggleSearch(); }} active={searchOpen} disabled={opening}>
           <IconSearch />
         </ToolButton>
-        {/* There is no session to end in the desktop app — the window's
-            credential belongs to the app, not to a sign-in the user performed. */}
-        {!isDesktop() && (
-          <ToolButton label="Lock" onClick={() => logout()}>
-            <IconLock />
-          </ToolButton>
-        )}
       </div>
       <FileManager
         open={fileManagerIntent !== null && !opening}
@@ -192,15 +183,6 @@ export function Toolbar() {
         onClose={() => setFileManagerIntent(null)}
       />
     </div>
-  );
-}
-
-function IconLock() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="4" y="11" width="16" height="9" rx="2" />
-      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-    </svg>
   );
 }
 

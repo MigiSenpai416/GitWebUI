@@ -1,4 +1,4 @@
-import { isDesktop, pickDirectory } from "../desktop";
+import { pickDirectory } from "../desktop";
 import "./BrowseButton.css";
 
 interface Props {
@@ -10,13 +10,11 @@ interface Props {
 }
 
 /**
- * The folder chooser next to a path field. Renders nothing in a browser, which
- * has no business opening a native dialog and no way to do it — the field it
- * sits beside stays the way in.
+ * The folder chooser next to a path field. The field it sits beside stays a
+ * way in too: a path copied from a terminal is quicker to paste than to
+ * navigate to.
  */
 export function BrowseButton({ defaultPath, title, disabled, onPick }: Props) {
-  if (!isDesktop()) return null;
-
   const browse = async () => {
     const picked = await pickDirectory({
       title: title ?? "Choose a folder",

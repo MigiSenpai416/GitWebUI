@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "./state/store";
 import { useCommitSearch } from "./state/commitSearch";
-import { applyFavicon, repoColor } from "./brand";
 import { useDesktopMenu } from "./useDesktopMenu";
 import { RepoPicker } from "./components/RepoPicker";
 import { Toolbar } from "./components/Toolbar";
@@ -20,7 +19,6 @@ import { StashContextMenu } from "./components/StashContextMenu";
 import { ChangesContextMenu } from "./components/ChangesContextMenu";
 import { CreateBranchDialog } from "./components/CreateBranchDialog";
 import { ConfirmBar } from "./components/ConfirmBar";
-import { AuthGate } from "./components/AuthGate";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { AddRemoteDialog } from "./components/AddRemoteDialog";
@@ -33,7 +31,6 @@ import { AiCommitDialog } from "./components/AiCommitDialog";
 import { ToastStack } from "./components/ToastStack";
 
 export function App() {
-  const authState = useStore((s) => s.authState);
   const repo = useStore((s) => s.repo);
   const selectedCommitHash = useStore((s) => s.selectedCommitHash);
   const selectedStashHash = useStore((s) => s.selectedStashHash);
@@ -56,8 +53,7 @@ export function App() {
     search.search(search.query, true);
   }, [refreshTick]);
 
-  // The native menu, when there is one. Registered unconditionally because
-  // hooks must be, and inert in a browser.
+  // The native application menu.
   useDesktopMenu();
 
   useEffect(() => {
@@ -82,13 +78,11 @@ export function App() {
     };
   }, [refreshAll]);
 
-  // Name the browser tab after the repo in view and tint the favicon with that
-  // repo's color, so several open GitWebUI tabs are told apart the same way the
-  // in-app tabs are.
+  // Name the window after the repo in view, so it reads right in the taskbar
+  // and the window switcher.
   useEffect(() => {
     const name = repo ? basename(repo.root) : "";
     document.title = name ? `${name} · GitWebUI` : "GitWebUI";
-    applyFavicon(repoColor(repo?.root ?? null));
   }, [repo]);
 
   const overlays = (
@@ -97,19 +91,6 @@ export function App() {
       <ToastStack />
     </>
   );
-
-  // Auth gate: nothing else renders until the session is established.
-  if (authState === "loading") {
-    return <div className="app-loading">{overlays}</div>;
-  }
-  if (authState !== "ok") {
-    return (
-      <>
-        <AuthGate />
-        {overlays}
-      </>
-    );
-  }
 
   return (
     <div className="app">

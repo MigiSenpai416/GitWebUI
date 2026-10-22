@@ -8,19 +8,9 @@
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "outDir": "dist",
-    "rootDir": "src",
-    "sourceMap": true,
-    "declaration": false,
+    "noEmit": true,
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "src/**/*.test.ts",
-    "src/bunEntry.ts",
-    "src/embeddedServe.ts",
-    "src/generated/**"
-  ]
+  "exclude": ["node_modules", "src/**/*.test.ts"]
 }

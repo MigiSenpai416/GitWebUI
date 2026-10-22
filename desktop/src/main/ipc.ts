@@ -65,10 +65,10 @@ export function registerIpc(): void {
     await shell.openExternal(parsed.toString());
   });
 
-  // There is deliberately no reveal-in-folder channel here. Revealing is driven
-  // by the server (see setOpener in main/index.ts), which already knows which
-  // paths belong to the open repository — routing it through the renderer would
-  // add a way to open arbitrary paths for no benefit.
+  // There is deliberately no reveal-in-folder channel here. Revealing is a core
+  // call (see setOpener in main/index.ts), which already knows which paths
+  // belong to the open repository — a channel of its own would add a way to
+  // open arbitrary paths for no benefit.
 
   ipcMain.handle(CH.writeClipboard, async (_event, text: unknown) => {
     if (typeof text !== "string") return;
@@ -77,7 +77,7 @@ export function registerIpc(): void {
 
   ipcMain.on(CH.reload, (event) => {
     // Ignoring the cache matters here: this is the error boundary's escape
-    // hatch, and a poisoned bundle in the HTTP cache is one reason to need it.
+    // hatch, and a poisoned bundle in the cache is one reason to need it.
     event.sender.reloadIgnoringCache();
   });
 }

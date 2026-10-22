@@ -1,19 +1,25 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import express from "express";
-import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { api, apiErrorHandler } from "./routes.js";
+import { dispatch, errorMessage, errorStatus } from "./api.js";
 import { openRepo } from "./git/repo.js";
 import { runGit } from "./git/gitRunner.js";
 import { registerRepo, unregisterRepo } from "./session.js";
 
 const TMP = path.join(os.tmpdir(), `gitwebui-indexroutes-${randomBytes(6).toString("hex")}`);
-let server: Server;
-let base = "";
 let root = "";
+
+/** Make one call the way the main process does, JSON round-trip included. */
+async function call(route: string, input: Record<string, unknown> = {}) {
+  try {
+    const result = await dispatch(route, input, { root, signal: new AbortController().signal });
+    return { status: 200, body: JSON.parse(JSON.stringify(result)) };
+  } catch (e) {
+    return { status: errorStatus(e), body: { error: errorMessage(e) } };
+  }
+}
 
 beforeAll(async () => {
   await fs.mkdir(TMP, { recursive: true });
@@ -24,19 +30,10 @@ beforeAll(async () => {
   await runGit(TMP, ["add", "-A"]);
   await runGit(TMP, ["commit", "-m", "base"]);
   root = registerRepo(await openRepo(TMP)).root;
-  const app = express();
-  app.use(express.json());
-  app.use("/api", api);
-  app.use("/api", apiErrorHandler);
-  server = app.listen(0, "127.0.0.1");
-  await new Promise<void>((resolve) => server.once("listening", resolve));
-  const addr = server.address();
-  base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
 });
 
 afterAll(async () => {
   unregisterRepo(root);
-  await new Promise<void>((resolve) => server.close(() => resolve()));
   await fs.rm(TMP, { recursive: true, force: true });
 });
 
@@ -44,13 +41,9 @@ describe("index query routes", () => {
   it("returns fresh status after unstaging both sides of a rename and preserves working content", async () => {
     await runGit(TMP, ["mv", "first.txt", "renamed [x].txt"]);
     await fs.writeFile(path.join(TMP, "renamed [x].txt"), "unstaged content\n");
-    const response = await fetch(base + "/api/unstage", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Repo-Root": root },
-      body: JSON.stringify({ paths: ["renamed [x].txt"] }),
-    });
+    const response = await call("unstage", { paths: ["renamed [x].txt"] });
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
+    expect(response.body).toEqual({
       staged: [],
       unstaged: [
         { path: "first.txt", status: "D", staged: false },
@@ -66,18 +59,18 @@ describe("index query routes", () => {
     await runGit(TMP, ["update-index", "-z", "--index-info"], {
       input: [1, 2, 3].map((stage) => `100644 ${blob} ${stage}\tconflict [x].txt\0`).join(""),
     });
-    const state = await fetch(base + "/api/merge/state", { headers: { "X-Repo-Root": root } });
+    const state = await call("mergeState");
     expect(state.status).toBe(200);
-    await expect(state.json()).resolves.toMatchObject({
+    expect(state.body).toMatchObject({
       merge: { active: true, conflicted: ["conflict [x].txt"] },
     });
-    const resolved = await fetch(base + "/api/conflict/resolve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Repo-Root": root },
-      body: JSON.stringify({ path: "conflict [x].txt", content: "resolved\n", resolved: true }),
+    const resolved = await call("resolveConflict", {
+      path: "conflict [x].txt",
+      content: "resolved\n",
+      resolved: true,
     });
     expect(resolved.status).toBe(200);
-    await expect(resolved.json()).resolves.toMatchObject({
+    expect(resolved.body).toMatchObject({
       merge: { active: false, conflicted: [] },
       status: { staged: [{ path: "conflict [x].txt", status: "A", staged: true }] },
     });

@@ -15,9 +15,8 @@ function resolveInRepo(root: string, relPath: string): string {
 }
 
 /**
- * Open a folder (repo-relative) in the host's file manager. Runs on the machine
- * hosting GitWebUI — the intended "local tool" behavior, matching Open Folder in
- * a desktop git client.
+ * Open a folder (repo-relative) in the system file manager, matching Open
+ * Folder in any desktop git client.
  */
 export async function revealFolder(root: string, relPath: string): Promise<void> {
   const abs = resolveInRepo(root, relPath);
@@ -77,6 +76,6 @@ function launch(target: string): void {
         : ["xdg-open", [target]];
   // Detach so the file manager outlives this request; ignore its I/O.
   const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
-  child.on("error", () => {}); // don't crash the server if the opener is missing
+  child.on("error", () => {}); // don't crash the app if the opener is missing
   child.unref();
 }

@@ -1,11 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import express from "express";
-import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { api, apiErrorHandler } from "./routes.js";
+import { dispatch, errorMessage, errorStatus } from "./api.js";
 import { runGit } from "./git/gitRunner.js";
 import { openRepo } from "./git/repo.js";
 import { registerRepo, unregisterRepo } from "./session.js";
@@ -13,12 +11,20 @@ import { registerRepo, unregisterRepo } from "./session.js";
 const BASE = path.join(os.tmpdir(), `gitwebui-sync-routes-${randomBytes(6).toString("hex")}`);
 const ORIGIN = path.join(BASE, "origin.git");
 const WORK = path.join(BASE, "work");
-let server: Server;
-let baseUrl = "";
 let repoRoot = "";
 
 async function revParse(root: string, ref: string): Promise<string> {
   return (await runGit(root, ["rev-parse", ref])).stdout.trim();
+}
+
+/** Make one call the way the main process does, JSON round-trip included. */
+async function call(route: string, root: string, input: Record<string, unknown> = {}) {
+  try {
+    const result = await dispatch(route, input, { root, signal: new AbortController().signal });
+    return { status: 200, body: JSON.parse(JSON.stringify(result)) };
+  } catch (e) {
+    return { status: errorStatus(e), body: { error: errorMessage(e) } };
+  }
 }
 
 beforeAll(async () => {
@@ -36,24 +42,14 @@ beforeAll(async () => {
   await runGit(ORIGIN, ["symbolic-ref", "HEAD", "refs/heads/main"]);
   const opened = registerRepo(await openRepo(WORK));
   repoRoot = opened.root;
-
-  const app = express();
-  app.use(express.json());
-  app.use("/api", api);
-  app.use("/api", apiErrorHandler);
-  server = app.listen(0, "127.0.0.1");
-  await new Promise<void>((resolve) => server.once("listening", resolve));
-  const address = server.address();
-  baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
 });
 
 afterAll(async () => {
   unregisterRepo(repoRoot);
-  await new Promise<void>((resolve) => server.close(() => resolve()));
   await fs.rm(BASE, { recursive: true, force: true });
 });
 
-describe("POST /pull", () => {
+describe("pull", () => {
   it("returns refreshed repository metadata after pull moves HEAD", async () => {
     const oldHead = await revParse(WORK, "HEAD");
     const other = path.join(BASE, "other");
@@ -67,14 +63,9 @@ describe("POST /pull", () => {
     const newHead = await revParse(ORIGIN, "main");
     expect(newHead).not.toBe(oldHead);
 
-    const response = await fetch(baseUrl + "/api/pull", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Repo-Root": repoRoot },
-      body: "{}",
-    });
+    const response = await call("pull", repoRoot);
 
-    const body = await response.json();
-    expect({ status: response.status, body }).toMatchObject({
+    expect(response).toMatchObject({
       status: 200,
       body: {
         repo: { root: repoRoot, branch: "main", head: newHead },

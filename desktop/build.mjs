@@ -2,8 +2,8 @@
 //
 // Both are emitted as CommonJS. Electron's main process only supports ESM from
 // v28 with awkward sequencing rules, and a sandboxed preload cannot be ESM at
-// all — bundling to CJS sidesteps both, and incidentally converts the server's
-// ESM sources on the way through.
+// all — bundling to CJS sidesteps both, and incidentally converts core's ESM
+// sources on the way through.
 //
 //   node build.mjs            one-shot build
 //   node build.mjs --watch    rebuild on change, and restart Electron each time

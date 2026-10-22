@@ -1,14 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useStore, type RepoTab } from "../../web/src/state/store.js";
+import type { ApiReply, DesktopBridge } from "../../web/src/desktop.js";
 
 interface PendingOpen {
-  resolve: (response: Response) => void;
+  resolve: (reply: ApiReply) => void;
 }
 
-const originalFetch = globalThis.fetch;
+type Call = DesktopBridge["call"];
+
+/** Stand in for the preload bridge the web client calls the core through. */
+function stubBridge(call: Call): void {
+  vi.stubGlobal("window", { gitwebui: { call, cancel: () => undefined } });
+}
 
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -21,13 +27,12 @@ describe("repository tab navigation", () => {
     useStore.setState({ tabs, activeTabId: "one", repo: null, opening: false });
 
     const pending = new Map<string, PendingOpen>();
-    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith("/api/repo/open")) {
-        const root = String(JSON.parse(String(init?.body)).path);
-        return await new Promise<Response>((resolve) => pending.set(root, { resolve }));
+    stubBridge(async (_id, route, input) => {
+      if (route === "openRepo") {
+        const root = String((input as { path: string }).path);
+        return await new Promise<ApiReply>((resolve) => pending.set(root, { resolve }));
       }
-      // Hydration endpoints read different properties from the same harmless
+      // Hydration calls read different properties from the same harmless
       // empty payload; including all of them keeps this test focused on ordering.
       return json({
         branches: [],
@@ -40,7 +45,7 @@ describe("repository tab navigation", () => {
         worktrees: [],
         merge: { active: false, kind: null, conflicted: [] },
       });
-    }) as typeof fetch;
+    });
 
     const first = useStore.getState().selectTab("one");
     const second = useStore.getState().selectTab("two");
@@ -75,18 +80,15 @@ describe("repository tab navigation", () => {
       loadingStatus: false,
     });
 
-    let resolveOldBranches: ((response: Response) => void) | null = null;
-    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input);
-      const headers = (init?.headers ?? {}) as Record<string, string>;
-      const root = headers["X-Repo-Root"];
-      if (url.endsWith("/api/repo/open")) {
-        const openedRoot = String(JSON.parse(String(init?.body)).path);
+    let resolveOldBranches: ((reply: ApiReply) => void) | null = null;
+    stubBridge(async (_id, route, input, root) => {
+      if (route === "openRepo") {
+        const openedRoot = String((input as { path: string }).path);
         return json({ repo: { root: openedRoot, branch: "main", head: null } });
       }
-      if (url.endsWith("/api/branches")) {
+      if (route === "branches") {
         if (root === "C:\\repos\\one") {
-          return await new Promise<Response>((resolve) => {
+          return await new Promise<ApiReply>((resolve) => {
             resolveOldBranches = resolve;
           });
         }
@@ -103,7 +105,7 @@ describe("repository tab navigation", () => {
         worktrees: [],
         merge: { active: false, kind: null, conflicted: [] },
       });
-    }) as typeof fetch;
+    });
 
     const first = useStore.getState().selectTab("one");
     await vi.waitFor(() => expect(resolveOldBranches).not.toBeNull());
@@ -131,9 +133,6 @@ function branch(name: string) {
   };
 }
 
-function json(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+function json(body: unknown): ApiReply {
+  return { ok: true, json: JSON.stringify(body) };
 }

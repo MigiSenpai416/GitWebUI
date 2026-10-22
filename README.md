@@ -1,26 +1,16 @@
 # GitWebUI
 
-A local, GitKraken-style git client for browsing and committing to a repository
-on your own machine. The backend shells out to your installed `git` binary; the
-frontend renders a dark, GitKraken-like interface.
+A local, GitKraken-style desktop git client for browsing and committing to a
+repository on your own machine. The app shells out to your installed `git`
+binary and renders a dark, GitKraken-like interface.
 
 It focuses on a **local** repo, and also supports GitHub remotes: connect with
 GitHub OAuth or a Personal Access Token to push, pull, add remotes, and create
 repositories.
 
-It runs two ways, from one codebase:
-
-| | Platforms | |
-|---|---|---|
-| **Desktop app** | Windows, Linux (x64) | A standalone `.exe` or `.AppImage`. No install, no browser tab, no password. Native folder pickers and menus. |
-| **Server** | Windows, Linux, macOS | The original mode. Run it on a machine, reach it from a browser anywhere on your network, gated by a password. |
-
-The desktop app is the Express API and the web UI in a single process: the API
-listens on a random loopback port and the window is pointed at it, so both modes
-run exactly the same server code.
-
-The Linux desktop build is packaged on Linux (including WSL on Windows) as an
-x64 AppImage. The server mode also supports macOS.
+It ships as a standalone desktop app for **Windows** (a portable `.exe`) and
+**Linux x64** (an `.AppImage`): no install, no browser tab, no port. Native
+folder pickers and menus.
 
 ## Features
 
@@ -31,18 +21,15 @@ x64 AppImage. The server mode also supports macOS.
   fast-forward behavior or explicitly create a merge commit. Undo/Redo are
   present as placeholders for future work.
 - **Terminal** — a dock across the bottom for running commands in the repo,
-  through your own shell: `$SHELL` (bash/zsh) on Linux and macOS, **Git Bash**
-  on Windows with **PowerShell** as the alternative, picked from the dock's
-  header. Output streams as it arrives with colours intact, `cd` carries from
-  one command to the next, ↑/↓ walks your history, and a running command can be
-  stopped. It is a command runner rather than a terminal session: there is no
-  pseudo-terminal behind it (that would need a native addon, which can't be
-  cross-compiled into the single-file binaries), so full-screen programs like
-  `vim` or `less` and interactive password prompts have nothing to talk to.
-  Anything the terminal does to the repo is picked up by the rest of the UI when
-  the command finishes. Note that it runs commands on the host with the same
-  session password as everything else — worth remembering if you expose the
-  server beyond localhost.
+  through your own shell: `$SHELL` (bash/zsh) on Linux, **Git Bash** on Windows
+  with **PowerShell** as the alternative, picked from the dock's header. Output
+  streams as it arrives with colours intact, `cd` carries from one command to
+  the next, ↑/↓ walks your history, and a running command can be stopped. It is
+  a command runner rather than a terminal session: there is no pseudo-terminal
+  behind it (that would need a native addon rebuilt against Electron for every
+  platform the app ships on), so full-screen programs like `vim` or `less` and
+  interactive password prompts have nothing to talk to. Anything the terminal
+  does to the repo is picked up by the rest of the UI when the command finishes.
 - Commit list with a `Branch / Tag · Graph · Commit Message` layout: ref badges,
   subject + body preview, and a lightweight single-lane graph by default. Toggle
   **Graph · Linear** to opt into a full parent-aware graph with separate lanes
@@ -99,8 +86,8 @@ x64 AppImage. The server mode also supports macOS.
   a generation is limited to 15 minutes, 256 requests, and 12 levels of splitting
   or reduction. If the model still cannot handle the input, stage fewer changes
   or use a larger-context model. Cancellation and stale-change checks still apply.
-  The keys are stored in `ai-commit.json` in the host's config directory, in
-  plaintext like the GitHub credential, and is never returned to the browser.
+  The keys are stored in `ai-commit.json` in the config directory, in
+  plaintext like the GitHub credential, and are never handed back to the UI.
   Use the setup dialog to change the model, replace the key, or clear the selected
   provider's settings. For Chat Completions, use an API base URL such as
   `https://api.openai.com/v1` or `http://localhost:1234/v1`; requests append
@@ -109,15 +96,6 @@ x64 AppImage. The server mode also supports macOS.
   The provider and model must support this format; unsupported requests show
   an error without falling back to a weaker format. Changing the base URL
   requires re-entering its key; saved Google keys are never reused for it.
-- **Password-protected access** — the web UI is gated by a single password
-  (set on first run), with an optional **Remember me** (stays signed in for 7
-  days). Useful when running on a headless/remote host reachable over the network.
-  Signing out (**Lock**) retires that session for good, so a cookie captured
-  beforehand stops working rather than lasting until it expires. Eight wrong
-  passwords from one address pauses sign-in from it for five minutes. Note that
-  the server binds `0.0.0.0` by default and anyone who reaches it before you set
-  the password can set it themselves — on a shared network, configure it
-  immediately, or start it on `--host 127.0.0.1` until you have.
 - **Pull requests** — open a GitHub PR from the branch menu: pick the source and
   target repo/branch (forks target their upstream by default), fill the title and
   description from a repo **PR template**, add reviewers, assignees and labels,
@@ -127,47 +105,60 @@ x64 AppImage. The server mode also supports macOS.
   right-click a remote branch to check it out or **delete it on the remote**;
   hover **REMOTE** for a green + to add a remote). Connect with GitHub OAuth or
   a Personal Access Token to **push**, **pull**, add a remote by **URL**, or
-  **create a new GitHub repository** and push to it. The credential is stored on
-  the host and can be changed or disconnected at any time.
+  **create a new GitHub repository** and push to it. The credential is stored
+  locally and can be changed or disconnected at any time.
 
 ## Requirements
 
-- **`git` installed.** Everything in the app shells out to it. The desktop app
-  looks for it on your `PATH` and in the usual install locations, and offers to
-  be pointed at it if it can't find one.
+- **`git` installed.** Everything in the app shells out to it. The app looks
+  for it on your `PATH` and in the usual install locations, and offers to be
+  pointed at it if it can't find one.
 - **`git-filter-repo` for File Manager history deletion.** This optional feature
   also requires Python; all other GitWebUI features work without it.
-- To build from source: Node.js 20+ (developed on 24) and npm 10+. The desktop
-  app itself bundles its own Node.
+- To build from source: Node.js 20+ (developed on 24) and npm 10+. The packaged
+  app bundles its own runtime.
 
 ## Getting started (development)
 
 ```bash
-npm install          # installs all three workspaces (server + web + desktop)
+npm install          # installs all three workspaces (core + web + desktop)
 
-npm run dev          # browser mode: Express API on :5174, Vite on :5173
-npm run dev:desktop  # desktop mode: Electron window with hot-reloading UI
+npm run dev          # Vite on :5173 + an Electron window with hot-reloading UI
 ```
 
-Open http://localhost:5173 and enter the absolute path to a local git repository,
-for example:
+`npm run dev` runs two things side by side, which can also be started on their
+own: `npm run dev:web` (Vite, which only serves the UI and its hot reload to the
+window) and `npm run dev:app` (builds the main process and preload in watch
+mode, and restarts Electron whenever either changes). The UI only runs inside
+the app window: it needs the preload bridge, so the Vite URL is no use in a
+plain browser tab.
+
+To run a production build without packaging it:
+
+```bash
+npm run build        # icons, web/dist → desktop/renderer, main + preload bundles
+npm start            # launches Electron on the built output
+```
+
+In the window, open a repository by its absolute path, for example:
 
 - Windows: `C:\Users\you\projects\my-repo`
-- Linux/macOS: `/home/you/projects/my-repo`
+- Linux: `/home/you/projects/my-repo`
 
 ## The desktop app
 
 ### Windows
 
 ```bash
-npm run icons        # draws the app icon from the brand mark (once)
-npm run dist         # → release/desktop/GitWebUI-0.3.0.exe
+npm run dist:win     # → release/desktop/GitWebUI-0.3.0.exe
 ```
 
+(`npm run dist` builds for whichever platform you're on.)
+
 One standalone executable, about 90 MB. There is no installer: copy it wherever
-you like and run it. Electron, the Express server and the built UI are all
-inside it. The host needs `git`; File Manager history deletion additionally
-needs `git-filter-repo` and Python.
+you like and run it. Electron, the app's core and the built UI are all inside
+it. The host needs `git`; File Manager history deletion additionally needs
+`git-filter-repo` and Python.
 
 Running it unpacks to `%LOCALAPPDATA%\Temp\GitWebUI`, so the first launch is a
 little slower than the ones after it. Your settings do not live there — they go
@@ -178,18 +169,49 @@ time; choose **More info → Run anyway**.
 
 ### Linux (x64)
 
-Run the build on Linux or inside WSL with Linux Node.js and dependencies:
+The AppImage is built natively on Linux:
 
 ```bash
 npm ci
 npm run dist:linux   # → release/desktop/GitWebUI-0.3.0-linux-x86_64.AppImage
 ```
 
-Keep Linux dependencies in a separate checkout when also building on Windows;
-the two platforms use different Electron and esbuild binaries.
+#### Building on Windows through WSL
 
-The AppImage bundles Electron, the Express server and the built UI. The host
-needs `git` and the desktop libraries Electron uses (GTK 3, NSS and ALSA), plus
+WSL works, but not from the Windows checkout: `node_modules` holds
+platform-specific Electron and esbuild binaries, so one installed on Windows
+can't build for Linux (and a Linux install would break the Windows one). Build
+from a Linux-side copy with Linux Node.js instead — a clone, if the changes are
+committed:
+
+```bash
+git clone /mnt/c/Users/you/projects/GitWebUi ~/gitwebui-linux
+```
+
+or a copy of the working tree, leaving out everything platform-specific or
+generated:
+
+```bash
+rsync -a --delete \
+  --exclude node_modules --exclude .git --exclude release \
+  --exclude desktop/dist --exclude desktop/renderer --exclude desktop/build \
+  --exclude web/dist \
+  /mnt/c/Users/you/projects/GitWebUi/ ~/gitwebui-linux/
+```
+
+then, in WSL:
+
+```bash
+cd ~/gitwebui-linux
+npm ci
+npm run dist:linux
+cp release/desktop/GitWebUI-*-linux-x86_64.AppImage /mnt/c/Users/you/Downloads/
+```
+
+#### Running the AppImage
+
+The AppImage bundles Electron, the app's core and the built UI. The host needs
+`git` and the desktop libraries Electron uses (GTK 3, NSS and ALSA), plus
 FUSE 2 for mounting the AppImage. File Manager history deletion additionally
 needs `git-filter-repo` and Python.
 
@@ -205,84 +227,35 @@ On a system without FUSE, extract it and run the included launcher:
 ./squashfs-root/AppRun
 ```
 
-Electron's profile and `main.log` are stored in
-`$XDG_CONFIG_HOME/gitwebui-desktop` or `~/.config/gitwebui-desktop`.
+### Where things are stored
 
-### How it differs from the server
+- **Config directory** — `%APPDATA%\gitwebui` on Windows,
+  `$XDG_CONFIG_HOME/gitwebui` or `~/.config/gitwebui` elsewhere; override with
+  `GITWEBUI_CONFIG_DIR`. Holds the GitHub credential (`github.json`, plus
+  `github-refresh.json` while a token refresh is in flight), commit identity
+  (`identity.json`), AI settings (`ai-commit.json`), recent repositories
+  (`recent.json`), a located git (`git-path.json`) and the recovery bundles
+  history deletion writes (`history-backups/`). It is the same directory
+  earlier releases used, so all of that carries over.
+- **Electron profile** — `%APPDATA%\gitwebui-desktop`, or
+  `$XDG_CONFIG_HOME/gitwebui-desktop` / `~/.config/gitwebui-desktop`; override
+  with `GITWEBUI_USER_DATA_DIR`. Holds window state, caches, the UI's open tabs
+  and layout, and `main.log` — a packaged Windows app has no console, so a
+  window that won't start leaves its reason there.
 
-- **No password.** The window is let in by a one-off token the app mints at
-  launch and plants as a cookie in its own session. That token also switches the
-  server into a private mode where signing in and setting a password are refused
-  outright — so a browser that finds the port can't claim an install whose owner
-  never set one.
-- **Bound to `127.0.0.1:5175`**, with a `Host` allowlist so a rebound DNS name
-  can't reach it. The port is fixed rather than random because the browser files
-  your open tabs — and the sidebar, visible refs and terminal height — under the
-  page's origin, and the port is part of that origin: a different port each
-  launch would mean the app forgot everything each launch. If something else
-  already has 5175 the app still starts on whatever port is free, and says so in
-  its log; the remembered state reappears once 5175 is free again. A predictable
-  port costs nothing here, since anything on your machine can scan the loopback
-  range in milliseconds — the session cookie is what keeps others out.
-- **Shares its configuration with the server.** The password, GitHub credentials,
-  commit identity and recent repositories live in the same place either way, so
-  switching between the two just works. Electron's own state (window size,
-  caches, open tabs) is kept separately in `gitwebui-desktop`.
-- Native folder pickers, an application menu with accelerators, remembered
-  window geometry, and external links opening in your real browser.
-
-A window that won't start has nothing to print to — a packaged Windows app has
-no console — so the main process logs to `main.log` under
-`%APPDATA%\gitwebui-desktop`.
-
-## Running it as a server
-
-Works on Windows, Linux and macOS.
-
-```bash
-npm run build        # builds web/dist and server/dist
-npm start            # serves the built UI + API on :5174
-# then open http://localhost:5174
-```
-
-In production a single server hosts both the web UI and the API on one port.
-
-### Choosing the port / host
-
-The server port and bind address are resolved as **CLI flag > env var > default**:
-
-```bash
-node server/dist/index.js --port 8080          # or -p 8080
-node server/dist/index.js --port 8080 --host 127.0.0.1
-PORT=8080 node server/dist/index.js            # env var
-node server/dist/index.js --help               # usage
-```
-
-Defaults are port `5174` and host `0.0.0.0` (all interfaces, so a remote machine
-can reach it). The same flags work on the standalone binaries below. If the port
-is already taken the server says so and exits rather than lingering with nothing
-listening.
-
-Requests carrying an `Origin` from a different host are refused, so a page on the
-web can't make your browser act against a server on your own network. Requests
-without an `Origin` — curl, scripts, the UI itself — are unaffected.
-
-If you know every name your server is reached by, list them in
-`GITWEBUI_ALLOWED_HOSTS` (comma-separated) and anything else is refused. That
-shuts out DNS rebinding, where an attacker's domain re-resolves to your address
-to become "same origin"; it is off by default because a LAN or reverse-proxy
-deployment can't know its own names in advance.
-
-```bash
-GITWEBUI_ALLOWED_HOSTS=git.example.com,127.0.0.1 node server/dist/index.js
-```
+**Upgrading from an earlier desktop release:** the UI now loads from the app's
+own `gitwebui://app` origin instead of `http://127.0.0.1:5175`, and open tabs,
+layout and per-repository view choices are stored per origin. They reset once
+on the first launch; credentials, identity, AI settings and recent repositories
+are unaffected.
 
 ### Pointing at a specific `git`
 
-By default the server runs whatever `git` is on its `PATH`. Set
-`GITWEBUI_GIT_PATH` to an absolute path when that isn't the right one — a
-service started with a minimal environment, or several git installations on one
-machine.
+At startup the app looks for git on `PATH`, then in the usual install locations
+(`C:\Program Files\Git\cmd`, `/usr/bin`, …). If it finds none, a dialog offers
+**Locate git…** — the chosen file is checked by running it, then remembered in
+`git-path.json` — or **Download Git**. Set `GITWEBUI_GIT_PATH` to an absolute
+path to use that git ahead of everything else, as long as it runs.
 
 ### Deleting files from Git history
 
@@ -297,23 +270,11 @@ git filter-repo --version
 
 The recommended cross-platform installation is `pipx install git-filter-repo`;
 `uv tool install git-filter-repo` is also supported. Windows users can use
-`scoop install git-filter-repo`, and macOS users can use
-`brew install git-filter-repo`. The tool requires Git 2.36 or newer and Python
+`scoop install git-filter-repo`. The tool requires Git 2.36 or newer and Python
 3.6 or newer. Its current rewrite engine supports SHA-1 repositories only;
 GitWebUI rejects SHA-256 repositories before creating recovery artifacts. See the
 [`git-filter-repo` installation guide](https://github.com/newren/git-filter-repo/blob/main/INSTALL.md)
 for platform-specific help.
-
-### First run & authentication
-
-On the first visit you'll be asked to **set a password**; every later visit asks
-for it. Tick **Remember me** to stay signed in for 7 days (the session survives a
-server restart). The **lock** button in the toolbar signs you out.
-
-The password hash and session-signing secret are stored under the OS config dir
-(`%APPDATA%\gitwebui` on Windows, `$XDG_CONFIG_HOME/gitwebui` or `~/.config/gitwebui`
-elsewhere; override with `GITWEBUI_CONFIG_DIR`). **Forgot the password?** Delete
-`auth.json` in that directory to reset to first-run setup.
 
 ### GitHub & remotes (push / pull)
 
@@ -358,7 +319,7 @@ branch. The dialog reads the repo's GitHub remotes, so:
 - If the source branch has commits that aren't on the remote, GitWebUI offers to
   **push it first**.
 
-The created PR opens in a new browser tab.
+The created PR opens in your browser.
 
 The sidebar's **Pull Requests** section lists PRs for a selected GitHub remote
 or its fork parent. **Open** is the default; **Closed**, **Merged**, and **All
@@ -423,27 +384,6 @@ GitWebUI uses its official GitHub OAuth App with **Device Flow** enabled. Its
 public Client ID is built into the source, so users can sign in without any
 configuration. No client secret is used or shipped.
 
-### Standalone binaries
-
-Build self-contained executables that run without Node installed on the target
-(the machine still needs `git`, plus `git-filter-repo` and Python for history
-deletion). Requires **[Bun](https://bun.sh)** on the build machine; it
-cross-compiles both targets from either OS:
-
-```bash
-npm run build:exe            # builds the web UI, embeds it, emits both binaries
-# or individually:
-npm run build:exe:win        # → release/gitwebui.exe   (Windows x64)
-npm run build:exe:linux      # → release/gitwebui       (Linux x64)
-```
-
-The web UI is embedded inside the binary, so a single file is all you need to
-deploy. Run it and pass `--port`/`--host` as above, e.g. on a Linux server:
-
-```bash
-./gitwebui --port 8080
-```
-
 ## Keyboard shortcuts (diff viewer)
 
 - `Alt+↓` / `Alt+↑` — next / previous change (hunk)
@@ -453,34 +393,31 @@ deploy. Run it and pass `--port`/`--host` as above, e.g. on a Linux server:
 ## Project layout
 
 ```
-server/   Express API that spawns git (never via a shell)
+core/     the app's core: git, GitHub, AI commit info, terminal, config
   src/git/       gitRunner, gitPath, log, status, diff, blame, commitFiles, mutate
-  src/app.ts     createApp() — the factory all three entry points share
-  src/routes.ts  REST endpoints
-  src/index.ts   Node entry (serves web/dist from disk)
-  src/bunEntry.ts  Bun single-file-binary entry (serves embedded assets)
-web/      React + Vite + TypeScript SPA
+  src/api.ts     the table of operations the UI can call; dispatch() runs one
+web/      React + Vite + TypeScript UI, run only inside the app window
   src/components/            UI (CommitList, ChangesPanel, DiffViewer, …)
   src/components/DiffViewer/ CodeMirror inline-diff rendering
   src/state/store.ts         Zustand app state
-  src/desktop.ts             the Electron bridge, absent in a browser
-desktop/  Electron app — the third caller of createApp()
-  src/main/      lifecycle, the loopback server, menu, IPC, git probe
+  src/desktop.ts             typed access to the preload bridge
+desktop/  Electron app
+  src/main/      lifecycle, gitwebui:// protocol, IPC, menu, git probe
   src/preload/   the contextBridge surface (sandboxed, CommonJS)
   tests/         Playwright end-to-end tests against a real window
-scripts/  embed-web (Bun assets), stage-renderer, make-icons
+scripts/  stage-renderer (web/dist → desktop/renderer), make-icons
 ```
 
-`server/src/app.ts` is the seam the whole thing turns on: one Express factory,
-three callers — Node from disk, Bun from embedded assets, Electron from memory.
-Nothing in `server/` imports `electron`, which is what keeps the headless and
-single-binary modes intact.
+`core/src/api.ts` is the seam the whole thing turns on: a transport-free table
+of operations. The main process answers one IPC channel (`gwui:api`) by handing
+each call to `dispatch()`, cancels through `gwui:cancel`, and streams terminal
+output back over `gwui:terminal-event`. Nothing in `core/` imports `electron`.
 
 ## Tests
 
 ```bash
-npm test             # Vitest: git output parsers, auth, config, origin guard
-npm run test:desktop # Playwright: a real Electron window, end to end
+npm test             # Vitest: core (git parsers, operations, config) and the UI's state
+npm run test:e2e     # builds, then Playwright: a real Electron window, end to end
 ```
 
 The Playwright suite can also be pointed at a packaged build, which is the only
@@ -494,25 +431,39 @@ GITWEBUI_E2E_BINARY="$PWD/release/desktop/GitWebUI-0.3.0-linux-x86_64.AppImage" 
   npm run test --workspace desktop -- smoke.spec.ts persistence.spec.ts
 ```
 
-The desktop tests run on their own port and their own Electron profile
-(`desktop/tests/helpers.ts`), so they never read or overwrite the tabs and
-settings of an installed copy — including one that is open at the time. Two
-environment variables make that possible, and are useful on their own for
-running a second instance side by side with your usual one:
+Each test launch gets a throwaway config directory and Electron profile
+(`desktop/tests/helpers.ts`), so it never reads or overwrites the tabs and
+settings of an installed copy — including one that is open at the time. The
+same variables are useful on their own for running a second instance side by
+side with your usual one, since the single-instance lock belongs to the profile:
 
 | | |
 |---|---|
-| `GITWEBUI_DESKTOP_PORT` | Port to serve the window from, instead of 5175. |
+| `GITWEBUI_CONFIG_DIR` | Where credentials, identity, AI settings and recent repositories live. |
 | `GITWEBUI_USER_DATA_DIR` | Where Electron keeps its profile — window state, and the tabs the UI remembers. |
+| `GITWEBUI_E2E` | Set to `1` by the tests to turn on the main process's test seams. Not for everyday use. |
 
 ## Security note
 
+Nothing listens on a port. The UI is served from a private `gitwebui://app`
+scheme straight out of the app bundle, with a Content Security Policy that
+allows only the app's own scripts and no network connections from the page
+(GitHub avatars are the one outside resource it loads). Everything else goes
+through the main process over IPC.
+
+The window's renderer runs **sandboxed**, with `contextIsolation` on and Node
+integration off; the preload exposes a small, fixed bridge rather than
+`ipcRenderer` itself. Each IPC handler validates what it is given — unknown
+operations are refused, and URLs handed to the OS must be `http`, `https` or
+`mailto`. Navigation is pinned to the app's own pages: links and `window.open`
+open in your system browser instead of an app window, and `<webview>` is
+refused.
+
 All git invocations pass arguments as an argv array (`execFile`), never as a
 shell string, so repository paths and filenames containing spaces or shell
-metacharacters are handled safely.
+metacharacters are handled safely. The terminal dock is the exception by
+design: it runs what you type through your own shell.
 
-The password and session cookie travel over **plain HTTP**. On a trusted LAN or
-over an SSH tunnel that's fine, but **do not expose the raw port directly to the
-internet** — put it behind a TLS-terminating reverse proxy (Caddy, nginx,
-Traefik) or reach it through an SSH/WireGuard tunnel so credentials aren't sent
-in the clear.
+Credentials (the GitHub token, AI keys) are stored in plaintext in the config
+directory. On Linux the directory is created `0700` and the credential files
+`0600`; on Windows they rely on the per-user `%APPDATA%` permissions.

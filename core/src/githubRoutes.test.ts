@@ -1,6 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import express from "express";
-import type { Server } from "node:http";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
@@ -9,22 +7,9 @@ import { randomBytes } from "node:crypto";
 const TMP = path.join(os.tmpdir(), `gitwebui-githubroutes-${randomBytes(6).toString("hex")}`);
 process.env.GITWEBUI_CONFIG_DIR = TMP;
 
-const { api, apiErrorHandler } = await import("./routes.js");
+const { dispatch, errorMessage, errorStatus } = await import("./api.js");
 const { _resetTokenCache } = await import("./github.js");
 const realFetch = globalThis.fetch;
-let server: Server;
-let base = "";
-
-beforeAll(async () => {
-  const app = express();
-  app.use(express.json());
-  app.use("/api", api);
-  app.use("/api", apiErrorHandler);
-  server = app.listen(0, "127.0.0.1");
-  await new Promise<void>((resolve) => server.once("listening", resolve));
-  const address = server.address();
-  base = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
-});
 
 beforeEach(async () => {
   await fs.rm(TMP, { recursive: true, force: true });
@@ -36,31 +21,32 @@ afterEach(() => {
 });
 
 afterAll(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
   await fs.rm(TMP, { recursive: true, force: true });
 });
 
-function request(pathname: string, method = "GET", body?: unknown) {
-  return realFetch(base + pathname, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
+/** Make one call the way the main process does, JSON round-trip included. */
+async function call(route: string, input: Record<string, unknown> = {}) {
+  try {
+    const result = await dispatch(route, input, { root: "", signal: new AbortController().signal });
+    return { status: 200, body: JSON.parse(JSON.stringify(result)) };
+  } catch (e) {
+    return { status: errorStatus(e), body: { error: errorMessage(e) } };
+  }
 }
 
 describe("GitHub OAuth routes", () => {
   it("returns the disconnected status shape and validates poll input", async () => {
-    const status = await request("/api/github/status");
+    const status = await call("githubStatus");
     expect(status.status).toBe(200);
-    await expect(status.json()).resolves.toEqual({
+    expect(status.body).toEqual({
       configured: false,
       authMethod: null,
       user: null,
     });
 
-    const poll = await request("/api/github/oauth/poll", "POST", {});
+    const poll = await call("githubOAuthPoll");
     expect(poll.status).toBe(400);
-    await expect(poll.json()).resolves.toEqual({ error: "An OAuth flow is required" });
+    expect(poll.body).toEqual({ error: "An OAuth flow is required" });
   });
 
   it("starts, cancels, and serializes a Device Flow without exposing its secret", async () => {
@@ -79,19 +65,19 @@ describe("GitHub OAuth routes", () => {
       };
     }) as unknown as typeof fetch;
 
-    const started = await request("/api/github/oauth/device", "POST", {});
+    const started = await call("githubOAuthStart");
     expect(started.status).toBe(200);
-    const flow = await started.json() as { flowId: string; userCode: string; deviceCode?: string };
+    const flow = started.body as { flowId: string; userCode: string; deviceCode?: string };
     expect(flow.userCode).toBe("ABCD-EFGH");
     expect(flow.deviceCode).toBeUndefined();
 
-    const cancelled = await request("/api/github/oauth/device", "DELETE", { flowId: flow.flowId });
+    const cancelled = await call("githubOAuthCancel", { flowId: flow.flowId });
     expect(cancelled.status).toBe(200);
-    await expect(cancelled.json()).resolves.toEqual({ ok: true });
+    expect(cancelled.body).toEqual({ ok: true });
 
-    const polled = await request("/api/github/oauth/poll", "POST", { flowId: flow.flowId });
+    const polled = await call("githubOAuthPoll", { flowId: flow.flowId });
     expect(polled.status).toBe(200);
-    await expect(polled.json()).resolves.toMatchObject({ status: "expired" });
+    expect(polled.body).toMatchObject({ status: "expired" });
   });
 
   it("completes OAuth and preserves the PAT response contracts", async () => {
@@ -136,35 +122,35 @@ describe("GitHub OAuth routes", () => {
       return realFetch(url);
     }) as unknown as typeof fetch;
 
-    const started = await request("/api/github/oauth/device", "POST", {});
-    const flow = await started.json() as { flowId: string };
+    const started = await call("githubOAuthStart");
+    const flow = started.body as { flowId: string };
     await new Promise((resolve) => setTimeout(resolve, 1_050));
-    const polled = await request("/api/github/oauth/poll", "POST", { flowId: flow.flowId });
+    const polled = await call("githubOAuthPoll", { flowId: flow.flowId });
     expect(polled.status).toBe(200);
-    await expect(polled.json()).resolves.toMatchObject({
+    expect(polled.body).toMatchObject({
       status: "complete",
       user: { login: "octocat" },
     });
     expect(tokenExchanges).toBe(1);
 
-    const oauthStatus = await request("/api/github/status");
-    await expect(oauthStatus.json()).resolves.toMatchObject({
+    const oauthStatus = await call("githubStatus");
+    expect(oauthStatus.body).toMatchObject({
       configured: true,
       authMethod: "oauth",
       user: { login: "octocat" },
     });
 
-    const pat = await request("/api/github/token", "POST", { token: "ghp_route" });
+    const pat = await call("githubSetToken", { token: "ghp_route" });
     expect(pat.status).toBe(200);
-    await expect(pat.json()).resolves.toMatchObject({
+    expect(pat.body).toMatchObject({
       configured: true,
       authMethod: "pat",
       user: { login: "octocat" },
     });
 
-    const disconnected = await request("/api/github/token", "DELETE", {});
+    const disconnected = await call("githubRevoke");
     expect(disconnected.status).toBe(200);
-    await expect(disconnected.json()).resolves.toEqual({
+    expect(disconnected.body).toEqual({
       configured: false,
       authMethod: null,
       user: null,

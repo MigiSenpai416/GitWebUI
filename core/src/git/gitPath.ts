@@ -7,11 +7,11 @@ import { configPath, ensureConfigDir } from "../config.js";
 /**
  * Which `git` to run.
  *
- * A server started from a shell inherits that shell's PATH, so a bare `git`
+ * A process started from a shell inherits that shell's PATH, so a bare `git`
  * finds the right binary and there is nothing to resolve — that stays the
- * default, and headless behaviour on every platform is unchanged. An app
- * launched from a desktop shell may not be so lucky: on Windows a PATH change
- * made after login won't have reached an already-running Explorer.
+ * default. An app launched from a desktop shell may not be so lucky: on
+ * Windows a PATH change made after login won't have reached an
+ * already-running Explorer.
  *
  * So the desktop entry point calls `resolveGitPath()` once at startup and hands
  * the answer to `setGitPath()`. Everything after that goes through `gitPath()`,

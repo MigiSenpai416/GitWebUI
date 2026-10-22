@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";
-import { promises as fs } from "node:fs";
+import { promises as fs, realpathSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { runGit } from "./gitRunner.js";
 import {
@@ -12,7 +12,10 @@ import {
   samePath,
 } from "./worktree.js";
 
-const ROOT = path.join(os.tmpdir(), `gitwebui-worktree-${randomBytes(6).toString("hex")}`);
+// git reports worktree paths in canonical form, and the app hands it roots in
+// the same form, so the fixture starts from one: os.tmpdir() can be a symlink
+// (macOS) or an 8.3 short name (Windows runners).
+const ROOT = path.join(realpathSync.native(os.tmpdir()), `gitwebui-worktree-${randomBytes(6).toString("hex")}`);
 
 async function setup(): Promise<void> {
   await fs.mkdir(ROOT, { recursive: true });

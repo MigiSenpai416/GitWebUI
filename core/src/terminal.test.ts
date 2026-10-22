@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";
-import { promises as fs } from "node:fs";
+import { promises as fs, realpathSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import {
   buildScript,
@@ -13,7 +13,9 @@ import {
   type RunEvent,
 } from "./terminal.js";
 
-const DIR = path.join(os.tmpdir(), `gitwebui-term-${randomBytes(6).toString("hex")}`);
+// The shell reports where it ended up in canonical form, so start from one:
+// os.tmpdir() can be a symlink (macOS) or an 8.3 short name (Windows runners).
+const DIR = path.join(realpathSync.native(os.tmpdir()), `gitwebui-term-${randomBytes(6).toString("hex")}`);
 
 beforeAll(async () => {
   await fs.mkdir(path.join(DIR, "sub"), { recursive: true });

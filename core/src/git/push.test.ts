@@ -22,7 +22,7 @@ async function revParse(root: string, ref: string): Promise<string> {
  */
 async function setupAmended(): Promise<void> {
   await fs.mkdir(BASE, { recursive: true });
-  await runGit(BASE, ["init", "--bare", "origin.git"]);
+  await runGit(BASE, ["init", "--bare", "-b", "main", "origin.git"]);
 
   await fs.mkdir(WORK, { recursive: true });
   await runGit(WORK, ["init", "-b", "main"]);
@@ -47,7 +47,7 @@ async function setupAmended(): Promise<void> {
  */
 async function setupRemoteAdvanced(): Promise<{ theirHead: string }> {
   await fs.mkdir(BASE, { recursive: true });
-  await runGit(BASE, ["init", "--bare", "origin.git"]);
+  await runGit(BASE, ["init", "--bare", "-b", "main", "origin.git"]);
   await fs.mkdir(WORK, { recursive: true });
   await runGit(WORK, ["init", "-b", "main"]);
   await runGit(WORK, ["config", "user.email", "t@example.com"]);
@@ -185,7 +185,7 @@ describe("push", () => {
 describe("pull", () => {
   it("merges divergent work even when the host config requests rebase", async () => {
     await fs.mkdir(BASE, { recursive: true });
-    await runGit(BASE, ["init", "--bare", "origin.git"]);
+    await runGit(BASE, ["init", "--bare", "-b", "main", "origin.git"]);
     await fs.mkdir(WORK, { recursive: true });
     await runGit(WORK, ["init", "-b", "main"]);
     await runGit(WORK, ["config", "user.email", "t@example.com"]);

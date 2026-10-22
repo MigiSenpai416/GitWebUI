@@ -16,6 +16,13 @@ import { protocol } from "electron";
 export const APP_SCHEME = "gitwebui";
 export const APP_HOST = "app";
 export const APP_URL = `${APP_SCHEME}://${APP_HOST}/`;
+/**
+ * An empty page on the app's origin, for touching its storage from the main
+ * process without running the UI. Served without the policy below, since the
+ * only script it ever runs is injected.
+ */
+export const BLANK_PATH = "/__blank";
+export const BLANK_PAGE = "<!doctype html><title>GitWebUI</title>";
 
 const CSP = [
   "default-src 'self'",
@@ -130,6 +137,11 @@ export async function serveRenderer(dir: string): Promise<void> {
       return respond("Not found", 404, "text/plain", "no-store");
     }
     if (route === "/") route = "/index.html";
+    if (route === BLANK_PATH) {
+      return new Response(BLANK_PAGE, {
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    }
 
     const body = assets.get(route);
     if (body) {

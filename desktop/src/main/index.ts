@@ -12,6 +12,7 @@ import { registerIpc } from "./ipc.js";
 import { installMenu } from "./menu.js";
 import { APP_URL, isAppUrl, registerAppScheme, serveRenderer } from "./protocol.js";
 import { adoptLoginShellPath } from "./shellPath.js";
+import { migrateLegacyStorage } from "./storageMigration.js";
 import { loadWindowState, trackWindowState, WINDOW_MIN_SIZE } from "./windowState.js";
 
 /**
@@ -229,12 +230,17 @@ async function createWindow(): Promise<BrowserWindow> {
   trackWindowState(window);
   hardenNavigation(window);
 
-  window.once("ready-to-show", () => window.show());
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = null;
   });
 
+  // Once, the first time this build opens over an older profile: the UI reads
+  // its remembered state as it starts, so this has to come first.
+  if (!DEV) await migrateLegacyStorage(window.webContents);
   await window.loadURL(DEV ? DEV_RENDERER_ORIGIN : APP_URL);
+  // Shown once the UI has loaded rather than on first paint, which could be
+  // one of the carry-over's blank pages.
+  window.show();
   if (DEV) window.webContents.openDevTools({ mode: "detach" });
 
   return window;

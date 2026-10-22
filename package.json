@@ -2,7 +2,7 @@
   "name": "gitwebui",
   "version": "0.3.0",
   "private": true,
-  "description": "A local, GitKraken-style desktop git client",
+  "description": "An interactive desktop git client",
   "workspaces": [
     "core",
     "web",

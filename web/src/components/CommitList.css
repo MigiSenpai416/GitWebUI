@@ -173,9 +173,11 @@
   fill: transparent;
 }
 
+/* The message keeps a readable width in a narrow list: the author column
+   gives way first (see .col-author), so the subject never collapses. */
 .col-msg {
   flex: 1;
-  min-width: 0;
+  min-width: 140px;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -187,9 +189,13 @@
   color: var(--text-strong);
   font-weight: 500;
   flex-shrink: 0;
-  max-width: 46%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Leave the body room only when there is one. */
+.msg-subject:not(:only-child) {
+  max-width: 46%;
 }
 .msg-body {
   color: var(--text-dim);
@@ -198,8 +204,8 @@
   min-width: 0;
 }
 .col-author {
-  width: 130px;
-  flex-shrink: 0;
+  flex: 0 1 130px;
+  min-width: 0;
   color: var(--text-dim);
   font-size: var(--fs-sm);
   overflow: hidden;

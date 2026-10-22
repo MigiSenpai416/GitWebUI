@@ -45,6 +45,18 @@ export async function launchApp(options: LaunchOptions = {}): Promise<TestApp> {
   const userDataDir =
     options.reuse?.userDataDir ?? path.join(os.tmpdir(), `gitwebui-e2e-profile-${id}`);
 
+  // The size the suite was written against. Left to the app, a fresh profile
+  // opens at its default and the screen it lands on decides the rest, which
+  // on a CI runner's small display squeezes the layout in ways the assertions
+  // were never meant to cover.
+  if (!options.reuse) {
+    await fs.mkdir(userDataDir, { recursive: true });
+    await fs.writeFile(
+      path.join(userDataDir, "window-state.json"),
+      JSON.stringify({ width: 1440, height: 900, maximized: false }),
+    );
+  }
+
   const packaged = process.env.GITWEBUI_E2E_BINARY;
   const app = await electron.launch({
     ...(packaged ? { executablePath: packaged, args: [] } : { args: [mainEntry] }),

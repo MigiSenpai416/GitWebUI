@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { openExternal, writeClipboard } from "../desktop";
 import { useStore } from "../state/store";
-import type { GitHubOAuthDeviceFlow, GitHubUser } from "../types";
+import type { GitHubOAuthDeviceFlow, GitHubStatus, GitHubUser } from "../types";
 import { BusyLabel } from "./icons";
 import "./AccountDialogs.css";
 
@@ -35,6 +35,24 @@ export function GitHubDialog() {
   );
 }
 
+/**
+ * Why a working connection can still have a push refused: the grant predates
+ * a scope the app asks for now. Saying so here spares the user finding out
+ * from git's rejection — and from assuming a refresh fixed it, which it can't.
+ */
+function ScopeWarning({ status }: { status: GitHubStatus | null }) {
+  const missing = status?.missingScopes ?? [];
+  if (!status?.user || missing.length === 0) return null;
+  const scopes = missing.map((scope, i) => <span key={scope}>{i > 0 && ", "}<code>{scope}</code></span>);
+  return (
+    <div className="acct-warn" role="status">
+      {status.authMethod === "oauth"
+        ? <>Connected before GitWebUI asked for the {scopes} scope: GitHub will refuse pushes that change <code>.github/workflows</code>. Reconnect with GitHub to add it.</>
+        : <>This token lacks the {scopes} scope: GitHub will refuse pushes that change <code>.github/workflows</code>. Replace it with one that has it.</>}
+    </div>
+  );
+}
+
 function GitHubMethodDialog({
   onOAuth,
   onPat,
@@ -59,10 +77,13 @@ function GitHubMethodDialog({
   return (
     <DialogFrame title="Connect GitHub account" onClose={onClose} busy={busy}>
       {connected && user ? (
-        <div className="acct-connected" role="status" aria-live="polite">
-          Connected as <strong>@{user.login}</strong>
-          {user.name ? ` (${user.name})` : ""} using {status?.authMethod === "oauth" ? "GitHub OAuth" : "a Personal Access Token"}.
-        </div>
+        <>
+          <div className="acct-connected" role="status" aria-live="polite">
+            Connected as <strong>@{user.login}</strong>
+            {user.name ? ` (${user.name})` : ""} using {status?.authMethod === "oauth" ? "GitHub OAuth" : "a Personal Access Token"}.
+          </div>
+          <ScopeWarning status={status} />
+        </>
       ) : connected && status?.transient ? (
         <div className="acct-warn">
           Couldn't reach GitHub to verify the saved credentials{status?.error ? `: ${status.error}` : ""}.
@@ -149,10 +170,13 @@ function GitHubPatDialog({ onBack, onClose }: { onBack: () => void; onClose: () 
   return (
     <DialogFrame title="GitHub Personal Access Token" onClose={onClose} busy={busy}>
       {connected && user ? (
-        <div className="acct-connected" role="status" aria-live="polite">
-          Connected as <strong>@{user.login}</strong>
-          {user.name ? ` (${user.name})` : ""}.
-        </div>
+        <>
+          <div className="acct-connected" role="status" aria-live="polite">
+            Connected as <strong>@{user.login}</strong>
+            {user.name ? ` (${user.name})` : ""}.
+          </div>
+          <ScopeWarning status={status} />
+        </>
       ) : connected && status?.transient ? (
         <div className="acct-warn">
           Couldn't reach GitHub to verify the saved token{status?.error ? `: ${status.error}` : ""}.
@@ -338,13 +362,20 @@ function GitHubOAuthDialog({ onBack, onClose }: { onBack: () => void; onClose: (
           <div className="acct-oauth-wait" role="status" aria-live="polite">
             <BusyLabel>Waiting for authorization…</BusyLabel>
           </div>
+          <div className="dialog-sub acct-sub">
+            Keep this dialog open until it confirms the connection: closing it or going back
+            cancels the sign-in and keeps the previous credentials.
+          </div>
         </>
       ) : (
         <>
           {connectedWithOAuth && user ? (
-            <div className="acct-connected" role="status" aria-live="polite">
-              Connected as <strong>@{user.login}</strong>{user.name ? ` (${user.name})` : ""} using GitHub OAuth.
-            </div>
+            <>
+              <div className="acct-connected" role="status" aria-live="polite">
+                Connected as <strong>@{user.login}</strong>{user.name ? ` (${user.name})` : ""} using GitHub OAuth.
+              </div>
+              {completedUser === null && <ScopeWarning status={status} />}
+            </>
           ) : (
             <div className="dialog-sub acct-sub">
               GitWebUI will show a one-time code. Authorize it on GitHub in your browser, then return here to finish connecting automatically.

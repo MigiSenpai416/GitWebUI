@@ -1640,6 +1640,32 @@ describe("OAuth Device Flow", () => {
       .toBe("gho_fresh");
   });
 
+  it("reports a grant that predates the workflow scope, so a reconnect is asked for", async () => {
+    vi.spyOn(Date, "now").mockImplementation(() => 1_000);
+    await setToken("gho_old", { authMethod: "oauth", refreshToken: "ghr_old", expiresIn: 28_800 });
+    const userWithScopes = (scopes: string | null) => async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(scopes === null ? {} : { "x-oauth-scopes": scopes }),
+      json: async () => ({ login: "octocat", name: null, avatar_url: null, id: 1, email: null }),
+    });
+
+    // The grant GitHub issued before `workflow` was requested; a refresh keeps it.
+    globalThis.fetch = userWithScopes("repo, user:email") as unknown as typeof fetch;
+    await expect(status()).resolves.toMatchObject({
+      user: { login: "octocat" },
+      missingScopes: ["workflow"],
+    });
+
+    globalThis.fetch = userWithScopes("repo, workflow, user:email") as unknown as typeof fetch;
+    await expect(status()).resolves.not.toHaveProperty("missingScopes");
+
+    // A fine-grained token carries permissions, not scopes: nothing to report.
+    await setToken("github_pat_fine", { authMethod: "pat" });
+    globalThis.fetch = userWithScopes(null) as unknown as typeof fetch;
+    await expect(status()).resolves.not.toHaveProperty("missingScopes");
+  });
+
   it("reports an unreachable GitHub as transient rather than rejected", async () => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);

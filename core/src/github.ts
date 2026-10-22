@@ -1224,6 +1224,26 @@ export async function cancelOAuthDeviceFlow(flowId: string): Promise<void> {
 
 /** Fetch the authenticated user for a token; throws on an invalid token. */
 export async function fetchUser(token: string, signal?: AbortSignal): Promise<GitHubUser> {
+  return (await fetchUserAndScopes(token, signal)).user;
+}
+
+/**
+ * The scopes a push needs. `workflow` is the one easily missed: it was added
+ * to the Device Flow later, so an account connected before then — or a classic
+ * token created from the old guidance — still carries a `repo`-only grant,
+ * and a refresh keeps whatever scopes the original grant had.
+ */
+const REQUIRED_SCOPES = ["repo", "workflow"];
+
+/**
+ * The user behind a token, and the token's scopes as GitHub reports them on
+ * every response. Null scopes means GitHub said nothing: fine-grained tokens
+ * carry permissions rather than scopes, and nothing can be told about them here.
+ */
+async function fetchUserAndScopes(
+  token: string,
+  signal?: AbortSignal,
+): Promise<{ user: GitHubUser; scopes: string[] | null }> {
   const res = await fetch(`${API}/user`, { headers: ghHeaders(token), signal });
   if (!res.ok) throw ghError(res.status, await res.text());
   const j = (await res.json()) as {
@@ -1233,12 +1253,33 @@ export async function fetchUser(token: string, signal?: AbortSignal): Promise<Gi
     id: number;
     email: string | null;
   };
+  const reported = res.headers?.get?.("x-oauth-scopes") ?? null;
+  const scopes = reported
+    ? reported.split(",").map((scope) => scope.trim()).filter(Boolean)
+    : null;
   return {
-    login: j.login,
-    name: j.name ?? null,
-    avatarUrl: j.avatar_url ?? null,
-    id: j.id,
-    email: j.email ?? null,
+    user: {
+      login: j.login,
+      name: j.name ?? null,
+      avatarUrl: j.avatar_url ?? null,
+      id: j.id,
+      email: j.email ?? null,
+    },
+    scopes,
+  };
+}
+
+/** A connection's status, with the scopes it is short of when that is knowable. */
+function connected(
+  authMethod: GitHubAuthMethod | null,
+  found: { user: GitHubUser; scopes: string[] | null },
+): { configured: true; authMethod: GitHubAuthMethod | null; user: GitHubUser; missingScopes?: string[] } {
+  const missing = found.scopes ? REQUIRED_SCOPES.filter((scope) => !found.scopes!.includes(scope)) : [];
+  return {
+    configured: true,
+    authMethod,
+    user: found.user,
+    ...(missing.length > 0 ? { missingScopes: missing } : {}),
   };
 }
 
@@ -1295,6 +1336,8 @@ export async function status(): Promise<{
   error?: string;
   /** The failure may clear on its own (offline, GitHub unavailable); nothing was rejected. */
   transient?: boolean;
+  /** Scopes a push needs that the stored grant lacks; a reconnect is the fix. */
+  missingScopes?: string[];
 }> {
   const stored = await read();
   if (!stored) return { configured: false, authMethod: null, user: null };
@@ -1313,7 +1356,7 @@ export async function status(): Promise<{
     };
   }
   try {
-    return { configured: true, authMethod, user: await fetchUser(token) };
+    return connected(authMethod, await fetchUserAndScopes(token));
   } catch (e) {
     const error = e instanceof Error ? e.message : "Invalid token";
     if ((e as { githubStatus?: number }).githubStatus !== 401) {
@@ -1323,7 +1366,7 @@ export async function status(): Promise<{
     const refreshed = await refreshRejectedToken(token);
     if (refreshed) {
       try {
-        return { configured: true, authMethod, user: await fetchUser(refreshed) };
+        return connected(authMethod, await fetchUserAndScopes(refreshed));
       } catch {
         // Reported below with the original rejection.
       }
